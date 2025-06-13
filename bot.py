@@ -588,4 +588,4 @@ async def send(ctx, member: discord.Member, amount: int):
     )
     await ctx.send(embed=embed, view=view)
 
-client.run(Token)
+client.run(os.getenv("DISCORD_TOKEN"))

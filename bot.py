@@ -111,13 +111,13 @@ async def time(ctx):
 async def patchnote(ctx):
     await ctx.message.delete()
     embed = discord.Embed(
-        title="📜 패치노트 v1.1.3",
+        title="📜 패치노트 v1.1.4",
         description="최신 버전 업데이트입니다.",
         color=0xf1c40f  # 노란색
     )
-    embed.add_field(name="✨ 새로운 기능", value="- 머니 명령어 추가", inline=False)
-    embed.add_field(name="🔮 예정 사항", value="- 버튼출석\n- 봇 24시간 가동", inline=False)
-    embed.set_footer(text="업데이트: 2025-06-13")
+    embed.add_field(name="✨ 새로운 기능", value="- 봇 24시간 가동", inline=False)
+    embed.add_field(name="🔮 예정 사항", value="- 버튼출석\n", inline=False)
+    embed.set_footer(text="업데이트: 2025-06-14")
     await ctx.send(embed=embed)
 
 class WarningView(ui.View): # 경고 확인을 위한 View 클래스

@@ -539,7 +539,7 @@ async def moneydel(ctx, member: discord.Member, amount: int):
     )
     await ctx.send(embed=embed, view=view)
 
-# 송금
+#  머니 송금
 @client.command(aliases=['송금'])
 async def send(ctx, member: discord.Member, amount: int):
     await ctx.message.delete()

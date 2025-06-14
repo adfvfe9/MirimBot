@@ -19,18 +19,20 @@ from discord.ui import Button, View
 from discord.ext import commands
 from discord import Embed, ButtonStyle, Interaction
 from discord.ui import View, Button
+from keep_alive import keep_alive
 
 # Bot 선언
 intents = discord.Intents.default()
 intents.messages = True
-intents.members = True # 멤버 정보 접근을 위해 필요
+intents.members = True  # 멤버 정보 접근을 위해 필요
 intents.message_content = True  # 필수! 안 켜면 on_message나 command 둘 다 안 먹음
 
 client = commands.Bot(command_prefix='%', intents=intents)
 
-DATA_FILE = 'warnings.json' # 경고 데이터를 저장할 파일
-DATA_FILE = "enhance_data.json" # 아이템 강화 데이터를 저장할 파일
+DATA_FILE = 'warnings.json'  # 경고 데이터를 저장할 파일
+DATA_FILE = "enhance_data.json"  # 아이템 강화 데이터를 저장할 파일
 money_data_file = "money_data.json"
+
 
 # 머니 데이터를 파일로 저장하고 불러오는 함수들
 def load_money_data():
@@ -39,38 +41,53 @@ def load_money_data():
             return json.load(f)
     return {}
 
+
 def save_money_data(data):
     with open(money_data_file, "w") as f:
         json.dump(data, f, indent=4)
 
+
 money_data = load_money_data()
 
 warnings = {}  # 유저 ID를 키로, 경고 수를 값으로 저장
-warnings_data = {} # 유저 ID를 키로, 경고 내역을 리스트로 저장
-cooldowns = {} # 유저 ID를 키로, 마지막 강화 시도를 저장하는 딕셔너리
+warnings_data = {}  # 유저 ID를 키로, 경고 내역을 리스트로 저장
+cooldowns = {}  # 유저 ID를 키로, 마지막 강화 시도를 저장하는 딕셔너리
+
 
 def load_data():
-    if not os.path.exists(DATA_FILE): # 파일이 없으면 빈 딕셔너리 반환
+    if not os.path.exists(DATA_FILE):  # 파일이 없으면 빈 딕셔너리 반환
         return {}
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def save_data(data): # 데이터를 JSON 파일에 저장하는 함수
+
+def save_data(data):  # 데이터를 JSON 파일에 저장하는 함수
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
-enhance_data = load_data() # 아이템 강화 데이터를 불러오기
 
-if os.path.exists(DATA_FILE): # warnings.json 파일이 존재하면 불러오기
+enhance_data = load_data()  # 아이템 강화 데이터를 불러오기
+
+if os.path.exists(DATA_FILE):  # warnings.json 파일이 존재하면 불러오기
     with open(DATA_FILE, 'r', encoding='utf-8') as f:
         data = json.load(f)
         warnings = {int(k): v for k, v in data.get('warnings', {}).items()}
-        warnings_data = {int(k): v for k, v in data.get('warnings_data', {}).items()}
+        warnings_data = {
+            int(k): v
+            for k, v in data.get('warnings_data', {}).items()
+        }
 
 
-def save_warnings(): # 경고 데이터를 JSON 파일에 저장하는 함수
+def save_warnings():  # 경고 데이터를 JSON 파일에 저장하는 함수
     with open(DATA_FILE, 'w', encoding='utf-8') as f:
-        json.dump({'warnings': warnings, 'warnings_data': warnings_data}, f, ensure_ascii=False, indent=4)
+        json.dump({
+            'warnings': warnings,
+            'warnings_data': warnings_data
+        },
+                  f,
+                  ensure_ascii=False,
+                  indent=4)
+
 
 # on_ready는 시작할 때 한번만 실행
 @client.event
@@ -78,7 +95,9 @@ async def on_ready():
     print('Login...')
     print(f'{client.user}에 로그인하였습니다.')
     print(f'ID: {client.user.name}')
-    await client.change_presence(status=discord.Status.online, activity=discord.Game('기범이랑 키스'))
+    await client.change_presence(status=discord.Status.online,
+                                 activity=discord.Game('기범이랑 키스'))
+
 
 # on_message는 커맨드와 충돌 방지 필요 → process_commands 사용
 @client.event
@@ -88,10 +107,10 @@ async def on_message(message):
 
     # message.content.startswith()는 해당 문자로 시작하는 단어에 대해서
     # if message.content.startswith('테스트'):
-        # await message.channel.send(f"{message.author} | {message.author.mention}, 안녕!")
+    # await message.channel.send(f"{message.author} | {message.author.mention}, 안녕!")
 
     # if message.content == '안녕':
-        # await message.channel.send(f"{message.author} | {message.author.mention}, 어서오세요!")
+    # await message.channel.send(f"{message.author} | {message.author.mention}, 어서오세요!")
 
     # 개인 메시지로 전송
     # await message.author.send(f"{message.author} | {message.author.mention} 테스트")
@@ -99,13 +118,17 @@ async def on_message(message):
     # 반드시 명령어 처리를 호출해줘야 commands.Bot의 @client.command가 작동함!
     await client.process_commands(message)
 
+
 @client.command(aliases=['시간'])
 async def time(ctx):
     await ctx.message.delete()
     now = datetime.datetime.now()
     current_time = now.strftime("%Y년 %m월 %d일 %H시 %M분 %S초")
-    embed = discord.Embed(title="현재 시간 ⏰", description=f"{current_time}", color=0x3498db)
+    embed = discord.Embed(title="현재 시간 ⏰",
+                          description=f"{current_time}",
+                          color=0x3498db)
     await ctx.send(embed=embed)
+
 
 @client.command(aliases=['패치노트', 'patch'])
 async def patchnote(ctx):
@@ -120,7 +143,9 @@ async def patchnote(ctx):
     embed.set_footer(text="업데이트: 2025-06-14")
     await ctx.send(embed=embed)
 
-class WarningView(ui.View): # 경고 확인을 위한 View 클래스
+
+class WarningView(ui.View):  # 경고 확인을 위한 View 클래스
+
     def __init__(self, ctx, target, count, reason):
         super().__init__(timeout=10)
         self.ctx = ctx
@@ -129,9 +154,11 @@ class WarningView(ui.View): # 경고 확인을 위한 View 클래스
         self.reason = reason
 
     @ui.button(label="확인 ✅", style=discord.ButtonStyle.success)
-    async def confirm(self, interaction: discord.Interaction, button: ui.Button):
+    async def confirm(self, interaction: discord.Interaction,
+                      button: ui.Button):
         if interaction.user != self.ctx.author:
-            await interaction.response.send_message("이 버튼은 당신을 위한 게 아니에요!", ephemeral=True)
+            await interaction.response.send_message("이 버튼은 당신을 위한 게 아니에요!",
+                                                    ephemeral=True)
             return
 
         current_warn = warnings.get(self.target.id, 0)
@@ -143,23 +170,29 @@ class WarningView(ui.View): # 경고 확인을 위한 View 클래스
             warnings_data[self.target.id] = []
 
         warnings_data[self.target.id].append({
-            'time': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            'count': self.count,
-            'giver': self.ctx.author.name,
-            'reason': self.reason
+            'time':
+            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'count':
+            self.count,
+            'giver':
+            self.ctx.author.name,
+            'reason':
+            self.reason
         })
 
-        save_warnings() # 경고 데이터를 파일에 저장
+        save_warnings()  # 경고 데이터를 파일에 저장
 
         embed = discord.Embed(
             title="경고 적용 완료",
             description=f"**경고 받는 사람:** {self.target.mention}\n"
-                        f"**경고 주는 사람:** {self.ctx.author.mention}\n"
-                        f"**경고 수:** {self.count}\n"
-                        f"**사유:** {self.reason}",
+            f"**경고 주는 사람:** {self.ctx.author.mention}\n"
+            f"**경고 수:** {self.count}\n"
+            f"**사유:** {self.reason}",
             color=0x2ecc71  # 초록색
         )
-        await interaction.response.edit_message(embed=embed, view=None, content=None)
+        await interaction.response.edit_message(embed=embed,
+                                                view=None,
+                                                content=None)
 
         await asyncio.sleep(10)
         try:
@@ -169,9 +202,11 @@ class WarningView(ui.View): # 경고 확인을 위한 View 클래스
         self.stop()
 
     @ui.button(label="취소 ❌", style=discord.ButtonStyle.danger)
-    async def cancel(self, interaction: discord.Interaction, button: ui.Button):
+    async def cancel(self, interaction: discord.Interaction,
+                     button: ui.Button):
         if interaction.user != self.ctx.author:
-            await interaction.response.send_message("이 버튼은 당신을 위한 게 아니에요!", ephemeral=True)
+            await interaction.response.send_message("이 버튼은 당신을 위한 게 아니에요!",
+                                                    ephemeral=True)
             return
 
         embed = discord.Embed(
@@ -179,7 +214,9 @@ class WarningView(ui.View): # 경고 확인을 위한 View 클래스
             description="경고가 취소되었습니다.",
             color=0xe74c3c  # 빨간색
         )
-        await interaction.response.edit_message(embed=embed, view=None, content=None)
+        await interaction.response.edit_message(embed=embed,
+                                                view=None,
+                                                content=None)
 
         await asyncio.sleep(10)
         try:
@@ -188,8 +225,13 @@ class WarningView(ui.View): # 경고 확인을 위한 View 클래스
             pass
         self.stop()
 
+
 @client.command(aliases=['경고'])
-async def warning(ctx, target: discord.Member, count: int = 1, *, reason: str = "사유 없음"):
+async def warning(ctx,
+                  target: discord.Member,
+                  count: int = 1,
+                  *,
+                  reason: str = "사유 없음"):
     await ctx.message.delete()
     if count == 0:
         await ctx.send("⚠️ 경고 수는 0일 수 없습니다.")
@@ -211,7 +253,9 @@ async def warning(ctx, target: discord.Member, count: int = 1, *, reason: str = 
     view = WarningView(ctx, target, count, reason)
     await ctx.send(embed=embed, view=view)
 
+
 class WarningPages(ui.View):
+
     def __init__(self, user_id):
         super().__init__(timeout=60)  # 60초 뒤 뷰 비활성화
         self.user_id = user_id
@@ -231,10 +275,11 @@ class WarningPages(ui.View):
                 time_str = w['time'].strftime("%Y-%m-%d %H:%M")
                 embed.add_field(
                     name=f"경고 받은 시간: {time_str}",
-                    value=f"수: {w['count']}, 준 사람: {w['giver']}, 사유: {w['reason']}",
-                    inline=False
-                )
-            embed.set_footer(text=f"페이지 {self.current_page+1} / {(len(entries)-1)//3+1}")
+                    value=
+                    f"수: {w['count']}, 준 사람: {w['giver']}, 사유: {w['reason']}",
+                    inline=False)
+            embed.set_footer(
+                text=f"페이지 {self.current_page+1} / {(len(entries)-1)//3+1}")
 
         await interaction.response.edit_message(embed=embed, view=self)
 
@@ -246,9 +291,11 @@ class WarningPages(ui.View):
 
     @ui.button(label="다음", style=discord.ButtonStyle.green)
     async def next(self, interaction: discord.Interaction, button: ui.Button):
-        if (self.current_page + 1) * 3 < len(warnings_data.get(self.user_id, [])):
+        if (self.current_page + 1) * 3 < len(
+                warnings_data.get(self.user_id, [])):
             self.current_page += 1
             await self.update_embed(interaction)
+
 
 @client.command(aliases=['경고확인'])
 async def check_warning(ctx, *, username: str = None):
@@ -256,9 +303,8 @@ async def check_warning(ctx, *, username: str = None):
     if username:
         # 유저 이름으로 멤버 찾기
         member = discord.utils.find(
-            lambda m: username.lower() in m.name.lower() or username.lower() in m.display_name.lower(),
-            ctx.guild.members
-        )
+            lambda m: username.lower() in m.name.lower() or username.lower() in
+            m.display_name.lower(), ctx.guild.members)
         if not member:
             await ctx.send("해당 유저를 찾을 수 없습니다.")
             return
@@ -269,31 +315,32 @@ async def check_warning(ctx, *, username: str = None):
             return
 
         view = WarningPages(member.id)
-        embed = discord.Embed(title=f"{member.display_name}님의 경고 내역", color=0x3498db)
+        embed = discord.Embed(title=f"{member.display_name}님의 경고 내역",
+                              color=0x3498db)
         # 첫 페이지 내용 세팅
         start = 0
-        page_entries = entries[start:start+3]
+        page_entries = entries[start:start + 3]
         for w in page_entries:
             time_str = w['time']
             embed.add_field(
                 name=f"경고 받은 시간: {time_str}",
                 value=f"수: {w['count']}, 준 사람: {w['giver']}, 사유: {w['reason']}",
-                inline=False
-            )
+                inline=False)
         embed.set_footer(text=f"페이지 1 / {(len(entries)-1)//3+1}")
 
         await ctx.send(embed=embed, view=view)
     else:
         # 경고 1 이상인 모든 유저 리스트
-        users = [(uid, sum(w['count'] for w in wl)) for uid, wl in warnings_data.items() if sum(w['count'] for w in wl) > 0]
+        users = [(uid, sum(w['count'] for w in wl))
+                 for uid, wl in warnings_data.items()
+                 if sum(w['count'] for w in wl) > 0]
         if not users:
             await ctx.send("경고를 받은 유저가 없습니다.")
             return
         # 경고 수 오름차순, 동점 시 이름 가나다순
-        users.sort(key=lambda x: (
-            x[1],
-            (discord.utils.get(ctx.guild.members, id=x[0]).name if discord.utils.get(ctx.guild.members, id=x[0]) else "")
-        ))
+        users.sort(key=lambda x: (x[1], (
+            discord.utils.get(ctx.guild.members, id=x[0]).name
+            if discord.utils.get(ctx.guild.members, id=x[0]) else "")))
 
         embed = discord.Embed(title="경고 받은 유저 리스트", color=0x3498db)
         for uid, total_count in users:
@@ -302,8 +349,11 @@ async def check_warning(ctx, *, username: str = None):
                 name = f"알 수 없는 유저 ({uid})"
             else:
                 name = member.display_name
-            embed.add_field(name=name, value=f"경고 수: {total_count}", inline=True)
+            embed.add_field(name=name,
+                            value=f"경고 수: {total_count}",
+                            inline=True)
         await ctx.send(embed=embed)
+
 
 @client.command(aliases=['급식'])
 async def school_meal(ctx):
@@ -311,8 +361,8 @@ async def school_meal(ctx):
     import re
 
     api_key = '94b8b025408f450f8bfef115feb40017'  # API KEY
-    school_code = '7011569'                       # 미림마이스터고
-    edu_office_code = 'B10'                       # 서울교육청
+    school_code = '7011569'  # 미림마이스터고
+    edu_office_code = 'B10'  # 서울교육청
     today = datetime.datetime.now().strftime("%Y%m%d")
 
     url = f"https://open.neis.go.kr/hub/mealServiceDietInfo?" \
@@ -350,11 +400,9 @@ f"KEY={api_key}&Type=json&ATPT_OFCDC_SC_CODE={edu_office_code}&SD_SCHUL_CODE={sc
 
         final_meal_info = "\n\n".join(meals_text)
 
-        embed = discord.Embed(
-            title="🍴 오늘의 급식 🍴",
-            description=final_meal_info,
-            color=0x2ecc71
-        )
+        embed = discord.Embed(title="🍴 오늘의 급식 🍴",
+                              description=final_meal_info,
+                              color=0x2ecc71)
         await ctx.send(embed=embed)
 
     except requests.exceptions.RequestException as e:
@@ -364,6 +412,7 @@ f"KEY={api_key}&Type=json&ATPT_OFCDC_SC_CODE={edu_office_code}&SD_SCHUL_CODE={sc
     except Exception as e:
         await ctx.send("오늘의 급식 정보를 불러오지 못했어요 🥲")
         print(f"[급식] Exception: {e}")
+
 
 @client.command(aliases=['강화'])
 async def enhance(ctx, item_name: str = None, sacrifice: str = None):
@@ -407,7 +456,9 @@ async def enhance(ctx, item_name: str = None, sacrifice: str = None):
 
         roll = uniform(0.0, 100.0)
         success = roll <= final_success_rate
-        log_lines.append(f"+{current_level}: 기본 {base_success_rate:.3f}% + 제물 {base_success_rate * (sacrifice_level / 100):.3f}% = 최종 {final_success_rate:.3f}% → {'성공' if success else '실패'}")
+        log_lines.append(
+            f"+{current_level}: 기본 {base_success_rate:.3f}% + 제물 {base_success_rate * (sacrifice_level / 100):.3f}% = 최종 {final_success_rate:.3f}% → {'성공' if success else '실패'}"
+        )
 
         if success:
             current_level += 1
@@ -422,18 +473,23 @@ async def enhance(ctx, item_name: str = None, sacrifice: str = None):
     embed = discord.Embed(title="🔧 아이템 강화 결과 🔧", color=0x3498db)
     embed.add_field(name="아이템", value=item_name, inline=False)
     embed.add_field(name="최종 강화 레벨", value=f"+{current_level}", inline=False)
-    embed.add_field(name="성공 횟수", value=f"{levels_gained}번 강화 성공!", inline=False)
+    embed.add_field(name="성공 횟수",
+                    value=f"{levels_gained}번 강화 성공!",
+                    inline=False)
     # embed.add_field(name="강화 과정 로그", value="\n".join(log_lines), inline=False)
     if sacrifice:
-        embed.add_field(name="제물", value=f"{sacrifice} (+{sacrifice_level})", inline=False)
+        embed.add_field(name="제물",
+                        value=f"{sacrifice} (+{sacrifice_level})",
+                        inline=False)
 
     await ctx.send(embed=embed)
 
     chunk_size = 20  # 한 메시지에 보낼 로그 줄 수 (적당히 조절 가능)
 
     for i in range(0, len(log_lines), chunk_size):
-        chunk = log_lines[i:i+chunk_size]
+        chunk = log_lines[i:i + chunk_size]
         await ctx.send("```" + "\n".join(chunk) + "```")
+
 
 @client.command(aliases=['강화목록'])
 async def enhance_list(ctx):
@@ -444,11 +500,13 @@ async def enhance_list(ctx):
         await ctx.send("😢 아직 강화한 아이템이 없어요!")
         return
 
-    embed = discord.Embed(title=f"{ctx.author.display_name}님의 강화 아이템 목록", color=0x2ecc71)
+    embed = discord.Embed(title=f"{ctx.author.display_name}님의 강화 아이템 목록",
+                          color=0x2ecc71)
     for item_name, level in user_items.items():
         embed.add_field(name=f"{item_name} (+{level})", value=" ", inline=True)
 
     await ctx.send(embed=embed)
+
 
 # 머니 확인
 @client.command(aliases=['머니'])
@@ -461,9 +519,9 @@ async def money(ctx, member: discord.Member = None):
     embed = Embed(
         title="💰 잔액 확인",
         description=f"**{member.display_name}** 님의 잔액은 **{balance} byte**입니다.",
-        color=discord.Color.gold()
-    )
+        color=discord.Color.gold())
     await ctx.send(embed=embed)
+
 
 # 머니 추가
 @client.command(aliases=['머니추가'])
@@ -477,16 +535,13 @@ async def moneyadd(ctx, member: discord.Member, amount: int):
         money_data[user_id] = money_data.get(user_id, 0) + amount
         save_money_data(money_data)
         embed = Embed(
-            description=f"✅ **{member.display_name}** 님에게 **{amount} byte**를 추가했습니다.",
-            color=discord.Color.green()
-        )
+            description=
+            f"✅ **{member.display_name}** 님에게 **{amount} byte**를 추가했습니다.",
+            color=discord.Color.green())
         await interaction.response.edit_message(embed=embed, view=None)
 
     async def cancel_callback(interaction: Interaction):
-        embed = Embed(
-            description="❌ 작업이 취소되었습니다.",
-            color=discord.Color.red()
-        )
+        embed = Embed(description="❌ 작업이 취소되었습니다.", color=discord.Color.red())
         await interaction.response.edit_message(embed=embed, view=None)
 
     button_yes = Button(label="확인", style=discord.ButtonStyle.green)
@@ -497,10 +552,11 @@ async def moneyadd(ctx, member: discord.Member, amount: int):
     view.add_item(button_no)
 
     embed = Embed(
-        description=f"⚠️ **{member.display_name}** 님에게 **{amount} byte**를 추가하시겠습니까?",
-        color=discord.Color.orange()
-    )
+        description=
+        f"⚠️ **{member.display_name}** 님에게 **{amount} byte**를 추가하시겠습니까?",
+        color=discord.Color.orange())
     await ctx.send(embed=embed, view=view)
+
 
 # 머니 제거
 @client.command(aliases=['머니제거'])
@@ -514,16 +570,13 @@ async def moneydel(ctx, member: discord.Member, amount: int):
         money_data[user_id] = max(money_data.get(user_id, 0) - amount, 0)
         save_money_data(money_data)
         embed = Embed(
-            description=f"✅ **{member.display_name}** 님에게서 **{amount} byte**를 제거했습니다.",
-            color=discord.Color.green()
-        )
+            description=
+            f"✅ **{member.display_name}** 님에게서 **{amount} byte**를 제거했습니다.",
+            color=discord.Color.green())
         await interaction.response.edit_message(embed=embed, view=None)
 
     async def cancel_callback(interaction: Interaction):
-        embed = Embed(
-            description="❌ 작업이 취소되었습니다.",
-            color=discord.Color.red()
-        )
+        embed = Embed(description="❌ 작업이 취소되었습니다.", color=discord.Color.red())
         await interaction.response.edit_message(embed=embed, view=None)
 
     button_yes = Button(label="확인", style=discord.ButtonStyle.green)
@@ -534,10 +587,11 @@ async def moneydel(ctx, member: discord.Member, amount: int):
     view.add_item(button_no)
 
     embed = Embed(
-        description=f"⚠️ **{member.display_name}** 님에게서 **{amount} byte**를 제거하시겠습니까?",
-        color=discord.Color.orange()
-    )
+        description=
+        f"⚠️ **{member.display_name}** 님에게서 **{amount} byte**를 제거하시겠습니까?",
+        color=discord.Color.orange())
     await ctx.send(embed=embed, view=view)
+
 
 #  머니 송금
 @client.command(aliases=['송금'])
@@ -549,10 +603,8 @@ async def send(ctx, member: discord.Member, amount: int):
     total_cost = amount + fee
 
     if money_data.get(sender_id, 0) < total_cost:
-        embed = Embed(
-            description="❌ 잔액이 부족합니다! (10% 수수료 포함)",
-            color=discord.Color.red()
-        )
+        embed = Embed(description="❌ 잔액이 부족합니다! (10% 수수료 포함)",
+                      color=discord.Color.red())
         await ctx.send(embed=embed)
         return
 
@@ -563,16 +615,13 @@ async def send(ctx, member: discord.Member, amount: int):
         money_data[receiver_id] = money_data.get(receiver_id, 0) + amount
         save_money_data(money_data)
         embed = Embed(
-            description=f"💸 **{ctx.author.display_name}** 님이 **{member.display_name}** 님에게 **{amount} byte**를 송금했습니다! (수수료 {fee} byte)",
-            color=discord.Color.green()
-        )
+            description=
+            f"💸 **{ctx.author.display_name}** 님이 **{member.display_name}** 님에게 **{amount} byte**를 송금했습니다! (수수료 {fee} byte)",
+            color=discord.Color.green())
         await interaction.response.edit_message(embed=embed, view=None)
 
     async def cancel_callback(interaction: Interaction):
-        embed = Embed(
-            description="❌ 송금이 취소되었습니다.",
-            color=discord.Color.red()
-        )
+        embed = Embed(description="❌ 송금이 취소되었습니다.", color=discord.Color.red())
         await interaction.response.edit_message(embed=embed, view=None)
 
     button_yes = Button(label="확인", style=discord.ButtonStyle.green)
@@ -583,31 +632,13 @@ async def send(ctx, member: discord.Member, amount: int):
     view.add_item(button_no)
 
     embed = Embed(
-        description=f"⚠️ **{member.display_name}** 님에게 **{amount} byte**를 송금하시겠습니까?\n(💸 수수료 {fee} byte 포함)",
-        color=discord.Color.orange()
-    )
+        description=
+        f"⚠️ **{member.display_name}** 님에게 **{amount} byte**를 송금하시겠습니까?\n(💸 수수료 {fee} byte 포함)",
+        color=discord.Color.orange())
     await ctx.send(embed=embed, view=view)
 
-# Flask 서버 설정
-from flask import Flask
-import os
-import threading
 
-app = Flask(__name__)
+# keep_alive 실행 (Flask 서버)
+keep_alive()
 
-@app.route("/")
-def home():
-    return "Bot is running."
-
-def run_flask():
-    port = int(os.environ.get("PORT", 8000))
-    app.run(host="0.0.0.0", port=port)
-
-if __name__ == "__main__":
-    import discord
-    import asyncio
-
-    # Flask 서버는 별도의 스레드에서 실행
-    threading.Thread(target=run_flask).start()
-
-client.run(os.getenv("DISCORD_TOKEN"))
+client.run(os.getenv('TOKEN'))

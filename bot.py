@@ -590,11 +590,13 @@ async def send(ctx, member: discord.Member, amount: int):
 
 client.run(os.getenv("DISCORD_TOKEN"))
 
-# --- 웹 서버로 포트 바인딩해서 Render가 안 죽게 하기 위함 ---
 from flask import Flask
 import threading
 import os
+import discord
+from discord.ext import commands
 
+# Flask 웹서버 설정
 app = Flask(__name__)
 
 @app.route('/')
@@ -605,4 +607,5 @@ def run_web():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
+# 웹서버 쓰레드로 실행
 threading.Thread(target=run_web).start()

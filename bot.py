@@ -593,6 +593,7 @@ client.run(os.getenv("DISCORD_TOKEN"))
 # --- 웹 서버로 포트 바인딩해서 Render가 안 죽게 하기 위함 ---
 from flask import Flask
 import threading
+import os
 
 app = Flask(__name__)
 
@@ -601,6 +602,7 @@ def index():
     return "MirimBot is alive"
 
 def run_web():
-    app.run(host='0.0.0.0', port=8080)
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
 
 threading.Thread(target=run_web).start()

@@ -629,7 +629,7 @@ async def sell_enhance(ctx, item_name: str):
     level = enhance_data[user_id][item_name]
 
     # byte 계산
-    earned = calc_byte_log2(level)  # log2 또는 log10
+    earned = calc_byte_log10(level)  # log2 또는 log10
 
     # 머니 업데이트
     money_data[user_id] = money_data.get(user_id, 0) + earned

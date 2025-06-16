@@ -111,13 +111,13 @@ async def time(ctx):
 async def patchnote(ctx):
     await ctx.message.delete()
     embed = discord.Embed(
-        title="📜 패치노트 v1.1.3",
+        title="📜 패치노트 v1.1.4",
         description="최신 버전 업데이트입니다.",
         color=0xf1c40f  # 노란색
     )
-    embed.add_field(name="✨ 새로운 기능", value="- 머니 명령어 추가", inline=False)
-    embed.add_field(name="🔮 예정 사항", value="- 버튼출석\n- 봇 24시간 가동", inline=False)
-    embed.set_footer(text="업데이트: 2025-06-13")
+    embed.add_field(name="✨ 새로운 기능", value="- 상점 명령어 추가 (테스트)\n- 강화 아이템 판매 명령어 추가", inline=False)
+    embed.add_field(name="🔮 예정 사항", value="- 버튼출석\n- 봇 24시간 가동\n- 상점 명령어 구현", inline=False)
+    embed.set_footer(text="업데이트: 2025-06-17")
     await ctx.send(embed=embed)
 
 class WarningView(ui.View): # 경고 확인을 위한 View 클래스
@@ -604,17 +604,19 @@ async def shop(ctx):
 
     await ctx.send(embed=embed)
 
+import math
+
 # log2 공식
 def calc_byte_log2(level):
     if level <= 0:
         return 0
-    return int(0.1 * level * math.log2(level))
+    return int(0.1 * level * math.log2(level)) + 1
 
 # log10 공식
 def calc_byte_log10(level):
     if level <= 0:
         return 0
-    return int(0.5 * level * math.log10(level))
+    return int(0.5 * level * math.log10(level)) + 1
 
 @client.command(aliases=['강화판매'])
 async def sell_enhance(ctx, item_name: str):
@@ -628,8 +630,14 @@ async def sell_enhance(ctx, item_name: str):
 
     level = enhance_data[user_id][item_name]
 
-    # byte 계산
-    earned = calc_byte_log10(level)  # log2 또는 log10
+    # 공식 분기
+    if level <= 100:
+        earned = calc_byte_log2(level)
+    else:
+        earned = calc_byte_log10(level)
+
+    # 최소 0원 보장
+    earned = max(0, earned)
 
     # 머니 업데이트
     money_data[user_id] = money_data.get(user_id, 0) + earned
@@ -649,6 +657,5 @@ async def sell_enhance(ctx, item_name: str):
     embed.set_footer(text="판매가 완료되었습니다.")
 
     await ctx.send(embed=embed)
-
 
 client.run(os.getenv("DISCORD_TOKEN"))

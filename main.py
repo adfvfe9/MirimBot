@@ -588,4 +588,21 @@ async def send(ctx, member: discord.Member, amount: int):
     )
     await ctx.send(embed=embed, view=view)
 
+@client.command(aliases=['상점'])
+async def shop(ctx):
+    await ctx.message.delete()
+
+    embed = discord.Embed(
+        title="🛒 상점 목록",
+        description="아래는 구매 가능한 아이템들입니다.",
+        color=0x00bfff
+    )
+    embed.add_field(name="테스트1", value="가격: 100 byte", inline=False)
+    embed.add_field(name="테스트2", value="가격: 150 byte", inline=False)
+    embed.add_field(name="테스트3", value="가격: 75 byte", inline=False)
+    embed.set_footer(text="※ 아이템은 향후 업데이트될 수 있습니다.")
+
+    await ctx.send(embed=embed)
+
+
 client.run(os.getenv("DISCORD_TOKEN"))

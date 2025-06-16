@@ -604,5 +604,51 @@ async def shop(ctx):
 
     await ctx.send(embed=embed)
 
+# log2 공식
+def calc_byte_log2(level):
+    if level <= 0:
+        return 0
+    return int(0.1 * level * math.log2(level))
+
+# log10 공식
+def calc_byte_log10(level):
+    if level <= 0:
+        return 0
+    return int(0.5 * level * math.log10(level))
+
+@client.command(aliases=['강화판매'])
+async def sell_enhance(ctx, item_name: str):
+    await ctx.message.delete()
+    user_id = str(ctx.author.id)
+
+    # 아이템이 없으면
+    if user_id not in enhance_data or item_name not in enhance_data[user_id]:
+        await ctx.send(f"{ctx.author.mention} | ❌ `{item_name}` 아이템이 없습니다.")
+        return
+
+    level = enhance_data[user_id][item_name]
+
+    # byte 계산
+    earned = calc_byte_log2(level)  # log2 또는 log10
+
+    # 머니 업데이트
+    money_data[user_id] = money_data.get(user_id, 0) + earned
+    save_money_data(money_data)
+
+    # 아이템 삭제
+    del enhance_data[user_id][item_name]
+    save_data(enhance_data)
+
+    # 임베디드 출력
+    embed = discord.Embed(
+        title="💰 강화 아이템 판매",
+        description=f"{ctx.author.mention}님이 `{item_name} +{level}`을 판매하였습니다!",
+        color=0x00ccff
+    )
+    embed.add_field(name="획득 Byte", value=f"**{earned} byte**", inline=False)
+    embed.set_footer(text="판매가 완료되었습니다.")
+
+    await ctx.send(embed=embed)
+
 
 client.run(os.getenv("DISCORD_TOKEN"))

@@ -463,7 +463,7 @@ async def money(ctx, member: discord.Member = None):
 
     embed = Embed(
         title="💰 잔액 확인",
-        description=f"**{member.display_name}** 님의 잔액은 **{balance} byte**입니다.",
+        description=f"**{member.display_name}** 님의 잔액은 **{balance:.2f} byte**입니다.",
         color=discord.Color.gold()
     )
     await ctx.send(embed=embed)
@@ -742,7 +742,7 @@ def update_stocks():
 
         # 상승장 / 하락장 효과 (곱연산)
         if current_market == "BULL":
-            new_price *= (1 + random.uniform(0, 0.03))  # 0~3% 상승
+            new_price *= (1 + random.uniform(0, 0.025))  # 0~2.5% 상승
         elif current_market == "BEAR":
             new_price *= (1 - random.uniform(0, 0.025))  # 0~2.5% 하락
 
@@ -783,7 +783,7 @@ async def stock(ctx):
     )
     embed.add_field(
     name="📊 현재 시장 상태",
-    value=f"{'📈 상승장' if current_market == 'BULL' else '📉 하락장'}\n⏱️ 다음 전환까지: {market_wait_seconds}초", inline=False)
+    value=f"{'📈 상승장' if current_market == 'BULL' else '📉 하락장'}", inline=False) # \n⏱️ 다음 전환까지: {market_wait_seconds}초
     embed.set_footer(text=f"⏱️ 다음 변동까지: {remain}초")
 
     for name, price_data in stock_prices.items():
@@ -823,6 +823,7 @@ async def on_ready():
 @client.command(aliases=["주식초기화"])
 @commands.has_permissions(administrator=True)
 async def reset_stock(ctx):
+    await ctx.message.delete()
     global stock_prices, last_update_time
 
     # 주식 초기화
@@ -872,6 +873,7 @@ stock_aliases = {
 # ───────────── %주식구매 ─────────────
 @client.command(aliases=["주식구매"])
 async def buy_stock(ctx, stock_name: str, amount: int):
+    await ctx.message.delete()
     user_id = str(ctx.author.id)
     stock_key = stock_aliases.get(stock_name.upper())
 
@@ -906,11 +908,17 @@ async def buy_stock(ctx, stock_name: str, amount: int):
             return
 
         money_data[user_id] -= total_cost
-        portfolio.setdefault(user_id, {}).setdefault(stock_key, 0)
-        portfolio[user_id][stock_key] += amount
+        portfolio.setdefault(user_id, {}).setdefault(stock_key, {"quantity": 0, "avg_price": price})
+        stock = portfolio[user_id][stock_key]
 
-        save_json(money_data_file, money_data)
+        # 새 평균 단가 계산
+        total_quantity = stock["quantity"] + amount
+        total_spent = stock["quantity"] * stock["avg_price"] + total_cost
+        stock["quantity"] = total_quantity
+        stock["avg_price"] = total_spent / total_quantity
+
         save_json(portfolio_file, portfolio)
+        save_json(money_data_file, money_data)
 
         await interaction.response.edit_message(
             embed=discord.Embed(
@@ -943,6 +951,7 @@ async def buy_stock(ctx, stock_name: str, amount: int):
 # ───────────── %주식판매 ─────────────
 @client.command(aliases=["주식판매"])
 async def sell_stock(ctx, stock_name: str, amount: int):
+    await ctx.message.delete()
     user_id = str(ctx.author.id)
     stock_key = stock_aliases.get(stock_name.upper())
 
@@ -952,9 +961,22 @@ async def sell_stock(ctx, stock_name: str, amount: int):
     if amount <= 0:
         await ctx.send("❌ 1 이상의 수량을 입력해주세요.")
         return
-    if portfolio.get(user_id, {}).get(stock_key, 0) < amount:
+    stock = portfolio.get(user_id, {}).get(stock_key)
+    quantity = stock["quantity"] if isinstance(stock, dict) else stock
+    stock = portfolio.get(user_id, {}).get(stock_key)
+
+    # 주식이 아예 없을 경우
+    if stock is None:
+        await ctx.send("❌ 보유 중인 해당 주식이 없습니다.")
+        return
+
+    # 구조에 따라 수량 확인
+    quantity = stock["quantity"] if isinstance(stock, dict) else stock
+
+    if quantity < amount:
         await ctx.send("❌ 보유 수량이 부족합니다.")
         return
+
 
     price = stock_prices[stock_key]["current"]
     total_earned = round(price * amount * 0.8, 2)  # 수수료 20%
@@ -975,8 +997,8 @@ async def sell_stock(ctx, stock_name: str, amount: int):
             await interaction.response.send_message("이 버튼은 당신의 것이 아니에요!", ephemeral=True)
             return
 
-        portfolio[user_id][stock_key] -= amount
-        if portfolio[user_id][stock_key] <= 0:
+        portfolio[user_id][stock_key]["quantity"] -= amount
+        if portfolio[user_id][stock_key]["quantity"] <= 0:
             del portfolio[user_id][stock_key]
 
         money_data[user_id] = money_data.get(user_id, 0) + total_earned
@@ -1013,6 +1035,7 @@ async def sell_stock(ctx, stock_name: str, amount: int):
 
 @client.command(aliases=["주식확인"])
 async def stock_status(ctx, member: discord.Member = None):
+    await ctx.message.delete()
     member = member or ctx.author
     user_id = str(member.id)
 
@@ -1026,22 +1049,271 @@ async def stock_status(ctx, member: discord.Member = None):
         color=discord.Color.purple()
     )
 
-    total_value = 0
-    for name, quantity in portfolio[user_id].items():
-        current_price = stock_prices.get(name, {}).get("current", stock_info[name]["base"])
+    total_value = 0.0
+    total_cost = 0.0
+
+    for name, stock in portfolio[user_id].items():
+        quantity = stock.get("quantity", 0)
+        avg_price = stock.get("avg_price", stock_info.get(name, {}).get("base", 0))
+        current_price = stock_prices.get(name, {}).get("current", avg_price)
         value = round(current_price * quantity, 2)
+        cost = round(avg_price * quantity, 2)
+
         total_value += value
+        total_cost += cost
+
+        # 손익률 계산
+        profit_rate = ((current_price - avg_price) / avg_price * 100) if avg_price > 0 else 0
+        profit_str = f"{profit_rate:+.2f}%"
 
         embed.add_field(
             name=name,
-            value=f"보유량: **{quantity}주**\n현재가: **{current_price} byte**\n평가액: **{value} byte**",
+            value=(
+                f"보유량: **{quantity}주**\n"
+                f"총 매입가: **{avg_price * quantity:.2f} byte**\n"
+                f"평가액: **{value:.2f} byte**\n"
+                f"손익률: **{profit_str}**"
+            ),
             inline=False
         )
 
-    embed.add_field(name="📦 총 평가액", value=f"**{total_value} byte**", inline=False)
+    if total_cost > 0:
+        profit_amount = round(total_value - total_cost, 2)
+        total_profit_rate = (profit_amount / total_cost) * 100
+        profit_str = f"{total_profit_rate:+.2f}%"
+        profit_amount_str = f"{profit_amount:+.2f} byte"
+    else:
+        profit_str = "N/A"
+        profit_amount_str = "N/A"
+
+    embed.add_field(name="📈 총 이익금", value=f"**{profit_amount_str}**", inline=False)
+    embed.add_field(name="📊 총 손익률", value=f"**{profit_str}**", inline=False)
     embed.set_footer(text=f"요청자: {ctx.author.display_name}")
 
     await ctx.send(embed=embed)
+
+@client.command(aliases=["주식전량구매"])
+async def buy_all_stock(ctx, stock_name: str):
+    await ctx.message.delete()
+    user_id = str(ctx.author.id)
+    stock_key = stock_aliases.get(stock_name.upper())
+
+    if not stock_key or stock_key not in stock_prices:
+        await ctx.send("❌ 존재하지 않는 주식입니다.")
+        return
+
+    price = stock_prices[stock_key]["current"]
+    balance = money_data.get(user_id, 0)
+    max_amount = int(balance // price)
+
+    if max_amount == 0:
+        await ctx.send("❌ 잔액이 부족합니다.")
+        return
+
+    total_cost = round(price * max_amount, 2)
+
+    embed = discord.Embed(
+        title="📥 주식 전량 구매 확인",
+        description=f"{ctx.author.mention}, **{stock_key}**를 최대 수량만큼 구매하시겠습니까?",
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="구매 수량", value=f"{max_amount} 주", inline=True)
+    embed.add_field(name="1주 가격", value=f"{price:.2f} byte", inline=True)
+    embed.add_field(name="총 가격", value=f"{total_cost:.2f} byte", inline=False)
+
+    view = View()
+
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
+            return
+
+        money_data[user_id] -= total_cost
+        portfolio.setdefault(user_id, {}).setdefault(stock_key, {"quantity": 0, "avg_price": price})
+        stock = portfolio[user_id][stock_key]
+
+        total_quantity = stock["quantity"] + max_amount
+        total_spent = stock["quantity"] * stock["avg_price"] + total_cost
+        stock["quantity"] = total_quantity
+        stock["avg_price"] = total_spent / total_quantity
+
+        save_json(money_data_file, money_data)
+        save_json(portfolio_file, portfolio)
+
+        result = discord.Embed(
+            title="✅ 전량 구매 완료",
+            description=f"{stock_key} {max_amount}주를 구매했습니다.",
+            color=discord.Color.green()
+        )
+        await interaction.response.edit_message(embed=result, view=None)
+
+    async def cancel_callback(interaction):
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="❌ 거래 취소됨",
+                description="구매가 취소되었습니다.",
+                color=discord.Color.red()
+            ),
+            view=None
+        )
+
+    yes = Button(label="확인", style=ButtonStyle.green)
+    no = Button(label="취소", style=ButtonStyle.red)
+    yes.callback = confirm_callback
+    no.callback = cancel_callback
+    view.add_item(yes)
+    view.add_item(no)
+
+    await ctx.send(embed=embed, view=view)
+
+@client.command(aliases=["주식전량판매"])
+async def sell_all_stock(ctx, stock_name: str = None):
+    await ctx.message.delete()
+    user_id = str(ctx.author.id)
+
+    # 개별 주식 판매
+    if stock_name:
+        stock_key = stock_aliases.get(stock_name.upper())
+        if not stock_key or stock_key not in stock_prices:
+            await ctx.send("❌ 존재하지 않는 주식입니다.")
+            return
+
+        stock = portfolio.get(user_id, {}).get(stock_key)
+        if not stock or stock["quantity"] <= 0:
+            await ctx.send("❌ 해당 주식을 보유하고 있지 않습니다.")
+            return
+
+        quantity = stock["quantity"]
+        price = stock_prices[stock_key]["current"]
+        gross = price * quantity
+        net = round(gross * 0.8, 2)  # 20% 수수료
+
+        embed = discord.Embed(
+            title="📤 전량 판매 확인",
+            description=f"{ctx.author.mention}, **{stock_key}** {quantity}주를 판매하시겠습니까?",
+            color=discord.Color.orange()
+        )
+        embed.add_field(name="1주 가격", value=f"{price:.2f} byte", inline=True)
+        embed.add_field(name="수익 (수수료 적용)", value=f"{net:.2f} byte", inline=False)
+
+        view = View()
+
+        async def confirm_callback(interaction):
+            if interaction.user != ctx.author:
+                await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
+                return
+
+            del portfolio[user_id][stock_key]
+            money_data[user_id] = money_data.get(user_id, 0) + net
+
+            save_json(money_data_file, money_data)
+            save_json(portfolio_file, portfolio)
+
+            result = discord.Embed(
+                title="✅ 전량 판매 완료",
+                description=f"{stock_key} {quantity}주를 판매했습니다.",
+                color=discord.Color.green()
+            )
+            await interaction.response.edit_message(embed=result, view=None)
+
+        async def cancel_callback(interaction):
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    title="❌ 거래 취소됨",
+                    description="판매가 취소되었습니다.",
+                    color=discord.Color.red()
+                ),
+                view=None
+            )
+
+        yes = Button(label="확인", style=ButtonStyle.green)
+        no = Button(label="취소", style=ButtonStyle.red)
+        yes.callback = confirm_callback
+        no.callback = cancel_callback
+        view.add_item(yes)
+        view.add_item(no)
+
+        await ctx.send(embed=embed, view=view)
+        return
+
+    # 전체 주식 전량 판매
+    user_stocks = portfolio.get(user_id, {})
+    if not user_stocks:
+        await ctx.send("❌ 보유 중인 주식이 없습니다.")
+        return
+
+    total_net = 0
+    total_quantity = 0
+    summary_lines = []
+
+    for name, stock in user_stocks.items():
+        q = stock["quantity"]
+        avg = stock["avg_price"]
+        cost = q * avg
+
+        p = stock_prices.get(name, {}).get("current", stock_info[name]["base"])
+        gross = p * q
+        net = gross * 0.8
+
+        is_loss = net < cost  # ✅ 손해 여부 판단
+
+        if is_loss:
+            summary_lines.append(f"⚠️ {name}: {q}주 → {net:.2f} byte (손해!)")
+        else:
+            summary_lines.append(f"{name}: {q}주 → {net:.2f} byte")
+
+        total_quantity += q
+        total_net += net
+
+    embed = discord.Embed(
+        title="📤 전체 주식 전량 판매 확인",
+        description=f"{ctx.author.mention}님, 모든 보유 주식을 전량 판매하시겠습니까?",
+        color=discord.Color.red()
+    )
+    embed.add_field(name="총 수량", value=f"{total_quantity} 주", inline=True)
+    embed.add_field(name="예상 수익", value=f"{total_net:.2f} byte", inline=True)
+    embed.add_field(name="📋 상세 목록", value="\n".join(summary_lines), inline=False)
+
+    view = View()
+
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
+            return
+
+        for name in list(user_stocks.keys()):
+            del portfolio[user_id][name]
+
+        money_data[user_id] = money_data.get(user_id, 0) + round(total_net, 2)
+
+        save_json(money_data_file, money_data)
+        save_json(portfolio_file, portfolio)
+
+        result = discord.Embed(
+            title="✅ 전체 주식 전량 판매 완료",
+            description=f"{round(total_net, 2):.2f} byte를 획득했습니다.",
+            color=discord.Color.green()
+        )
+        await interaction.response.edit_message(embed=result, view=None)
+
+    async def cancel_callback(interaction):
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="❌ 거래 취소됨",
+                description="전체 판매가 취소되었습니다.",
+                color=discord.Color.red()
+            ),
+            view=None
+        )
+
+    yes = Button(label="확인", style=ButtonStyle.green)
+    no = Button(label="취소", style=ButtonStyle.red)
+    yes.callback = confirm_callback
+    no.callback = cancel_callback
+    view.add_item(yes)
+    view.add_item(no)
+
+    await ctx.send(embed=embed, view=view)
 
 
 client.run(os.getenv("DISCORD_TOKEN"))

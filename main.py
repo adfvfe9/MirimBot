@@ -110,16 +110,16 @@ async def time(ctx):
     embed = discord.Embed(title="현재 시간 ⏰", description=f"{current_time}", color=0x3498db)
     await ctx.send(embed=embed)
 
-@client.command(aliases=['패치노트', 'patch'])
+@client.command(aliases=['패치노트'])
 async def patchnote(ctx):
     await ctx.message.delete()
     embed = discord.Embed(
-        title="📜 패치노트 v1.1.4",
+        title="📜 패치노트 v1.1.5",
         description="최신 버전 업데이트입니다.",
         color=0xf1c40f  # 노란색
     )
-    embed.add_field(name="✨ 새로운 기능", value="- 상점 명령어 추가 (테스트)\n- 강화 아이템 판매 명령어 추가", inline=False)
-    embed.add_field(name="🔮 예정 사항", value="- 버튼출석\n- 봇 24시간 가동\n- 상점 명령어 구현", inline=False)
+    embed.add_field(name="✨ 새로운 기능", value="- 주식 명령어 추가", inline=False)
+    embed.add_field(name="🔮 예정 사항", value="- 버튼출석\n- 봇 24시간 가동\n- 상점 명령어 구현\n- 주식 구매 명령어 구현", inline=False)
     embed.set_footer(text="업데이트: 2025-06-17")
     await ctx.send(embed=embed)
 

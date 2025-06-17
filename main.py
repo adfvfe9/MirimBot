@@ -454,7 +454,7 @@ async def enhance_list(ctx):
     await ctx.send(embed=embed)
 
 # 머니 확인
-@client.command(aliases=['머니'])
+@client.command(aliases=['머니확인'])
 async def money(ctx, member: discord.Member = None):
     await ctx.message.delete()  # 명령어 삭제
     member = member or ctx.author
@@ -661,20 +661,58 @@ async def sell_enhance(ctx, item_name: str):
 
     await ctx.send(embed=embed)
 
+# ───────────── 주식 시장 상태 ─────────────
+market_file = "market_state.json"
+
+# 주식 시장 상태를 저장하는 파일
+def load_market_state():
+    if os.path.exists(market_file):
+        with open(market_file, "r") as f:
+            data = json.load(f)
+            return data.get("state", "BULL"), data.get("remaining_seconds", random.randint(300, 7200))
+    return "BULL", random.randint(300, 7200)
+
+def save_market_state(state, remaining_seconds):
+    with open(market_file, "w") as f:
+        json.dump({"state": state, "remaining_seconds": remaining_seconds}, f)
+
 # ───────────── 주식 기본 정보 ─────────────
 stock_info = {
-    "JAVA":   {"base": 50,  "limit": 0.025},
-    "C":      {"base": 30,  "limit": 0.015},
-    "C++":    {"base": 80,  "limit": 0.04},
-    "C#":     {"base": 100, "limit": 0.005},
+    "JAVA":   {"base": 50,  "limit": 0.075},
+    "C":      {"base": 30,  "limit": 0.033},
+    "C++":    {"base": 80,  "limit": 0.08},
+    "C#":     {"base": 100, "limit": 0.025},
     "PYTHON": {"base": 10,  "limit": 0.1},
-    "HTML":   {"base": 40,  "limit": 0.003},
-    "JS":     {"base": 200, "limit": 0.25}
+    "HTML":   {"base": 40,  "limit": 0.04},
+    "JS":     {"base": 300, "limit": 0.0142857}
 }
 
 stock_file = "stock_prices.json"
 stock_prices = {}
 last_update_time = datetime.datetime.now(datetime.timezone.utc)
+
+# 현재 시장 상태 (초기값: 상승장)
+current_market, market_wait_seconds = load_market_state()
+
+# 시장 전환 루프
+async def market_cycle():
+    global current_market, market_wait_seconds
+    await client.wait_until_ready()
+
+    while True:
+        print(f"[📢 시장 전환 대기] {market_wait_seconds // 60}분 후 상태 변경 예정")
+
+        # 저장된 시간 기준으로 대기
+        while market_wait_seconds > 0:
+            await asyncio.sleep(1)
+            market_wait_seconds -= 1
+            save_market_state(current_market, market_wait_seconds)
+
+        # 상태 전환
+        current_market = "BEAR" if current_market == "BULL" else "BULL"
+        market_wait_seconds = random.randint(300, 7200)  # 5~120분
+        save_market_state(current_market, market_wait_seconds)
+        print(f"[🔁 시장 상태 변경됨] 현재 시장: {'📈 상승장' if current_market == 'BULL' else '📉 하락장'}")
 
 # ───────────── 저장/로드 함수 ─────────────
 def load_stock_prices():
@@ -698,18 +736,27 @@ def update_stocks():
         limit = info["limit"]
         prev_price = stock_prices[name]["current"]
 
-        change_rate = random.uniform(-limit, limit)
-        new_price = prev_price * (1 + change_rate)
+        # 기본 변동
+        change = random.uniform(-limit, limit)
+        new_price = prev_price * (1 + change)
 
+        # 상승장 / 하락장 효과 (곱연산)
+        if current_market == "BULL":
+            new_price *= (1 + random.uniform(0, 0.03))  # 0~3% 상승
+        elif current_market == "BEAR":
+            new_price *= (1 - random.uniform(0, 0.025))  # 0~2.5% 하락
+
+        # 상장폐지 조건
         if new_price <= base * 0.01:
             new_price = base
-            print(f"[📉 상장폐지] {name} 상장폐지 → 초기화됨")
+            print(f"[📉 상장폐지] {name} → 기본가로 초기화됨")
 
         stock_prices[name]["previous"] = prev_price
         stock_prices[name]["current"] = round(new_price, 2)
 
     last_update_time = datetime.datetime.now(datetime.timezone.utc)
-    save_stock_prices()
+    save_json(stock_file, stock_prices)
+
 
 # ───────────── 자동 1분 갱신 루프 ─────────────
 @tasks.loop(minutes=1)
@@ -734,6 +781,9 @@ async def stock(ctx):
         description="1분마다 자동 갱신됩니다.",
         color=discord.Color.green()
     )
+    embed.add_field(
+    name="📊 현재 시장 상태",
+    value=f"{'📈 상승장' if current_market == 'BULL' else '📉 하락장'}\n⏱️ 다음 전환까지: {market_wait_seconds}초", inline=False)
     embed.set_footer(text=f"⏱️ 다음 변동까지: {remain}초")
 
     for name, price_data in stock_prices.items():
@@ -767,6 +817,7 @@ async def on_ready():
     if not auto_update_stocks.is_running():
         auto_update_stocks.start()
         print("✅ 주식 자동 갱신 루프 시작됨")
+    asyncio.create_task(market_cycle())
     last_update_time = datetime.datetime.now(datetime.timezone.utc)
 
 @client.command(aliases=["주식초기화"])
@@ -788,6 +839,208 @@ async def reset_stock(ctx):
         color=discord.Color.orange()
     )
     embed.set_footer(text=f"요청자: {ctx.author.display_name}")
+    await ctx.send(embed=embed)
+
+# ───────────── 유저 데이터 로딩 및 저장 ─────────────
+portfolio_file = "portfolio.json"
+money_data_file = "money_data.json"
+
+def load_json(path, default):
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return default
+
+def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
+portfolio = load_json(portfolio_file, {})
+money_data = load_json(money_data_file, {})
+
+# ───────────── 주식 이름 줄임말 처리 ─────────────
+stock_aliases = {
+    "J": "JAVA", "JAVA": "JAVA",
+    "C": "C",
+    "+": "C++", "C++": "C++",
+    "#": "C#", "C#": "C#",
+    "P": "PYTHON", "PYTHON": "PYTHON",
+    "H": "HTML", "HTML": "HTML",
+    "JS": "JS"
+}
+
+# ───────────── %주식구매 ─────────────
+@client.command(aliases=["주식구매"])
+async def buy_stock(ctx, stock_name: str, amount: int):
+    user_id = str(ctx.author.id)
+    stock_key = stock_aliases.get(stock_name.upper())
+
+    if not stock_key or stock_key not in stock_prices:
+        await ctx.send("❌ 존재하지 않는 주식입니다.")
+        return
+    if amount <= 0:
+        await ctx.send("❌ 1 이상의 수량을 입력해주세요.")
+        return
+
+    price = stock_prices[stock_key]["current"]
+    total_cost = round(price * amount, 2)
+
+    if money_data.get(user_id, 0) < total_cost:
+        await ctx.send("❌ 잔액이 부족합니다.")
+        return
+
+    embed = discord.Embed(
+        title="📥 주식 구매 확인",
+        description=f"{ctx.author.mention}님, 아래 거래를 확인해주세요.",
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="종목", value=stock_key, inline=True)
+    embed.add_field(name="수량", value=f"{amount} 주", inline=True)
+    embed.add_field(name="총 가격", value=f"{total_cost} byte", inline=False)
+
+    view = View()
+
+    async def confirm_callback(interaction: discord.Interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("이 버튼은 당신의 것이 아니에요!", ephemeral=True)
+            return
+
+        money_data[user_id] -= total_cost
+        portfolio.setdefault(user_id, {}).setdefault(stock_key, 0)
+        portfolio[user_id][stock_key] += amount
+
+        save_json(money_data_file, money_data)
+        save_json(portfolio_file, portfolio)
+
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="✅ 구매 완료",
+                description=f"{stock_key} {amount}주 구매 완료!",
+                color=discord.Color.green()
+            ),
+            view=None
+        )
+
+    async def cancel_callback(interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="❌ 구매 취소",
+                description="거래가 취소되었습니다.",
+                color=discord.Color.red()
+            ),
+            view=None
+        )
+
+    yes = Button(label="확인", style=discord.ButtonStyle.green)
+    no = Button(label="취소", style=discord.ButtonStyle.red)
+    yes.callback = confirm_callback
+    no.callback = cancel_callback
+    view.add_item(yes)
+    view.add_item(no)
+
+    await ctx.send(embed=embed, view=view)
+
+# ───────────── %주식판매 ─────────────
+@client.command(aliases=["주식판매"])
+async def sell_stock(ctx, stock_name: str, amount: int):
+    user_id = str(ctx.author.id)
+    stock_key = stock_aliases.get(stock_name.upper())
+
+    if not stock_key or stock_key not in stock_prices:
+        await ctx.send("❌ 존재하지 않는 주식입니다.")
+        return
+    if amount <= 0:
+        await ctx.send("❌ 1 이상의 수량을 입력해주세요.")
+        return
+    if portfolio.get(user_id, {}).get(stock_key, 0) < amount:
+        await ctx.send("❌ 보유 수량이 부족합니다.")
+        return
+
+    price = stock_prices[stock_key]["current"]
+    total_earned = round(price * amount * 0.8, 2)  # 수수료 20%
+
+    embed = discord.Embed(
+        title="📤 주식 판매 확인",
+        description=f"{ctx.author.mention}님, 아래 거래를 확인해주세요.",
+        color=discord.Color.orange()
+    )
+    embed.add_field(name="종목", value=stock_key, inline=True)
+    embed.add_field(name="수량", value=f"{amount} 주", inline=True)
+    embed.add_field(name="수수료 차감 후", value=f"{total_earned} byte", inline=False)
+
+    view = View()
+
+    async def confirm_callback(interaction: discord.Interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("이 버튼은 당신의 것이 아니에요!", ephemeral=True)
+            return
+
+        portfolio[user_id][stock_key] -= amount
+        if portfolio[user_id][stock_key] <= 0:
+            del portfolio[user_id][stock_key]
+
+        money_data[user_id] = money_data.get(user_id, 0) + total_earned
+        save_json(money_data_file, money_data)
+        save_json(portfolio_file, portfolio)
+
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="✅ 판매 완료",
+                description=f"{stock_key} {amount}주 판매 완료!",
+                color=discord.Color.green()
+            ),
+            view=None
+        )
+
+    async def cancel_callback(interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="❌ 판매 취소",
+                description="거래가 취소되었습니다.",
+                color=discord.Color.red()
+            ),
+            view=None
+        )
+
+    yes = Button(label="확인", style=discord.ButtonStyle.green)
+    no = Button(label="취소", style=discord.ButtonStyle.red)
+    yes.callback = confirm_callback
+    no.callback = cancel_callback
+    view.add_item(yes)
+    view.add_item(no)
+
+    await ctx.send(embed=embed, view=view)
+
+@client.command(aliases=["주식확인"])
+async def stock_status(ctx, member: discord.Member = None):
+    member = member or ctx.author
+    user_id = str(member.id)
+
+    if user_id not in portfolio or not portfolio[user_id]:
+        await ctx.send(f"{member.display_name}님은 보유 중인 주식이 없습니다.")
+        return
+
+    embed = discord.Embed(
+        title=f"📊 {member.display_name}님의 주식 상태",
+        description="보유 수량 및 현재 평가 금액",
+        color=discord.Color.purple()
+    )
+
+    total_value = 0
+    for name, quantity in portfolio[user_id].items():
+        current_price = stock_prices.get(name, {}).get("current", stock_info[name]["base"])
+        value = round(current_price * quantity, 2)
+        total_value += value
+
+        embed.add_field(
+            name=name,
+            value=f"보유량: **{quantity}주**\n현재가: **{current_price} byte**\n평가액: **{value} byte**",
+            inline=False
+        )
+
+    embed.add_field(name="📦 총 평가액", value=f"**{total_value} byte**", inline=False)
+    embed.set_footer(text=f"요청자: {ctx.author.display_name}")
+
     await ctx.send(embed=embed)
 
 

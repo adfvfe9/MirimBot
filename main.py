@@ -752,7 +752,7 @@ def update_stocks():
         change = random.uniform(-limit, limit)
 
         # 변동에 따라 가격 조정
-        bias = (base - prev_price) / base * 0.01
+        bias = (base - prev_price) / base * 0.03
         change += bias
 
         new_price = prev_price * (1 + change)
@@ -1346,6 +1346,7 @@ from discord import File
 
 @client.command(aliases=["주가그래프"])
 async def stock_chart(ctx, stock_name: str = None):
+    await ctx.message.delete()
     if not price_history:
         await ctx.send("❌ 아직 기록된 가격 데이터가 없습니다.")
         return
@@ -1388,6 +1389,50 @@ async def stock_chart(ctx, stock_name: str = None):
         plt.close()
 
         await ctx.send(file=File(buf, filename="all_stock_chart.png"))
+
+@client.command(aliases=["도움말"])
+async def 명령어(ctx):
+    await ctx.message.delete()
+    embed = discord.Embed(
+        title="📘 명령어 목록",
+        description="모든 기능 명령어를 정리한 목록입니다.\n접두사 `%`는 자동으로 붙습니다.",
+        color=discord.Color.blue()
+    )
+
+    commands = [
+        ("강화", "아이템을 강화한다.", "강화 <아이템이름> [제물]"),
+        ("강화목록", "강화한 아이템 목록을 확인한다.", "강화목록"),
+        ("강화판매", "강화한 아이템을 판매한다.", "강화판매 <아이템이름>"),
+        ("경고", "유저에게 경고를 부여한다.", "경고 <유저> [경고 수] [사유]"),
+        ("경고확인", "유저의 경고 수를 확인한다.", "경고확인 [유저]"),
+        ("급식", "오늘 급식을 출력한다.", "급식"),
+        ("도움말", "명령어 목록을 출력한다.", "도움말"),
+        ("머니제거", "유저의 돈을 차감한다.", "머니제거 <유저> <금액>"),
+        ("머니추가", "유저에게 돈을 추가한다.", "머니추가 <유저> <금액>"),
+        ("머니확인", "유저의 돈을 확인한다.\n유저 미 입력시 자신의 돈을 확인한다.", "머니확인 [유저]"),
+        ("상점", "상점 창을 띄운다.", "상점"),
+        ("송금", "유저에게 돈을 보낸다.", "송금 <유저> <금액>"),
+        ("시간", "현재 시간을 출력한다.", "시간"),
+        ("주가그래프", "주가 그래프를 출력한다.\n주식 이름 미 입력시 모든 주식의 그래프를 출력한다.", "주가그래프 [주식이름]"),
+        ("주식", "현재 주식시장 상태를 확인한다.", "주식"),
+        ("주식구매", "주식을 구매한다.", "주식구매 <주식이름> <수량>"),
+        ("주식전량구매", "해당 주식을 최대 구매한다.", "주식전량구매 <주식이름>"),
+        ("주식전량판매", "해당 주식을 모두 판매한다.\n주식 이름 미 입력시 모든 주식을 판매한다.", "주식전량판매 [주식이름]"),
+        ("주식초기화", "주식 가격을 초기화한다.", "주식초기화"),
+        ("주식판매", "주식을 판매한다.", "주식판매 <주식이름> <수량>"),
+        ("주식확인", "보유 중인 주식을 확인한다.", "주식확인 [유저]"),
+        ("패치노트", "최근 업데이트 출력.", "패치노트"),
+    ]
+
+    for name, desc, usage in commands:
+        embed.add_field(
+            name=f"📌 {name}",
+            value=f"**설명:** {desc}\n**사용법:** `%{usage}`",
+            inline=False
+        )
+
+    embed.set_footer(text="예: %강화 철검 / %주식구매 JAVA 3")
+    await ctx.send(embed=embed)
 
 
 client.run(os.getenv("DISCORD_TOKEN"))

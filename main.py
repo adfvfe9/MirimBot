@@ -19,6 +19,9 @@ from discord.ui import Button, View
 from discord.ext import commands
 from discord import Embed, ButtonStyle, Interaction
 from discord.ui import View, Button
+import random
+from discord.ext import commands, tasks
+
 
 # Bot 선언
 intents = discord.Intents.default()
@@ -657,5 +660,135 @@ async def sell_enhance(ctx, item_name: str):
     embed.set_footer(text="판매가 완료되었습니다.")
 
     await ctx.send(embed=embed)
+
+# ───────────── 주식 기본 정보 ─────────────
+stock_info = {
+    "JAVA":   {"base": 50,  "limit": 0.025},
+    "C":      {"base": 30,  "limit": 0.015},
+    "C++":    {"base": 80,  "limit": 0.04},
+    "C#":     {"base": 100, "limit": 0.005},
+    "PYTHON": {"base": 10,  "limit": 0.1},
+    "HTML":   {"base": 40,  "limit": 0.003},
+    "JS":     {"base": 200, "limit": 0.25}
+}
+
+stock_file = "stock_prices.json"
+stock_prices = {}
+last_update_time = datetime.datetime.now(datetime.timezone.utc)
+
+# ───────────── 저장/로드 함수 ─────────────
+def load_stock_prices():
+    if os.path.exists(stock_file):
+        with open(stock_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {
+        name: {"current": data["base"], "previous": data["base"]}
+        for name, data in stock_info.items()
+    }
+
+def save_stock_prices():
+    with open(stock_file, "w", encoding="utf-8") as f:
+        json.dump(stock_prices, f, indent=4)
+
+# ───────────── 주식 가격 갱신 ─────────────
+def update_stocks():
+    global last_update_time
+    for name, info in stock_info.items():
+        base = info["base"]
+        limit = info["limit"]
+        prev_price = stock_prices[name]["current"]
+
+        change_rate = random.uniform(-limit, limit)
+        new_price = prev_price * (1 + change_rate)
+
+        if new_price <= base * 0.01:
+            new_price = base
+            print(f"[📉 상장폐지] {name} 상장폐지 → 초기화됨")
+
+        stock_prices[name]["previous"] = prev_price
+        stock_prices[name]["current"] = round(new_price, 2)
+
+    last_update_time = datetime.datetime.now(datetime.timezone.utc)
+    save_stock_prices()
+
+# ───────────── 자동 1분 갱신 루프 ─────────────
+@tasks.loop(minutes=1)
+async def auto_update_stocks():
+    update_stocks()
+
+@auto_update_stocks.before_loop
+async def before_loop():
+    await client.wait_until_ready()
+
+# ───────────── %주식 명령어 ─────────────
+@client.command(aliases=["주식"])
+async def stock(ctx):
+    await ctx.message.delete()
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    elapsed = (now - last_update_time).total_seconds()
+    remain = max(0, 60 - int(elapsed))
+
+    embed = discord.Embed(
+        title="📈 실시간 주식 시세",
+        description="1분마다 자동 갱신됩니다.",
+        color=discord.Color.green()
+    )
+    embed.set_footer(text=f"⏱️ 다음 변동까지: {remain}초")
+
+    for name, price_data in stock_prices.items():
+        current = price_data["current"]
+        previous = price_data["previous"]
+        diff = current - previous
+        percent = (current / previous) * 100 - 100 if previous != 0 else 0
+
+        diff_str = (
+            f"▲ {abs(diff):.2f} byte (+{percent:.2f}%)" if diff > 0 else
+            f"▼ {abs(diff):.2f} byte ({percent:.2f}%)" if diff < 0 else
+            "― 변동 없음"
+        )
+
+        embed.add_field(
+            name=name,
+            value=f"💵 {current:.2f} byte\n({diff_str})",
+            inline=True
+        )
+
+    await ctx.send(embed=embed)
+
+# ───────────── 봇 시작 시 초기화 ─────────────
+stock_prices = load_stock_prices()
+last_update_time = datetime.datetime.now(datetime.timezone.utc)
+
+@client.event
+async def on_ready():
+    global last_update_time
+    print(f'{client.user}에 로그인하였습니다.')
+    if not auto_update_stocks.is_running():
+        auto_update_stocks.start()
+        print("✅ 주식 자동 갱신 루프 시작됨")
+    last_update_time = datetime.datetime.now(datetime.timezone.utc)
+
+@client.command(aliases=["주식초기화"])
+@commands.has_permissions(administrator=True)
+async def reset_stock(ctx):
+    global stock_prices, last_update_time
+
+    # 주식 초기화
+    stock_prices = {
+        name: {"current": info["base"], "previous": info["base"]}
+        for name, info in stock_info.items()
+    }
+    save_stock_prices()
+    last_update_time = datetime.datetime.now(datetime.timezone.utc)
+
+    embed = discord.Embed(
+        title="🔄 주식 초기화 완료",
+        description="모든 주식이 기본가로 초기화되었습니다.",
+        color=discord.Color.orange()
+    )
+    embed.set_footer(text=f"요청자: {ctx.author.display_name}")
+    await ctx.send(embed=embed)
+
 
 client.run(os.getenv("DISCORD_TOKEN"))

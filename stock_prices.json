@@ -1,0 +1,30 @@
+{
+    "JAVA": {
+        "current": 50,
+        "previous": 50
+    },
+    "C": {
+        "current": 30,
+        "previous": 30
+    },
+    "C++": {
+        "current": 80,
+        "previous": 80
+    },
+    "C#": {
+        "current": 100,
+        "previous": 100
+    },
+    "PYTHON": {
+        "current": 10,
+        "previous": 10
+    },
+    "HTML": {
+        "current": 40,
+        "previous": 40
+    },
+    "JS": {
+        "current": 200,
+        "previous": 200
+    }
+}

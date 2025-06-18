@@ -95,6 +95,21 @@ def save_warnings(): # 경고 데이터를 JSON 파일에 저장하는 함수
     with open(DATA_FILE, 'w', encoding='utf-8') as f:
         json.dump({'warnings': warnings, 'warnings_data': warnings_data}, f, ensure_ascii=False, indent=4)
 
+BANK_FILE = "bank_data.json"
+
+def load_bank_data():
+    if not os.path.exists(BANK_FILE):
+        return {}
+    with open(BANK_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_bank_data(data):
+    with open(BANK_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+# 봇 시작 시 로딩
+bank_data = load_bank_data()
+
 # on_message는 커맨드와 충돌 방지 필요 → process_commands 사용
 @client.event
 async def on_message(message):
@@ -751,8 +766,8 @@ def update_stocks():
         # 기본 변동
         change = random.uniform(-limit, limit)
 
-        # 변동에 따라 가격 조정
-        bias = (base - prev_price) / base * 0.03
+        # 과한 변동 억제
+        bias = (base - prev_price) / base * 0.01
         change += bias
 
         new_price = prev_price * (1 + change)
@@ -761,7 +776,7 @@ def update_stocks():
         if current_market == "BULL":
             new_price *= (1 + random.uniform(0, 0.025))  # 0~2.5% 상승
         elif current_market == "BEAR":
-            new_price *= (1 - random.uniform(0, 0.025))  # 0~2.5% 하락
+            new_price *= (1 - random.uniform(0, 0.02))  # 0~2% 하락
 
         # 상장폐지 조건
         if new_price <= base * 0.01:
@@ -1432,6 +1447,101 @@ async def 명령어(ctx):
         )
 
     embed.set_footer(text="예: %강화 철검 / %주식구매 JAVA 3")
+    await ctx.send(embed=embed)
+
+async def confirm_callback(interaction: discord.Interaction):
+    user_id = str(interaction.user.id)
+    ctx_data = interaction.client.ctx_temp[user_id]
+    amount = ctx_data["amount"]
+    result = ctx_data["result"]
+
+    if money_data.get(user_id, 0) < amount:
+        await interaction.channel.send("❌ 금액이 부족합니다.")
+        return
+
+    money_data[user_id] = round(money_data[user_id] - amount, 2)
+    bank_data[user_id] = bank_data.get(user_id, 0) + result
+
+    save_money_data(money_data)
+    save_bank_data(bank_data)
+
+    embed = discord.Embed(
+        title="💰 출금 완료",
+        description=(
+            f"출금 금액: {amount:.2f}\n"
+            f"통장 적립: {result:.2f}\n"
+            f"📦 현재 통장 잔액: {bank_data[user_id]:.2f}"
+        ),
+        color=discord.Color.green()
+    )
+    embed.set_footer(text=interaction.user.display_name)
+
+    await interaction.channel.send(embed=embed)
+    await interaction.message.delete()
+async def cancel_callback(interaction: discord.Interaction):
+    await interaction.channel.send("❌ 출금이 취소되었습니다.")
+    await interaction.message.delete()
+
+# ✅ 명령어 함수
+@client.command(aliases=["출금"])
+async def moneyout(ctx, amount: float):
+    user_id = str(ctx.author.id)
+    amount = round(amount, 2)
+
+    if money_data.get(user_id, 0) < amount:
+        await ctx.send("❌ 보유 금액이 부족합니다.")
+        return
+
+    if amount < 1000:
+        await ctx.send("❌ 최소 출금 금액은 1000입니다.")
+        return
+
+    try:
+        result = math.log(amount - 998) ** 3
+    except ValueError:
+        await ctx.send("❌ 로그 계산 실패 (금액 너무 작음).")
+        return
+
+    result = round(result, 2)
+
+    # ✅ 상호작용을 위한 임시 저장
+    if not hasattr(client, "ctx_temp"):
+        client.ctx_temp = {}
+    client.ctx_temp[user_id] = {"amount": amount, "result": result}
+
+    # ✅ 버튼 생성
+    view = View(timeout=10)
+    button_yes = Button(label="확인", style=discord.ButtonStyle.green)
+    button_no = Button(label="취소", style=discord.ButtonStyle.red)
+
+    button_yes.callback = confirm_callback
+    button_no.callback = cancel_callback
+
+    view.add_item(button_yes)
+    view.add_item(button_no)
+
+    embed = discord.Embed(
+        title="💰 출금 확인",
+        description=f"출금 요청 금액: {amount:.2f}\n예상 통장 적립: {result:.2f}\n\n정말 출금하시겠습니까?",
+        color=discord.Color.gold()
+    )
+    embed.set_footer(text="10초 안에 선택하지 않으면 자동 취소됩니다.")
+
+    await ctx.send(embed=embed, view=view)
+
+@client.command(aliases=["통장"])
+async def currentrealmoney(ctx, member: discord.Member = None):
+    target = member or ctx.author
+    user_id = str(target.id)
+    balance = bank_data.get(user_id, 0)
+
+    embed = discord.Embed(
+        title="🏦 통장 잔액 확인",
+        description=f"{target.mention}님의 현재 통장 잔액은 **{balance:.2f}** byte입니다.",
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text=f"요청자: {ctx.author.display_name}")
+
     await ctx.send(embed=embed)
 
 

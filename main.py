@@ -110,6 +110,39 @@ def save_bank_data(data):
 # 봇 시작 시 로딩
 bank_data = load_bank_data()
 
+GAMBLE_COOLDOWN_FILE = "gamble_cooldowns.json"
+
+def load_gamble_cooldowns():
+    if os.path.exists(GAMBLE_COOLDOWN_FILE):
+        with open(GAMBLE_COOLDOWN_FILE, "r") as f:
+            raw = json.load(f)
+            return {k: datetime.datetime.fromisoformat(v) for k, v in raw.items()}
+    return {}
+
+def save_gamble_cooldowns(data):
+    with open(GAMBLE_COOLDOWN_FILE, "w") as f:
+        raw = {k: v.isoformat() for k, v in data.items()}
+        json.dump(raw, f, indent=4)
+
+GAMBLE_COOLDOWN_FILE = "gamble_cooldowns.json"
+
+gamble_cooldowns = load_gamble_cooldowns()
+
+
+GAMBLE_STATS_FILE = "gamble_stats.json"
+
+def load_gamble_stats():
+    if os.path.exists(GAMBLE_STATS_FILE):
+        with open(GAMBLE_STATS_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_gamble_stats(data):
+    with open(GAMBLE_STATS_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
+gamble_stats = load_gamble_stats()
+
 # on_message는 커맨드와 충돌 방지 필요 → process_commands 사용
 @client.event
 async def on_message(message):
@@ -141,13 +174,13 @@ async def time(ctx):
 async def patchnote(ctx):
     await ctx.message.delete()
     embed = discord.Embed(
-        title="📜 패치노트 v1.1.5",
+        title="📜 패치노트 v1.1.6",
         description="최신 버전 업데이트입니다.",
         color=0xf1c40f  # 노란색
     )
-    embed.add_field(name="✨ 새로운 기능", value="- 주식 명령어 추가", inline=False)
+    embed.add_field(name="✨ 새로운 기능", value="- 도박 명령어 추가\n- 머니, 통장, 도박, 주식 랭킹 추가", inline=False)
     embed.add_field(name="🔮 예정 사항", value="- 버튼출석\n- 봇 24시간 가동\n- 상점 명령어 구현", inline=False)
-    embed.set_footer(text="업데이트: 2025-06-17")
+    embed.set_footer(text="업데이트: 2025-06-18")
     await ctx.send(embed=embed)
 
 class WarningView(ui.View): # 경고 확인을 위한 View 클래스
@@ -711,7 +744,8 @@ stock_info = {
     "C#":     {"base": 100, "limit": 0.025},
     "PYTHON": {"base": 10,  "limit": 0.1},
     "HTML":   {"base": 40,  "limit": 0.04},
-    "JS":     {"base": 300, "limit": 0.0142857}
+    "JS":     {"base": 300, "limit": 0.0142857},
+    "TS":     {"base": 100, "limit": 0.3}
 }
 
 stock_file = "stock_prices.json"
@@ -845,6 +879,15 @@ async def stock(ctx):
 
 # ───────────── 봇 시작 시 초기화 ─────────────
 stock_prices = load_stock_prices()
+# 🛠️ 누락된 주식 보정 (예: TS)
+for name, data in stock_info.items():
+    if name not in stock_prices:
+        stock_prices[name] = {
+            "current": data["base"],
+            "previous": data["base"]
+        }
+
+save_stock_prices()
 last_update_time = datetime.datetime.now(datetime.timezone.utc)
 
 @client.event
@@ -907,7 +950,8 @@ stock_aliases = {
     "#": "C#", "C#": "C#",
     "P": "PYTHON", "PYTHON": "PYTHON",
     "H": "HTML", "HTML": "HTML",
-    "JS": "JS"
+    "JS": "JS",
+    "TS": "TS"
 }
 
 # ───────────── %주식구매 ─────────────
@@ -1421,7 +1465,10 @@ async def 명령어(ctx):
         ("경고", "유저에게 경고를 부여한다.", "경고 <유저> [경고 수] [사유]"),
         ("경고확인", "유저의 경고 수를 확인한다.", "경고확인 [유저]"),
         ("급식", "오늘 급식을 출력한다.", "급식"),
+        ("도박", "도박한다.", "도박 <배팅금액>"),
+        ("도박랭킹", "도박 랭킹을 확인한다.", "도박랭킹"),
         ("도움말", "명령어 목록을 출력한다.", "도움말"),
+        ("머니랭킹", "머니 랭킹을 확인한다.", "머니랭킹"),
         ("머니제거", "유저의 돈을 차감한다.", "머니제거 <유저> <금액>"),
         ("머니추가", "유저에게 돈을 추가한다.", "머니추가 <유저> <금액>"),
         ("머니확인", "유저의 돈을 확인한다.\n유저 미 입력시 자신의 돈을 확인한다.", "머니확인 [유저]"),
@@ -1431,11 +1478,15 @@ async def 명령어(ctx):
         ("주가그래프", "주가 그래프를 출력한다.\n주식 이름 미 입력시 모든 주식의 그래프를 출력한다.", "주가그래프 [주식이름]"),
         ("주식", "현재 주식시장 상태를 확인한다.", "주식"),
         ("주식구매", "주식을 구매한다.", "주식구매 <주식이름> <수량>"),
+        ("주식랭킹", "주식 랭킹을 확인한다.", "주식랭킹"),
         ("주식전량구매", "해당 주식을 최대 구매한다.", "주식전량구매 <주식이름>"),
         ("주식전량판매", "해당 주식을 모두 판매한다.\n주식 이름 미 입력시 모든 주식을 판매한다.", "주식전량판매 [주식이름]"),
         ("주식초기화", "주식 가격을 초기화한다.", "주식초기화"),
         ("주식판매", "주식을 판매한다.", "주식판매 <주식이름> <수량>"),
         ("주식확인", "보유 중인 주식을 확인한다.", "주식확인 [유저]"),
+        ("출금", "현실돈으로 서버 머니를 출금한다.", "출금 <금액>"),
+        ("통장", "현재 통장 잔액을 확인한다.", "통장 [유저]"),
+        ("통장랭킹", "통장 랭킹을 확인한다.", "통장랭킹"),
         ("패치노트", "최근 업데이트 출력.", "패치노트"),
     ]
 
@@ -1541,6 +1592,189 @@ async def currentrealmoney(ctx, member: discord.Member = None):
         color=discord.Color.blue()
     )
     embed.set_footer(text=f"요청자: {ctx.author.display_name}")
+
+    await ctx.send(embed=embed)
+
+@client.command(aliases=["도박"])
+async def gamble(ctx, amount: int):
+    await ctx.message.delete()
+    user_id = str(ctx.author.id)
+    now = datetime.datetime.now()
+
+    # 쿨타임 체크
+    last_time = gamble_cooldowns.get(user_id)
+    if last_time:
+        elapsed = (now - last_time).total_seconds()
+        if elapsed < 3600:
+            remain = int(3600 - elapsed)
+            minutes, seconds = divmod(remain, 60)
+            await ctx.send(f"⏳ 아직 도박할 수 없어요! 다시 시도하려면 **{minutes}분 {seconds}초** 기다려주세요.")
+            return
+
+    if amount <= 0:
+        await ctx.send("❌ 1 이상의 금액을 입력해주세요.")
+        return
+
+    current_money = money_data.get(user_id, 0)
+    if current_money < amount:
+        await ctx.send("❌ 잔액이 부족합니다.")
+        return
+
+    # -100% ~ +1000%
+    multiplier = random.uniform(-10.0, 10.0)
+    # 실제 도박 결과 계산 (float 유지)
+    profit = round(amount * multiplier, 2)
+    net_change = profit - amount
+    new_balance = round(current_money - amount + profit, 2)
+
+
+    money_data[user_id] = max(0, new_balance)
+    save_money_data(money_data)
+    delta = round(profit - amount, 2)
+    gamble_stats[user_id] = round(gamble_stats.get(user_id, 0) + delta, 2)
+    save_gamble_stats(gamble_stats)
+
+    # 쿨타임 갱신 및 저장
+    gamble_cooldowns[user_id] = now
+    save_gamble_cooldowns(gamble_cooldowns)
+
+    # 결과 메시지
+    color = 0x2ecc71 if profit > amount else (0xe74c3c if profit < amount else 0x95a5a6)
+    outcome = "🎉 잭팟!" if multiplier > 5 else "👍 성공!" if profit > amount else "😢 손해..." if profit < amount else "💸 본전"
+
+    embed = discord.Embed(
+        title="🎲 도박 결과",
+        description=f"{ctx.author.mention}님이 **{amount} byte**를 도박했습니다!",
+        color=color
+    )
+    embed.add_field(name="배율", value=f"{multiplier:.2f}배", inline=True)
+    embed.add_field(name="획득 금액", value=f"{profit:.2f} byte", inline=True)
+
+    net_change = profit - amount
+    net_symbol = "📈" if net_change > 0 else "📉" if net_change < 0 else "💸"
+    embed.add_field(name="순이익", value=f"{net_symbol} {net_change:+.2f} byte", inline=True)
+
+    embed.add_field(name="현재 잔액", value=f"{money_data[user_id]:.2f} byte", inline=False)
+    embed.set_footer(text=outcome)
+
+    await ctx.send(embed=embed)
+
+@client.command(aliases=["머니랭킹"])
+async def money_rank(ctx):
+    await ctx.message.delete()
+    if not money_data:
+        await ctx.send("❌ 데이터가 없습니다.")
+        return
+
+    # 금액 기준 내림차순 정렬
+    sorted_users = sorted(money_data.items(), key=lambda x: x[1], reverse=True)
+
+    embed = discord.Embed(
+        title="💰 머니 랭킹 TOP 10",
+        description="현재 보유한 byte 기준 랭킹입니다.",
+        color=discord.Color.gold()
+    )
+
+    for i, (user_id, amount) in enumerate(sorted_users[:10], start=1):
+        member = ctx.guild.get_member(int(user_id))
+        name = member.display_name if member else f"알 수 없음 ({user_id})"
+        embed.add_field(name=f"{i}위: {name}", value=f"{amount:.2f} byte", inline=False)
+
+    await ctx.send(embed=embed)
+
+@client.command(aliases=["통장랭킹"])
+async def bank_rank(ctx):
+    await ctx.message.delete()
+    if not bank_data:
+        await ctx.send("❌ 데이터가 없습니다.")
+        return
+
+    sorted_users = sorted(bank_data.items(), key=lambda x: x[1], reverse=True)
+
+    embed = discord.Embed(
+        title="🏦 통장 랭킹 TOP 10",
+        description="통장에 적립된 byte 기준 랭킹입니다.",
+        color=discord.Color.blue()
+    )
+
+    for i, (user_id, amount) in enumerate(sorted_users[:10], start=1):
+        member = ctx.guild.get_member(int(user_id))
+        name = member.display_name if member else f"알 수 없음 ({user_id})"
+        embed.add_field(name=f"{i}위: {name}", value=f"{amount:.2f} byte", inline=False)
+
+    await ctx.send(embed=embed)
+
+@client.command(aliases=["도박랭킹"])
+async def gamble_rank(ctx):
+    await ctx.message.delete()
+    if not gamble_stats:
+        await ctx.send("❌ 아직 도박 기록이 없습니다.")
+        return
+
+    sorted_users = sorted(gamble_stats.items(), key=lambda x: x[1], reverse=True)
+
+    embed = discord.Embed(
+        title="🎰 도박 수익 랭킹 TOP 10",
+        description="도박으로 가장 많이 벌거나 잃은 유저 순위입니다.",
+        color=discord.Color.purple()
+    )
+
+    for i, (user_id, profit) in enumerate(sorted_users[:10], start=1):
+        member = ctx.guild.get_member(int(user_id))
+        name = member.display_name if member else f"알 수 없음 ({user_id})"
+        symbol = "📈" if profit > 0 else "📉" if profit < 0 else "💸"
+        embed.add_field(name=f"{i}위: {name}", value=f"{symbol} {profit:+.2f} byte", inline=False)
+
+    await ctx.send(embed=embed)
+
+@client.command(aliases=["주식랭킹"])
+async def stock_rank(ctx):
+    await ctx.message.delete()
+
+    user_profits = []
+
+    for user_id, stocks in portfolio.items():
+        total_cost = 0.0
+        total_value = 0.0
+
+        for name, data in stocks.items():
+            quantity = data.get("quantity", 0)
+            avg_price = data.get("avg_price", 0)
+            current_price = stock_prices.get(name, {}).get("current", avg_price)
+
+            total_cost += quantity * avg_price
+            total_value += quantity * current_price
+
+        if total_cost == 0:
+            continue  # 매입 금액이 없으면 계산 불가
+
+        profit = total_value - total_cost
+        profit_rate = (profit / total_cost) * 100
+
+        user_profits.append((user_id, round(profit, 2), round(profit_rate, 2)))
+
+    if not user_profits:
+        await ctx.send("❌ 주식을 보유한 유저가 없습니다.")
+        return
+
+    # 수익금 기준 내림차순 정렬
+    user_profits.sort(key=lambda x: x[1], reverse=True)
+
+    embed = discord.Embed(
+        title="📈 주식 수익 랭킹 TOP 10",
+        description="보유 주식의 총 수익금 기준 랭킹입니다.",
+        color=discord.Color.teal()
+    )
+
+    for i, (user_id, profit, rate) in enumerate(user_profits[:10], start=1):
+        member = ctx.guild.get_member(int(user_id))
+        name = member.display_name if member else f"알 수 없음 ({user_id})"
+        symbol = "📈" if profit > 0 else "📉" if profit < 0 else "💸"
+        embed.add_field(
+            name=f"{i}위: {name}",
+            value=f"{symbol} 수익금: {profit:+.2f} byte\n💹 수익률: {rate:+.2f}%",
+            inline=False
+        )
 
     await ctx.send(embed=embed)
 

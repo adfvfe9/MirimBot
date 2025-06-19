@@ -1,34 +1,34 @@
 {
     "JAVA": {
-        "current": 61.1,
-        "previous": 60.02
+        "current": 68.4,
+        "previous": 64.92
     },
     "C": {
-        "current": 29.22,
-        "previous": 28.02
+        "current": 31.59,
+        "previous": 31.36
     },
     "C++": {
-        "current": 76.67,
-        "previous": 70.99
+        "current": 88.15,
+        "previous": 81.65
     },
     "C#": {
-        "current": 106.48,
-        "previous": 105.62
+        "current": 111.63,
+        "previous": 110.42
     },
     "PYTHON": {
-        "current": 6.72,
-        "previous": 6.67
+        "current": 7.41,
+        "previous": 6.96
     },
     "HTML": {
-        "current": 31.21,
-        "previous": 31.27
+        "current": 30.4,
+        "previous": 30.65
     },
     "JS": {
-        "current": 311.26,
-        "previous": 301.51
+        "current": 339.0,
+        "previous": 331.21
     },
     "TS": {
-        "current": 6.15,
-        "previous": 7.6
+        "current": 4.91,
+        "previous": 4.18
     }
 }

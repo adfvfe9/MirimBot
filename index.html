@@ -50,7 +50,6 @@
 <body>
   <h1>📈 주식 시세 그래프</h1>
   <p>최근 1440개의 가격 변동 (최대 24시간치)을 표시합니다.</p>
-
   <p id="marketState">📊 현재 시장 상태: 로딩 중...</p>
 
   <div id="checkboxes" class="checkbox-group"></div>
@@ -59,7 +58,7 @@
   <script>
     let chart;
     let stockData = {};
-
+    let predictionData = {};
     const colorMap = {};
     const basePrices = {
       "JAVA": 50,
@@ -73,11 +72,16 @@
     };
 
     async function loadData() {
-      const response = await fetch("https://mirimbot.netlify.app/price_history.json");
-      stockData = await response.json();
+      const [priceRes, stateRes, predictionRes] = await Promise.all([
+        fetch("price_history.json"),
+        fetch("market_state.json"),
+        fetch("predictions.json")
+      ]);
 
-      const stateRes = await fetch("https://mirimbot.netlify.app/market_state.json");
+      stockData = await priceRes.json();
+      predictionData = await predictionRes.json();
       const stateData = await stateRes.json();
+
       const stateMap = {
         "BULL": "📈 상승장",
         "BEAR": "📉 하락장",
@@ -114,10 +118,10 @@
       const checked = Array.from(document.querySelectorAll("#checkboxes input:checked"))
         .map(cb => cb.value);
 
-      const datasets = checked.flatMap((stock) => {
+      const datasets = checked.flatMap(stock => {
         const data = stockData[stock];
         const dataset = {
-          label: `${stock} 가격 (byte)`,
+          label: `${stock} 가격`,
           data,
           borderColor: colorMap[stock],
           backgroundColor: colorMap[stock],
@@ -151,17 +155,29 @@
             fill: false
           };
 
-          return [dataset, avgLine, baseLine];
+          const predictions = predictionData[stock];
+          const predictionLine = predictions ? {
+            label: `${stock} 예측`,
+            data: new Array(data.length - 1).fill(null).concat(predictions),
+            borderColor: "#ff00aa",
+            borderDash: [4, 4],
+            borderWidth: 2,
+            pointRadius: 0,
+            fill: false
+          } : null;
+
+          return [dataset, avgLine, baseLine, ...(predictionLine ? [predictionLine] : [])];
         }
 
         return [dataset];
       });
 
-      const labels = Array.from({ length: datasets[0]?.data.length || 0 }, (_, i) => `${i + 1}분 전`).reverse();
+      const labels = Array.from({ length: datasets[0]?.data.length || 0 }, (_, i) =>
+        i < stockData[checked[0]].length ? `${stockData[checked[0]].length - i}분 전` : `+${i - stockData[checked[0]].length + 1}분`
+      ).reverse();
 
       const annotations = [];
 
-      // ✅ 상장폐지 조건: price <= base * 0.01
       checked.forEach(stock => {
         const data = stockData[stock];
         const base = basePrices[stock] || 100;
@@ -195,7 +211,7 @@
           responsive: true,
           interaction: { mode: 'nearest', intersect: false },
           plugins: {
-            legend: { display: false },
+            legend: { display: true },
             tooltip: { enabled: true },
             annotation: { annotations }
           },
@@ -214,7 +230,7 @@
     }
 
     loadData();
-    setInterval(loadData, 60000); // 1분마다 갱신
+    setInterval(loadData, 60000);
   </script>
 </body>
 </html>

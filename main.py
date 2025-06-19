@@ -173,6 +173,35 @@ def save_consolation(data):
 
 consolation_data = load_consolation()
 
+import numpy as np
+import json
+from sklearn.linear_model import LinearRegression
+
+# JSON 파일에서 가격 히스토리 불러오기
+with open("price_history.json", "r", encoding="utf-8") as f:
+    price_history = json.load(f)
+
+predictions = {}
+future_minutes = 30  # 앞으로 예측할 분 수
+
+for stock, prices in price_history.items():
+    if len(prices) < 10:
+        continue
+
+    X = np.arange(len(prices)).reshape(-1, 1)
+    y = np.array(prices)
+
+    model = LinearRegression().fit(X, y)
+    X_future = np.arange(len(prices), len(prices) + future_minutes).reshape(-1, 1)
+    y_pred = model.predict(X_future)
+    y_pred = np.maximum(y_pred, 0)  # 음수 방지
+
+    predictions[stock] = y_pred.round(2).tolist()
+
+# 예측 결과 저장
+with open("predictions.json", "w", encoding="utf-8") as f:
+    json.dump(predictions, f, ensure_ascii=False, indent=2)
+
 
 # on_message는 커맨드와 충돌 방지 필요 → process_commands 사용
 @client.event
@@ -737,6 +766,7 @@ def update_stocks():
         repo = Repo(repo_dir)
 
         repo.git.add("price_history.json")
+        repo.git.add("predictions.json")
         repo.index.commit("🔄 Update price history")
         origin = repo.remote(name="origin")
         print("📦 pushing to GitHub...")
@@ -1406,6 +1436,15 @@ async def stock_chart(ctx, stock_name: str = None):
         plt.close()
 
         await ctx.send(file=File(buf, filename="all_stock_chart.png"))
+
+    # 링크 임베드 추가
+    link_embed = discord.Embed(
+        title="📊 실시간 주식 그래프 웹사이트",
+        description="[👉 그래프 웹에서 보기](https://mirimbot.netlify.app/)",
+        color=discord.Color.blue()
+    )
+    link_embed.set_footer(text="웹사이트는 실시간 가격 데이터를 반영합니다.")
+    await ctx.send(embed=link_embed)
 
 @client.command(aliases=["도움말"])
 async def 명령어(ctx):

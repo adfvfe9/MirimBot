@@ -220,7 +220,11 @@
 		}
 
 		loadData();
-		setInterval(loadData, 60000);
+		    const [priceRes, stateRes] = await Promise.all([
+	            fetch("price_history.json"),
+	            fetch("market_state.json?ts=" + Date.now())  // ✅ 캐시 방지!
+            ]);
+
 	</script>
 </body>
 </html>

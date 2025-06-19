@@ -88,13 +88,13 @@
 				checkboxContainer.appendChild(label);
 			});
 
-			drawChart();
+			drawChart(stateData);
 			Array.from(checkboxContainer.querySelectorAll("input")).forEach(cb => {
-				cb.addEventListener("change", drawChart);
+				cb.addEventListener("change", () => drawChart(stateData));
 			});
 		}
 
-		function drawChart() {
+		function drawChart(stateData) {
 			const ctx = document.getElementById("stockChart").getContext("2d");
 			if (chart) chart.destroy();
 
@@ -116,6 +116,29 @@
 
 			const labels = Array.from({ length: datasets[0]?.data.length || 0 }, (_, i) => `${i + 1}분 전`).reverse();
 
+			const annotations = [];
+			if (stateData.override_state && stateData.override_end) {
+				const overrideLabel = {
+					"HYPER_BULL": { emoji: "🚀", color: "rgba(52, 152, 219, 0.8)" },
+					"CRASH": { emoji: "💥", color: "rgba(231, 76, 60, 0.8)" }
+				}[stateData.override_state];
+				if (overrideLabel) {
+					annotations.push({
+						type: 'line',
+						xMin: labels.length - 1 - Math.floor((new Date(stateData.override_end) - Date.now()) / 60000),
+						borderColor: overrideLabel.color,
+						borderWidth: 2,
+						label: {
+							enabled: true,
+							content: `${overrideLabel.emoji} ${stateMap[stateData.override_state]}`,
+							position: "start",
+							backgroundColor: overrideLabel.color,
+							color: '#fff'
+						}
+					});
+				}
+			}
+
 			chart = new Chart(ctx, {
 				type: "line",
 				data: {
@@ -127,14 +150,15 @@
 					interaction: { mode: 'nearest', intersect: false },
 					plugins: {
 						legend: { display: true },
-						title: { display: true, text: "선택된 주식 그래프" },
-						tooltip: { enabled: true }
+						tooltip: { enabled: true },
+						annotation: { annotations }
 					},
 					scales: {
 						x: { ticks: { maxTicksLimit: 10 } },
 						y: { beginAtZero: false }
 					}
-				}
+				},
+				plugins: [Chart.registry.getPlugin('annotation')]
 			});
 		}
 
@@ -146,5 +170,6 @@
 		loadData();
 		setInterval(loadData, 60000); // 1분마다 갱신
 	</script>
+	<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@1.1.0"></script>
 </body>
 </html>

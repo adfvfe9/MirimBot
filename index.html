@@ -1,84 +1,84 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>📈 주식 시세 그래프</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <style>
-    body {
-      font-family: sans-serif;
-      padding: 2rem;
-      background-color: #f5f7fa;
-    }
-    canvas {
-      max-width: 800px;
-      margin: 2rem auto;
-      background: white;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
-      padding: 1rem;
-      border-radius: 1rem;
-    }
-  </style>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>📈 주식 시세 그래프</title>
+	<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+	<style>
+		body {
+			font-family: sans-serif;
+			padding: 2rem;
+			background-color: #f5f7fa;
+		}
+		canvas {
+			max-width: 800px;
+			margin: 2rem auto;
+			background: white;
+			box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+			padding: 1rem;
+			border-radius: 1rem;
+		}
+	</style>
 </head>
 <body>
-  <h1>📈 주식 시세 그래프</h1>
-  <p>최근 1440개의 가격 변동 (최대 24시간치)을 표시합니다.</p>
+	<h1>📈 주식 시세 그래프</h1>
+	<p>최근 1440개의 가격 변동 (최대 24시간치)을 표시합니다.</p>
 
-  <div id="charts"></div>
+	<div id="charts"></div>
 
-  <script>
-    async function loadAndDraw() {
-      const response = await fetch("price_history.json"); // JSON 경로는 Netlify 기준
-      const data = await response.json();
+	<script>
+		async function loadAndDraw() {
+			const response = await fetch("https://mirimbot.netlify.app/price_history.json");
+			const data = await response.json();
 
-      const container = document.getElementById("charts");
-      container.innerHTML = ""; // 이전 그래프 제거
+			const container = document.getElementById("charts");
+			container.innerHTML = ""; // 이전 그래프 제거
 
-      for (const [stock, prices] of Object.entries(data)) {
-        const canvas = document.createElement("canvas");
-        container.appendChild(canvas);
+			for (const [stock, prices] of Object.entries(data)) {
+				const canvas = document.createElement("canvas");
+				container.appendChild(canvas);
 
-        const labels = Array.from({ length: prices.length }, (_, i) => `${i + 1}분 전`).reverse();
+				const labels = Array.from({ length: prices.length }, (_, i) => `${i + 1}분 전`).reverse();
 
-        new Chart(canvas, {
-          type: "line",
-          data: {
-            labels,
-            datasets: [
-              {
-                label: `${stock} 가격 (byte)`,
-                data: prices,
-                borderColor: "#4e73df",
-                backgroundColor: "rgba(78, 115, 223, 0.1)",
-                fill: true,
-                tension: 0.3
-              }
-            ]
-          },
-          options: {
-            responsive: true,
-            plugins: {
-              legend: { display: false },
-              title: { display: true, text: `${stock}` }
-            },
-            scales: {
-              x: {
-                ticks: {
-                  maxTicksLimit: 10,
-                  callback: function(val, index) {
-                    return index % Math.ceil(prices.length / 10) === 0 ? labels[index] : "";
-                  }
-                }
-              }
-            }
-          }
-        });
-      }
-    }
+				new Chart(canvas, {
+					type: "line",
+					data: {
+						labels,
+						datasets: [
+							{
+								label: `${stock} 가격 (byte)`,
+								data: prices,
+								borderColor: "#4e73df",
+								backgroundColor: "rgba(78, 115, 223, 0.1)",
+								fill: true,
+								tension: 0.3
+							}
+						]
+					},
+					options: {
+						responsive: true,
+						plugins: {
+							legend: { display: false },
+							title: { display: true, text: `${stock}` }
+						},
+						scales: {
+							x: {
+								ticks: {
+									maxTicksLimit: 10,
+									callback: function(val, index) {
+										return index % Math.ceil(prices.length / 10) === 0 ? labels[index] : "";
+									}
+								}
+							}
+						}
+					}
+				});
+			}
+		}
 
-    loadAndDraw();
-    setInterval(loadAndDraw, 60000); // 1분마다 자동 갱신
-  </script>
+		loadAndDraw();
+		setInterval(loadAndDraw, 60000); // 1분마다 자동 갱신
+	</script>
 </body>
 </html>

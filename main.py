@@ -728,6 +728,23 @@ def update_stocks():
     save_json(stock_file, stock_prices)
     save_price_history(price_history)
 
+    from git import Repo
+    import os
+
+    def git_commit_and_push():
+        from git import Repo
+        repo_dir = r"C:\Users\USER\Desktop\디코 봇\Mirim"
+        repo = Repo(repo_dir)
+
+        repo.git.add("price_history.json")
+        repo.index.commit("🔄 Update price history")
+        origin = repo.remote(name="origin")
+        print("📦 pushing to GitHub...")
+        origin.push()
+        print("✅ push complete")
+
+    git_commit_and_push()
+
 # ───────────── 자동 1분 갱신 루프 ─────────────
 @tasks.loop(minutes=1)
 async def auto_update_stocks():

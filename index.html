@@ -71,22 +71,8 @@
     };
 
     async function loadData() {
-      const [priceRes, stateRes] = await Promise.all([
-        fetch("price_history.json"),
-        fetch("market_state.json?ts=" + Date.now()) // ✅ 캐시 우회
-      ]);
-
-      stockData = await priceRes.json();
-      const stateData = await stateRes.json();
-
-      const stateMap = {
-        "BULL": "📈 상승장",
-        "BEAR": "📉 하락장",
-        "HYPER_BULL": "🚀 초상승장",
-        "CRASH": "💥 주식부도"
-      };
-      document.getElementById("marketState").textContent =
-        `📊 현재 시장 상태: ${stateMap[stateData.state] || "❓ 알 수 없음"}`;
+      const res = await fetch("price_history.json");
+      stockData = await res.json();
 
       const checkboxContainer = document.getElementById("checkboxes");
       checkboxContainer.innerHTML = "";
@@ -106,6 +92,23 @@
       document.querySelectorAll("#checkboxes input").forEach(cb =>
         cb.addEventListener("change", () => drawChart())
       );
+    }
+
+    async function updateMarketState() {
+      try {
+        const res = await fetch("market_state.json?ts=" + Date.now());
+        const stateData = await res.json();
+        const stateMap = {
+          "BULL": "📈 상승장",
+          "BEAR": "📉 하락장",
+          "HYPER_BULL": "🚀 초상승장",
+          "CRASH": "💥 주식부도"
+        };
+        document.getElementById("marketState").textContent =
+          `📊 현재 시장 상태: ${stateMap[stateData.state] || "❓ 알 수 없음"}`;
+      } catch (e) {
+        console.error("시장 상태 불러오기 실패", e);
+      }
     }
 
     function drawChart() {
@@ -218,7 +221,9 @@
     }
 
     loadData();
+    updateMarketState(); // 초기 상태 1회 호출
     setInterval(loadData, 60000);
+    setInterval(updateMarketState, 60000); // ✅ 시장 상태 실시간 갱신
   </script>
 </body>
 </html>

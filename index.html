@@ -161,9 +161,11 @@
 			});
 
 			const dataLength = stockData[checked[0]]?.length || 0;
-			const labels = Array.from({ length: dataLength }, (_, i) =>
-				`${dataLength - i}분 전`
-			).reverse();
+            const labels = Array.from({ length: dataLength + 1 }, (_, i) =>
+            	i < dataLength
+            		? `${dataLength - i}분 전`  // n분 전 ~ 1분 전
+            		: "현재"                    // 마지막은 현재
+            );
 
 			const annotations = [];
 			checked.forEach(stock => {

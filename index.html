@@ -118,6 +118,8 @@
       const checked = Array.from(document.querySelectorAll("#checkboxes input:checked"))
         .map(cb => cb.value);
 
+      if (checked.length === 0) return;
+
       const datasets = checked.flatMap(stock => {
         const data = stockData[stock];
         const dataset = {
@@ -158,7 +160,7 @@
           const predictions = predictionData[stock];
           const predictionLine = predictions ? {
             label: `${stock} 예측`,
-            data: new Array(data.length - 1).fill(null).concat(predictions),
+            data: [...data, ...predictions],
             borderColor: "#ff00aa",
             borderDash: [4, 4],
             borderWidth: 2,
@@ -172,8 +174,14 @@
         return [dataset];
       });
 
-      const labels = Array.from({ length: datasets[0]?.data.length || 0 }, (_, i) =>
-        i < stockData[checked[0]].length ? `${stockData[checked[0]].length - i}분 전` : `+${i - stockData[checked[0]].length + 1}분`
+      // X축 라벨: 예측 포함 시간 반영
+      const mainLength = stockData[checked[0]].length;
+      const totalLength = datasets[0]?.data.length || 0;
+
+      const labels = Array.from({ length: totalLength }, (_, i) =>
+        i < mainLength
+          ? `${mainLength - i}분 전`
+          : `+${i - mainLength + 1}분`
       ).reverse();
 
       const annotations = [];
@@ -216,7 +224,7 @@
             annotation: { annotations }
           },
           scales: {
-            x: { ticks: { maxTicksLimit: 10 } },
+            x: { ticks: { maxTicksLimit: 12 } },
             y: { beginAtZero: false }
           }
         },

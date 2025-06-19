@@ -737,7 +737,6 @@ def update_stocks():
         repo = Repo(repo_dir)
 
         repo.git.add("price_history.json")
-        repo.git.add("predictions.json")
         repo.index.commit("🔄 Update price history")
         origin = repo.remote(name="origin")
         print("📦 pushing to GitHub...")
@@ -745,29 +744,6 @@ def update_stocks():
         print("✅ push complete")
 
     git_commit_and_push()
-
-    from sklearn.linear_model import LinearRegression
-    import numpy as np
-
-    predictions = {}
-    future_minutes = 30
-
-    for stock, prices in price_history.items():
-        if len(prices) < 10:
-            continue
-
-        X = np.arange(len(prices)).reshape(-1, 1)
-        y = np.array(prices)
-
-        model = LinearRegression().fit(X, y)
-        X_future = np.arange(len(prices), len(prices) + future_minutes).reshape(-1, 1)
-        y_pred = model.predict(X_future)
-        y_pred = np.maximum(y_pred, 0)
-
-        predictions[stock] = y_pred.round(2).tolist()
-
-    with open("predictions.json", "w", encoding="utf-8") as f:
-        json.dump(predictions, f, ensure_ascii=False, indent=2)
 
 # ───────────── 자동 1분 갱신 루프 ─────────────
 @tasks.loop(minutes=1)

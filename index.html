@@ -58,7 +58,6 @@
 	<script>
 		let chart;
 		let stockData = {};
-		let predictionData = {};
 		const colorMap = {};
 		const basePrices = {
 			"JAVA": 50,
@@ -72,14 +71,12 @@
 		};
 
 		async function loadData() {
-			const [priceRes, stateRes, predictionRes] = await Promise.all([
+			const [priceRes, stateRes] = await Promise.all([
 				fetch("price_history.json"),
-				fetch("market_state.json"),
-				fetch("predictions.json")
+				fetch("market_state.json")
 			]);
 
 			stockData = await priceRes.json();
-			predictionData = await predictionRes.json();
 			const stateData = await stateRes.json();
 
 			const stateMap = {
@@ -157,38 +154,16 @@
 						fill: false
 					};
 
-					const predictions = predictionData[stock];
-					const predictionLine = predictions ? {
-						label: `${stock} 예측`,
-						data: [...data, ...predictions],
-						borderColor: "#ff00aa",
-						borderDash: [4, 4],
-						borderWidth: 2,
-						pointRadius: 0,
-						fill: false
-					} : null;
-
-					return [dataset, avgLine, baseLine, ...(predictionLine ? [predictionLine] : [])];
+					return [dataset, avgLine, baseLine];
 				}
 
 				return [dataset];
 			});
 
-			// ✅ X축 라벨 생성
 			const dataLength = stockData[checked[0]]?.length || 0;
-			const predictionLength = predictionData[checked[0]]?.length || 0;
-			const totalLength = dataLength + predictionLength;
-
-			const labels = [];
-			for (let i = 0; i < totalLength; i++) {
-				if (i < dataLength - 1) {
-					labels.push(`${dataLength - 1 - i}분 전`);
-				} else if (i === dataLength - 1) {
-					labels.push("현재");
-				} else {
-					labels.push(`+${i - dataLength + 1}분`);
-				}
-			}
+			const labels = Array.from({ length: dataLength }, (_, i) =>
+				`${dataLength - i}분 전`
+			).reverse();
 
 			const annotations = [];
 			checked.forEach(stock => {
@@ -245,5 +220,5 @@
 		loadData();
 		setInterval(loadData, 60000);
 	</script>
-</body> 
+</body>
 </html>

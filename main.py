@@ -737,6 +737,7 @@ def update_stocks():
         repo = Repo(repo_dir)
 
         repo.git.add("price_history.json")
+        repo.git.add("market_state.json")
         repo.index.commit("🔄 Update price history")
         origin = repo.remote(name="origin")
         print("📦 pushing to GitHub...")

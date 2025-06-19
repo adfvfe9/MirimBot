@@ -117,27 +117,32 @@
 			const labels = Array.from({ length: datasets[0]?.data.length || 0 }, (_, i) => `${i + 1}분 전`).reverse();
 
 			const annotations = [];
-			if (stateData.override_state && stateData.override_end) {
-				const overrideLabel = {
-					"HYPER_BULL": { emoji: "🚀", color: "rgba(52, 152, 219, 0.8)" },
-					"CRASH": { emoji: "💥", color: "rgba(231, 76, 60, 0.8)" }
-				}[stateData.override_state];
-				if (overrideLabel) {
-					annotations.push({
-						type: 'line',
-						xMin: labels.length - 1 - Math.floor((new Date(stateData.override_end) - Date.now()) / 60000),
-						borderColor: overrideLabel.color,
-						borderWidth: 2,
-						label: {
-							enabled: true,
-							content: `${overrideLabel.emoji} ${stateMap[stateData.override_state]}`,
-							position: "start",
-							backgroundColor: overrideLabel.color,
-							color: '#fff'
-						}
-					});
-				}
-			}
+            const eventMarkers = {
+	            "HYPER_BULL": { emoji: "🚀", color: "rgba(52, 152, 219, 0.8)" },
+	            "CRASH": { emoji: "💥", color: "rgba(231, 76, 60, 0.8)" },
+	            "BULL": { emoji: "📈", color: "rgba(46, 204, 113, 0.6)" },
+	            "BEAR": { emoji: "📉", color: "rgba(241, 196, 15, 0.6)" }
+            };
+
+            const stateKey = stateData.override_state || stateData.state;
+            if (stateKey && eventMarkers[stateKey]) {
+	            const idx = labels.length - 1;
+	            const marker = eventMarkers[stateKey];
+	            annotations.push({
+		            type: 'line',
+		            xMin: idx,
+		            borderColor: marker.color,
+		            borderWidth: 2,
+		            label: {
+		            	enabled: true,
+		            	content: `${marker.emoji} ${stateMap[stateKey] || ''}`,
+		            	position: "start",
+		            	backgroundColor: marker.color,
+            			color: '#fff'
+            		}
+            	});
+            }
+
 
 			chart = new Chart(ctx, {
 				type: "line",

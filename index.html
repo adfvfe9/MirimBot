@@ -10,14 +10,24 @@
 			font-family: sans-serif;
 			padding: 2rem;
 			background-color: #f5f7fa;
+			text-align: center;
 		}
 		canvas {
-			max-width: 800px;
+			width: 100% !important;
+			max-width: 1000px;
 			margin: 2rem auto;
 			background: white;
 			box-shadow: 0 2px 6px rgba(0,0,0,0.1);
 			padding: 1rem;
 			border-radius: 1rem;
+			display: block;
+		}
+		select {
+			font-size: 1rem;
+			padding: 0.5rem;
+			margin-top: 1rem;
+			border-radius: 0.5rem;
+			border: 1px solid #ccc;
 		}
 	</style>
 </head>
@@ -25,60 +35,92 @@
 	<h1>📈 주식 시세 그래프</h1>
 	<p>최근 1440개의 가격 변동 (최대 24시간치)을 표시합니다.</p>
 
-	<div id="charts"></div>
+	<select id="stockSelector"></select>
+	<canvas id="stockChart"></canvas>
 
 	<script>
-		async function loadAndDraw() {
+		let chart;
+		let stockData = {};
+
+		async function loadData() {
 			const response = await fetch("https://mirimbot.netlify.app/price_history.json");
-			const data = await response.json();
+			stockData = await response.json();
+			const selector = document.getElementById("stockSelector");
+			selector.innerHTML = "";
+			selector.innerHTML += `<option value="ALL">전체</option>`;
+			Object.keys(stockData).forEach(stock => {
+				selector.innerHTML += `<option value="${stock}">${stock}</option>`;
+			});
+			drawChart("ALL");
+		}
 
-			const container = document.getElementById("charts");
-			container.innerHTML = ""; // 이전 그래프 제거
+		function drawChart(selected) {
+			const ctx = document.getElementById("stockChart").getContext("2d");
+			if (chart) chart.destroy();
 
-			for (const [stock, prices] of Object.entries(data)) {
-				const canvas = document.createElement("canvas");
-				container.appendChild(canvas);
+			let datasets = [];
+			if (selected === "ALL") {
+				for (const [stock, prices] of Object.entries(stockData)) {
+					datasets.push({
+						label: `${stock} 가격 (byte)`,
+						data: prices,
+						borderColor: getRandomColor(),
+						backgroundColor: "rgba(0,0,0,0)",
+						fill: false,
+						tension: 0.3,
+						pointRadius: 0
+					});
+				}
+			} else {
+				datasets.push({
+					label: `${selected} 가격 (byte)`,
+					data: stockData[selected],
+					borderColor: "#4e73df",
+					backgroundColor: "rgba(78, 115, 223, 0.1)",
+					fill: true,
+					tension: 0.3,
+					pointRadius: 0
+				});
+			}
 
-				const labels = Array.from({ length: prices.length }, (_, i) => `${i + 1}분 전`).reverse();
+			const labels = Array.from({ length: datasets[0].data.length }, (_, i) => `${i + 1}분 전`).reverse();
 
-				new Chart(canvas, {
-					type: "line",
-					data: {
-						labels,
-						datasets: [
-							{
-								label: `${stock} 가격 (byte)`,
-								data: prices,
-								borderColor: "#4e73df",
-								backgroundColor: "rgba(78, 115, 223, 0.1)",
-								fill: true,
-								tension: 0.3
-							}
-						]
+			chart = new Chart(ctx, {
+				type: "line",
+				data: {
+					labels,
+					datasets
+				},
+				options: {
+					responsive: true,
+					plugins: {
+						legend: { display: true },
+						title: { display: true, text: selected === "ALL" ? "전체 주식 그래프" : `${selected} 그래프` }
 					},
-					options: {
-						responsive: true,
-						plugins: {
-							legend: { display: false },
-							title: { display: true, text: `${stock}` }
-						},
-						scales: {
-							x: {
-								ticks: {
-									maxTicksLimit: 10,
-									callback: function(val, index) {
-										return index % Math.ceil(prices.length / 10) === 0 ? labels[index] : "";
-									}
-								}
+					scales: {
+						x: {
+							ticks: {
+								maxTicksLimit: 10
 							}
 						}
 					}
-				});
-			}
+				}
+			});
 		}
 
-		loadAndDraw();
-		setInterval(loadAndDraw, 60000); // 1분마다 자동 갱신
+		function getRandomColor() {
+			const r = Math.floor(Math.random() * 200);
+			const g = Math.floor(Math.random() * 200);
+			const b = Math.floor(Math.random() * 200);
+			return `rgb(${r},${g},${b})`;
+		}
+
+		document.getElementById("stockSelector").addEventListener("change", (e) => {
+			drawChart(e.target.value);
+		});
+
+		loadData();
+		setInterval(loadData, 60000); // 1분마다 갱신
 	</script>
 </body>
 </html>

@@ -129,6 +129,8 @@
 
         if (checked.length === 1) {
           const avg = data.reduce((a, b) => a + b, 0) / data.length;
+          const base = basePrices[stock];
+
           const avgLine = {
             label: `${stock} 평균`,
             data: Array(data.length).fill(avg),
@@ -138,7 +140,18 @@
             pointRadius: 0,
             fill: false
           };
-          return [dataset, avgLine];
+
+          const baseLine = {
+            label: `${stock} 기준가`,
+            data: Array(data.length).fill(base),
+            borderColor: '#000',
+            borderDash: [],
+            borderWidth: 1,
+            pointRadius: 0,
+            fill: false
+          };
+
+          return [dataset, avgLine, baseLine];
         }
 
         return [dataset];

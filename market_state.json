@@ -1,1 +1,6 @@
-{"state": "BULL", "remaining_seconds": 2524}
+{
+    "state": "BEAR",
+    "remaining_seconds": 2013,
+    "override_state": null,
+    "override_end": null
+}

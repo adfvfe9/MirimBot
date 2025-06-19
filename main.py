@@ -145,6 +145,35 @@ def save_delisted_stocks(data):
 
 delisted_stocks = load_delisted_stocks()
 
+ITEMS_FILE = "items.json"
+
+def load_items():
+    if os.path.exists(ITEMS_FILE):
+        with open(ITEMS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_items(data):
+    with open(ITEMS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+user_items = load_items()
+
+CONSOLATION_FILE = "consolation.json"
+
+def load_consolation():
+    if os.path.exists(CONSOLATION_FILE):
+        with open(CONSOLATION_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_consolation(data):
+    with open(CONSOLATION_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
+consolation_data = load_consolation()
+
+
 # on_message는 커맨드와 충돌 방지 필요 → process_commands 사용
 @client.event
 async def on_message(message):
@@ -391,7 +420,7 @@ async def moneydel(ctx, member: discord.Member, amount: int):
     view = View()
 
     async def confirm_callback(interaction: Interaction):
-        money_data[user_id] = max(money_data.get(user_id, 0) - amount, 0)
+        money_data[user_id] = money_data.get(user_id, 0) - amount
         save_money_data(money_data)
         embed = Embed(
             description=f"✅ **{member.display_name}** 님에게서 **{amount} byte**를 제거했습니다.",
@@ -474,15 +503,16 @@ async def shop(ctx):
 
     embed = discord.Embed(
         title="🛒 상점 목록",
-        description="아래는 구매 가능한 아이템들입니다.",
+        description="버튼을 눌러 아이템을 구매하세요!",
         color=0x00bfff
     )
-    embed.add_field(name="테스트1", value="가격: 100 byte", inline=False)
-    embed.add_field(name="테스트2", value="가격: 150 byte", inline=False)
-    embed.add_field(name="테스트3", value="가격: 75 byte", inline=False)
+    embed.add_field(name="파산신청", value="마이너스 통장을 0원으로!\n💰 가격: 10000 byte", inline=False)
+    embed.add_field(name="상하차", value="상승장 / 하락장 시간 확인\n💰 가격: 2500 byte", inline=False)
+    embed.add_field(name="주식과열", value="📈 10분간 초상승장 + 20분간 주식부도\n💰 가격: 100000 byte", inline=False)
     embed.set_footer(text="※ 아이템은 향후 업데이트될 수 있습니다.")
 
-    await ctx.send(embed=embed)
+    view = ShopView(ctx.author.id)
+    await ctx.send(embed=embed, view=view)
 
 import math
 
@@ -490,13 +520,13 @@ import math
 def calc_byte_log2(level):
     if level <= 0:
         return 0
-    return int(0.1 * level * math.log2(level)) + 1
+    return int(0.15 * level * math.log2(level)) + 1
 
 # log10 공식
 def calc_byte_log10(level):
     if level <= 0:
         return 0
-    return int(0.5 * level * math.log10(level)) + 1
+    return int(0.8 * level * math.log10(level)) + 1
 
 @client.command(aliases=['강화판매'])
 async def sell_enhance(ctx, item_name: str):
@@ -541,17 +571,55 @@ async def sell_enhance(ctx, item_name: str):
 # ───────────── 주식 시장 상태 ─────────────
 market_file = "market_state.json"
 
-# 주식 시장 상태를 저장하는 파일
+override_state = None
+override_end = None
+
+# 시장 상태를 저장하는 파일
 def load_market_state():
+    global override_state, override_end
     if os.path.exists(market_file):
         with open(market_file, "r") as f:
             data = json.load(f)
+            override_state = data.get("override_state")
+            override_end_str = data.get("override_end")
+            if override_end_str:
+                override_end = datetime.datetime.fromisoformat(override_end_str)
             return data.get("state", "BULL"), data.get("remaining_seconds", random.randint(300, 7200))
     return "BULL", random.randint(300, 7200)
 
+# 시장 상태 저장
 def save_market_state(state, remaining_seconds):
+    data = {
+        "state": state,
+        "remaining_seconds": remaining_seconds,
+        "override_state": override_state,
+        "override_end": override_end.isoformat() if override_end else None
+    }
     with open(market_file, "w") as f:
-        json.dump({"state": state, "remaining_seconds": remaining_seconds}, f)
+        json.dump(data, f, indent=4)
+
+# 현재 시장 상태를 가져오는 함수
+def get_effective_market_state():
+    global override_state, override_end, current_market_state
+    if override_state and override_end:
+        if datetime.datetime.now() < override_end:
+            return override_state
+        else:
+            if override_state == "HYPER_BULL":
+                set_override_state("CRASH", 20 * 60)
+                return "CRASH"
+            elif override_state == "CRASH":
+                override_state = None
+                override_end = None
+                return "BULL"
+    return current_market
+
+# 임시 시장 상태 설정 (초상승장, 주식부도)
+def set_override_state(state, duration_seconds):
+    global override_state, override_end, market_wait_seconds
+    override_state = state
+    override_end = datetime.datetime.now() + datetime.timedelta(seconds=duration_seconds)
+    save_market_state(get_effective_market_state(), market_wait_seconds)
 
 # ───────────── 주식 기본 정보 ─────────────
 stock_info = {
@@ -609,6 +677,9 @@ def save_stock_prices():
 # ───────────── 주식 가격 갱신 ─────────────
 def update_stocks():
     global last_update_time, price_history
+
+    effective_state = get_effective_market_state()  # ✅ 현재 실질 시장 상태
+
     for name, info in stock_info.items():
         base = info["base"]
         limit = info["limit"]
@@ -623,17 +694,21 @@ def update_stocks():
 
         new_price = prev_price * (1 + change)
 
-        # 상승장 / 하락장 효과 (곱연산)
-        if current_market == "BULL":
-            new_price *= (1 + random.uniform(0, 0.025))  # 0~2.5% 상승
-        elif current_market == "BEAR":
-            new_price *= (1 - random.uniform(0, 0.02))  # 0~2% 하락
+        # ✅ 상승장 / 하락장 / 초상승장 / 주식부도 효과 (곱연산)
+        if effective_state == "BULL":
+            new_price *= (1 + random.uniform(0, 0.025))  # +0~2.5%
+        elif effective_state == "BEAR":
+            new_price *= (1 - random.uniform(0, 0.02))   # -0~2%
+        elif effective_state == "HYPER_BULL":
+            new_price *= (1 + random.uniform(0.05, 0.25))  # +5~25%
+        elif effective_state == "CRASH":
+            new_price *= (1 - random.uniform(0.03, 0.15))    # -3~15%
 
+        # 상장폐지 처리
         if new_price <= base * 0.01:
-            new_price = base  # 상장폐지 → 기본가로 복귀
+            new_price = base
             print(f"[📉 상장폐지] {name} → 기본가로 초기화됨")
 
-            # 모든 유저 포트폴리오에서 주식 제거 + 알림 기록
             for user_id, stocks in list(portfolio.items()):
                 if name in stocks:
                     del stocks[name]
@@ -643,11 +718,11 @@ def update_stocks():
 
         stock_prices[name]["previous"] = prev_price
         stock_prices[name]["current"] = round(new_price, 2)
+
         # 가격 히스토리 저장
         price_history.setdefault(name, []).append(round(new_price, 2))
         if len(price_history[name]) > 1440:
-            price_history[name] = price_history[name][-1440:]  # 24시간 (1분 간격 * 1440)
-
+            price_history[name] = price_history[name][-1440:]
 
     last_update_time = datetime.datetime.now(datetime.timezone.utc)
     save_json(stock_file, stock_prices)
@@ -676,10 +751,21 @@ async def stock(ctx):
         description="1분마다 자동 갱신됩니다.",
         color=discord.Color.green()
     )
-    embed.add_field(
     name="📊 현재 시장 상태",
-    value=f"{'📈 상승장' if current_market == 'BULL' else '📉 하락장'}", inline=False) # \n⏱️ 다음 전환까지: {market_wait_seconds}초
-    embed.set_footer(text=f"⏱️ 다음 변동까지: {remain}초")
+    state = get_effective_market_state()
+    state_text = {
+        "BULL": "📈 상승장",
+        "BEAR": "📉 하락장",
+        "HYPER_BULL": "🚀 초상승장",
+        "CRASH": "💥 주식부도"
+    }.get(state, "❓ 알 수 없음")
+
+    embed.add_field(
+        name="📊 현재 시장 상태",
+        value=state_text,
+        inline=False
+    )
+
 
     for name, price_data in stock_prices.items():
         current = price_data["current"]
@@ -698,6 +784,7 @@ async def stock(ctx):
             value=f"💵 {current:.2f} byte\n({diff_str})",
             inline=True
         )
+        embed.set_footer(text=f"⏱️ 다음 갱신까지 {remain}초")
 
     await ctx.send(embed=embed)
 
@@ -718,12 +805,34 @@ last_update_time = datetime.datetime.now(datetime.timezone.utc)
 async def on_ready():
     global last_update_time
     print(f'{client.user}에 로그인하였습니다.')
-    await client.change_presence(status=discord.Status.online, activity=discord.Game('Leauge of Legends'))
+
+    await client.change_presence(
+        status=discord.Status.online,
+        activity=discord.Game('\'%도움말\'을 입력해보세요')
+    )
+
     if not auto_update_stocks.is_running():
         auto_update_stocks.start()
         print("✅ 주식 자동 갱신 루프 시작됨")
+
     asyncio.create_task(market_cycle())
     last_update_time = datetime.datetime.now(datetime.timezone.utc)
+
+    # ✅ 미림봇 접속 메시지 전송
+    channel_id = 1352303919312801943
+    channel = client.get_channel(channel_id)
+
+    if channel:
+        embed = discord.Embed(
+            title="✅ 미림봇 접속",
+            description="봇이 온라인 상태입니다.",
+            color=discord.Color.green(),
+            timestamp=datetime.datetime.now()
+        )
+        embed.set_footer(text="MirimBot v1.1.7")
+        await channel.send(embed=embed)
+    else:
+        print(f"⚠️ 채널 ID {channel_id}를 찾을 수 없습니다.")
 
 @client.command(aliases=["주식초기화"])
 @commands.has_permissions(administrator=True)
@@ -1428,7 +1537,7 @@ async def gamble(ctx, amount: int):
     new_balance = round(current_money - amount + profit, 2)
 
 
-    money_data[user_id] = max(0, new_balance)
+    money_data[user_id] = new_balance
     save_money_data(money_data)
     delta = round(profit - amount, 2)
     gamble_stats[user_id] = round(gamble_stats.get(user_id, 0) + delta, 2)
@@ -1610,7 +1719,7 @@ async def gamble_allin(ctx):
     new_balance = round(current_money - amount + profit, 2)
     save_gamble_stats(gamble_stats)
 
-    money_data[user_id] = max(0, new_balance)
+    money_data[user_id] = new_balance
     save_money_data(money_data)
 
     # 도박 통계
@@ -1638,6 +1747,197 @@ async def gamble_allin(ctx):
     embed.add_field(name="현재 잔액", value=f"{money_data[user_id]:.2f} byte", inline=False)
     embed.set_footer(text=outcome)
 
+    await ctx.send(embed=embed)
+
+class ShopView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=15)
+        self.user_id = str(user_id)
+
+    @discord.ui.button(label="💸 파산신청", style=discord.ButtonStyle.primary)
+    async def buy_pasan(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != int(self.user_id):
+            await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다!", ephemeral=True)
+            return
+
+        current_money = money_data.get(self.user_id, 0)
+        price = 10000
+
+        if current_money < price:
+            await interaction.response.send_message("💸 돈이 부족합니다.", ephemeral=True)
+            return
+
+        # 돈 차감
+        money_data[self.user_id] = current_money - price
+        save_money_data(money_data)
+
+        # 아이템 추가
+        user_items.setdefault(self.user_id, {})
+        user_items[self.user_id]["파산신청"] = user_items[self.user_id].get("파산신청", 0) + 1
+        save_items(user_items)
+
+        await interaction.response.send_message("✅ 파산신청 아이템을 구매했습니다!", ephemeral=True)
+        self.stop()
+
+    @discord.ui.button(label="↕️ 상하차", style=discord.ButtonStyle.primary)
+    async def buy_sanghacha(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != int(self.user_id):
+            await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다!", ephemeral=True)
+            return
+
+        current_money = money_data.get(self.user_id, 0)
+        price = 2500
+
+        if current_money < price:
+            await interaction.response.send_message("💸 돈이 부족합니다.", ephemeral=True)
+            return
+
+        # 돈 차감
+        money_data[self.user_id] = current_money - price
+        save_money_data(money_data)
+
+        # 아이템 추가
+        user_items.setdefault(self.user_id, {})
+        user_items[self.user_id]["️상하차"] = user_items[self.user_id].get("상하차", 0) + 1
+        save_items(user_items)
+
+        await interaction.response.send_message("✅ 상하차 아이템을 구매했습니다!", ephemeral=True)
+        self.stop()
+
+    @discord.ui.button(label="🧨 주식과열", style=discord.ButtonStyle.danger)
+    async def buy_stockover(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != int(self.user_id):
+            await interaction.response.send_message("❌ 이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
+            return
+
+        uid = str(interaction.user.id)
+        price = 100000
+        balance = money_data.get(uid, 0)
+
+        if balance < price:
+            await interaction.response.send_message("💸 돈이 부족합니다.", ephemeral=True)
+            return
+
+        # 돈 차감
+        money_data[uid] = balance - price
+        save_money_data(money_data)
+
+        # 아이템 추가
+        user_items.setdefault(uid, {})
+        user_items[uid]["주식과열"] = user_items[uid].get("주식과열", 0) + 1
+        save_items(user_items)
+
+        await interaction.response.send_message("✅ 주식과열 아이템을 구매했습니다!", ephemeral=True)
+        self.stop()
+
+@client.command(aliases=["가방"])
+async def inventory(ctx, target: discord.Member = None):
+    await ctx.message.delete()
+    target = target or ctx.author
+    uid = str(target.id)
+    items = user_items.get(uid, {})
+
+    embed = discord.Embed(
+        title=f"🎒 {target.display_name}님의 가방",
+        description="보유한 아이템 목록입니다.",
+        color=0x95a5a6
+    )
+
+    if not items:
+        embed.description = "아이템이 없습니다."
+    else:
+        for name, count in items.items():
+            embed.add_field(name=name, value=f"{count}개", inline=False)
+
+    await ctx.send(embed=embed)
+
+@client.command(aliases=["사용"])
+async def use_item(ctx, *, item_name: str):
+    await ctx.message.delete()
+    uid = str(ctx.author.id)
+    item_name = item_name.strip()
+
+    items = user_items.get(uid, {})
+    if item_name not in items or items[item_name] <= 0:
+        await ctx.send("❌ 해당 아이템을 보유하고 있지 않습니다.")
+        return
+
+    if item_name == "파산신청":
+        current_money = money_data.get(uid, 0)
+        if current_money >= 0:
+            await ctx.send("❌ 잔액이 0 이하일 때만 사용할 수 있는 아이템입니다.")
+            return
+
+        money_data[uid] = 0
+        save_money_data(money_data)
+        await ctx.send("✅ 파산신청 아이템을 사용하여 잔액이 0으로 초기화되었습니다.")
+
+    elif item_name == "상하차":
+        # 상승장/하락장 상태와 남은 시간 가져오기
+        state = "📈 상승장" if current_market == "BULL" else "📉 하락장"
+        minutes, seconds = divmod(market_wait_seconds, 60)
+
+        embed = discord.Embed(
+            title="📊 현재 시장 상태",
+            description=f"시장 상태: {state}\n남은 시간: {minutes}분 {seconds}초",
+            color=discord.Color.teal()
+        )
+        await ctx.author.send(embed=embed)
+        await ctx.send("📩 시장 정보를 DM으로 보냈습니다!")
+    elif item_name == "주식과열":
+        global override_state, override_end
+        if override_state:
+            await ctx.send("⚠️ 이미 시장이 특수 상태입니다.")
+            return
+        set_override_state("HYPER_BULL", 10 * 60)
+        await ctx.send("🔥 '주식과열' 아이템을 사용했습니다! 10분간 초상승장이 시작됩니다.")
+    else:
+        await ctx.send("⚠️ 이 아이템은 아직 사용할 수 없습니다.")
+        return
+
+    # 아이템 차감
+    items[item_name] -= 1
+    if items[item_name] <= 0:
+        del items[item_name]
+    user_items[uid] = items
+    save_items(user_items)
+
+@client.command(aliases=["위로금"])
+async def consolation(ctx):
+    await ctx.message.delete()
+    user_id = str(ctx.author.id)
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+
+    if consolation_data.get(user_id) == today:
+        await ctx.send("❌ 이미 오늘 위로금을 받으셨습니다. 내일 다시 시도해주세요.")
+        return
+
+    base_amount = random.randint(1, 1000)
+    bonus_amount = 0
+
+    # ✅ 머니가 마이너스일 경우 추가 위로금 지급
+    money_balance = money_data.get(user_id, 0)
+    if money_balance < 0:
+        debt = abs(money_balance)
+        bonus_amount = int(25 * math.sqrt(debt))
+
+    total_amount = base_amount + bonus_amount
+    money_data[user_id] = money_balance + total_amount
+    save_money_data(money_data)
+
+    consolation_data[user_id] = today
+    save_consolation(consolation_data)
+
+    # ✅ 메시지 출력
+    description = f"{ctx.author.mention}님께 {base_amount} byte를 지급했습니다!"
+    if bonus_amount > 0:
+        description += f"\n💸 추가 위로금 +{bonus_amount} byte (머니 {money_balance + total_amount:.2f} byte)"
+
+    embed = discord.Embed(
+        title="💸 위로금 지급 완료!",
+        description=description,
+        color=discord.Color.green()
+    )
     await ctx.send(embed=embed)
 
 

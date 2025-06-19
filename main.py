@@ -173,35 +173,6 @@ def save_consolation(data):
 
 consolation_data = load_consolation()
 
-import numpy as np
-import json
-from sklearn.linear_model import LinearRegression
-
-# JSON 파일에서 가격 히스토리 불러오기
-with open("price_history.json", "r", encoding="utf-8") as f:
-    price_history = json.load(f)
-
-predictions = {}
-future_minutes = 30  # 앞으로 예측할 분 수
-
-for stock, prices in price_history.items():
-    if len(prices) < 10:
-        continue
-
-    X = np.arange(len(prices)).reshape(-1, 1)
-    y = np.array(prices)
-
-    model = LinearRegression().fit(X, y)
-    X_future = np.arange(len(prices), len(prices) + future_minutes).reshape(-1, 1)
-    y_pred = model.predict(X_future)
-    y_pred = np.maximum(y_pred, 0)  # 음수 방지
-
-    predictions[stock] = y_pred.round(2).tolist()
-
-# 예측 결과 저장
-with open("predictions.json", "w", encoding="utf-8") as f:
-    json.dump(predictions, f, ensure_ascii=False, indent=2)
-
 
 # on_message는 커맨드와 충돌 방지 필요 → process_commands 사용
 @client.event
@@ -774,6 +745,29 @@ def update_stocks():
         print("✅ push complete")
 
     git_commit_and_push()
+
+    from sklearn.linear_model import LinearRegression
+    import numpy as np
+
+    predictions = {}
+    future_minutes = 30
+
+    for stock, prices in price_history.items():
+        if len(prices) < 10:
+            continue
+
+        X = np.arange(len(prices)).reshape(-1, 1)
+        y = np.array(prices)
+
+        model = LinearRegression().fit(X, y)
+        X_future = np.arange(len(prices), len(prices) + future_minutes).reshape(-1, 1)
+        y_pred = model.predict(X_future)
+        y_pred = np.maximum(y_pred, 0)
+
+        predictions[stock] = y_pred.round(2).tolist()
+
+    with open("predictions.json", "w", encoding="utf-8") as f:
+        json.dump(predictions, f, ensure_ascii=False, indent=2)
 
 # ───────────── 자동 1분 갱신 루프 ─────────────
 @tasks.loop(minutes=1)

@@ -22,9 +22,27 @@
 			border-radius: 1rem;
 			display: block;
 		}
-		label, .checkbox-group {
+		.checkbox-group {
+			display: flex;
+			flex-wrap: wrap;
+			justify-content: center;
+			gap: 1rem;
+			margin-bottom: 1rem;
+		}
+		.checkbox-label {
+			display: flex;
+			align-items: center;
+			gap: 0.5rem;
+			background: #fff;
+			padding: 0.4rem 0.8rem;
+			border-radius: 0.5rem;
+			box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+		}
+		.checkbox-label .color-box {
+			width: 1rem;
+			height: 1rem;
+			border-radius: 0.2rem;
 			display: inline-block;
-			margin: 0.5rem;
 		}
 	</style>
 </head>
@@ -40,6 +58,7 @@
 	<script>
 		let chart;
 		let stockData = {};
+		const colorMap = {};
 
 		async function loadData() {
 			const response = await fetch("https://mirimbot.netlify.app/price_history.json");
@@ -57,9 +76,15 @@
 
 			const checkboxContainer = document.getElementById("checkboxes");
 			checkboxContainer.innerHTML = "";
-			Object.keys(stockData).forEach(stock => {
+			Object.keys(stockData).forEach((stock, i) => {
+				const color = getColor(i);
+				colorMap[stock] = color;
 				const label = document.createElement("label");
-				label.innerHTML = `<input type="checkbox" value="${stock}" checked /> ${stock}`;
+				label.className = "checkbox-label";
+				label.innerHTML = `
+					<span class="color-box" style="background:${color}"></span>
+					<input type="checkbox" value="${stock}" checked /> ${stock}
+				`;
 				checkboxContainer.appendChild(label);
 			});
 
@@ -76,16 +101,16 @@
 			const checked = Array.from(document.querySelectorAll("#checkboxes input:checked"))
 				.map(cb => cb.value);
 
-			let datasets = checked.map((stock, i) => {
+			let datasets = checked.map((stock) => {
 				return {
 					label: `${stock} 가격 (byte)`,
 					data: stockData[stock],
-					borderColor: getColor(i),
-					backgroundColor: "rgba(0,0,0,0)",
+					borderColor: colorMap[stock],
+					backgroundColor: colorMap[stock],
 					fill: false,
 					tension: 0.3,
 					pointRadius: 0,
-					pointHoverRadius: 4
+					pointHoverRadius: 5
 				};
 			});
 
@@ -106,19 +131,15 @@
 						tooltip: { enabled: true }
 					},
 					scales: {
-						x: {
-							ticks: { maxTicksLimit: 10 }
-						},
-						y: {
-							beginAtZero: false
-						}
+						x: { ticks: { maxTicksLimit: 10 } },
+						y: { beginAtZero: false }
 					}
 				}
 			});
 		}
 
 		function getColor(index) {
-			const colors = ["#4e73df", "#e74c3c", "#1abc9c", "#f39c12", "#9b59b6", "#34495e", "#2ecc71", "#d35400"];
+			const colors = ["#4e73df", "#e74c3c", "#1abc9c", "#f39c12", "#9b59b6", "#34495e", "#2ecc71", "#d35400", "#8e44ad", "#27ae60"];
 			return colors[index % colors.length];
 		}
 

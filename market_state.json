@@ -1,6 +1,6 @@
 {
-    "state": "BULL",
-    "remaining_seconds": 1912,
+    "state": "BEAR",
+    "remaining_seconds": 5240,
     "override_state": null,
     "override_end": null
 }

@@ -2171,7 +2171,7 @@ class WithdrawModal(Modal, title="💳 출금"):
         now = datetime.datetime.now()
         start = datetime.datetime.fromisoformat(data["deposit_start"])
         days = max((now - start).days, 0)
-        total = data["deposit_amount"] * ((1.01) ** days)
+        total = data["deposit_amount"] * ((1.1) ** days)
 
         money_data[self.user_id] = money_data.get(self.user_id, 0) + round(total, 2)
         data["deposit_amount"] = 0.0

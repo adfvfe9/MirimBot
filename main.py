@@ -715,6 +715,7 @@ def update_stocks():
                     delisted_stocks.setdefault(user_id, []).append(name)
 
             save_delisted_stocks(delisted_stocks)
+            save_json(portfolio_file, portfolio)
 
         stock_prices[name]["previous"] = prev_price
         stock_prices[name]["current"] = round(new_price, 2)
@@ -728,23 +729,23 @@ def update_stocks():
     save_json(stock_file, stock_prices)
     save_price_history(price_history)
 
-    from git import Repo
-    import os
+    # from git import Repo
+    # import os
 
-    def git_commit_and_push():
-        from git import Repo
-        repo_dir = r"C:\Users\USER\Desktop\디코 봇\Mirim"
-        repo = Repo(repo_dir)
+    # def git_commit_and_push():
+    #     from git import Repo
+    #     repo_dir = r"C:\Users\USER\Desktop\디코 봇\Mirim"
+    #     repo = Repo(repo_dir)
 
-        repo.git.add("price_history.json")
-        repo.git.add("market_state.json")
-        repo.index.commit("🔄 Update price history")
-        origin = repo.remote(name="origin")
-        print("📦 pushing to GitHub...")
-        origin.push()
-        print("✅ push complete")
+    #     repo.git.add("price_history.json")
+    #     repo.git.add("market_state.json")
+    #     repo.index.commit("🔄 Update price history")
+    #     origin = repo.remote(name="origin")
+    #     print("📦 pushing to GitHub...")
+    #     origin.push()
+    #     print("✅ push complete")
 
-    git_commit_and_push()
+    # git_commit_and_push()
 
 # ───────────── 자동 1분 갱신 루프 ─────────────
 @tasks.loop(minutes=1)
@@ -1149,7 +1150,7 @@ async def buy_all_stock(ctx, stock_name: str):
     balance = money_data.get(user_id, 0)
     max_amount = int(balance // price)
 
-    if max_amount == 0:
+    if max_amount <= 0:
         await ctx.send("❌ 잔액이 부족합니다.")
         return
 
@@ -1417,7 +1418,7 @@ async def stock_chart(ctx, stock_name: str = None):
     link_embed.set_footer(text="웹사이트는 실시간 가격 데이터를 반영합니다.")
     await ctx.send(embed=link_embed)
 
-@client.command(aliases=["도움말"])
+@client.command(aliases=["도움말", "가이드"])
 async def 명령어(ctx):
     await ctx.message.delete()
 
@@ -1939,14 +1940,14 @@ async def consolation(ctx):
         await ctx.send("❌ 이미 오늘 위로금을 받으셨습니다. 내일 다시 시도해주세요.")
         return
 
-    base_amount = random.randint(1, 1000)
+    base_amount = random.randint(1, 100)
     bonus_amount = 0
 
     # ✅ 머니가 마이너스일 경우 추가 위로금 지급
     money_balance = money_data.get(user_id, 0)
     if money_balance < 0:
         debt = abs(money_balance)
-        bonus_amount = int(25 * math.sqrt(debt))
+        bonus_amount = int(50 * math.sqrt(debt))
 
     total_amount = base_amount + bonus_amount
     money_data[user_id] = money_balance + total_amount
@@ -1965,6 +1966,278 @@ async def consolation(ctx):
         description=description,
         color=discord.Color.green()
     )
+    await ctx.send(embed=embed)
+
+import json
+import datetime
+import os
+import discord
+from discord.ext import commands
+from discord.ui import View, Modal, TextInput, Button
+from discord import ButtonStyle
+
+BANK_SYSTEM_FILE = "bank_system.json"
+money_data_file = "money_data.json"
+
+def load_json(path, default):
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return default
+
+def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+bank_system = load_json(BANK_SYSTEM_FILE, {})
+money_data = load_json(money_data_file, {})
+
+def ensure_bank_user(user_id):
+    if user_id not in bank_system:
+        bank_system[user_id] = {
+            "credit_score": 1000.0,
+            "loan_amount": 0.0,
+            "loan_date": None,
+            "deposit_amount": 0.0,
+            "deposit_start": None
+        }
+        save_json(BANK_SYSTEM_FILE, bank_system)
+    return bank_system[user_id]
+
+@client.command(aliases=["은행"])
+async def bank(ctx):
+    await ctx.message.delete()
+    user_id = str(ctx.author.id)
+    now = datetime.datetime.now()
+    data = ensure_bank_user(user_id)
+
+    deadline_str = "없음"
+    if data["loan_date"]:
+        loan_date = datetime.datetime.fromisoformat(data["loan_date"])
+        deadline = loan_date + datetime.timedelta(days=7)
+        remain = deadline - now
+        deadline_str = f"{remain.days}일 {remain.seconds // 3600}시간 남음" if remain.total_seconds() > 0 else "기한 초과"
+
+    max_loan = int(data["credit_score"] * 50)
+
+    embed = discord.Embed(
+        title="🏦 은행 시스템",
+        description="버튼을 눌러 기능을 선택하세요.",
+        color=discord.Color.teal()
+    )
+    embed.add_field(name="⚡️ 신용점수", value=f"{data['credit_score']:.2f}", inline=True)
+    embed.add_field(name="💳 대출금", value=f"{data['loan_amount']:.2f} byte", inline=True)
+    embed.add_field(name="📆 상환 기한", value=deadline_str, inline=True)
+    embed.add_field(name="💸 적금액", value=f"{data['deposit_amount']:.2f} byte", inline=True)
+    embed.add_field(name="💰 대출 가능", value=f"{max_loan:.2f} byte", inline=True)
+    embed.set_footer(
+        text=f"요청자: {ctx.author}",
+        icon_url=ctx.author.avatar.url if ctx.author.avatar else None
+    )
+
+
+    view = View()
+
+    # 버튼 정의 및 콜백
+    loan_button = Button(label="💵 대출", style=ButtonStyle.green)
+    repay_button = Button(label="✅ 상환", style=ButtonStyle.primary)
+    deposit_button = Button(label="💰 적금", style=ButtonStyle.secondary)
+    withdraw_button = Button(label="💳 출금", style=ButtonStyle.red)
+
+    async def loan_callback(interaction):
+        if str(interaction.user.id) != user_id:
+            return await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
+        await interaction.response.send_modal(LoanModal(user_id))
+
+    async def repay_callback(interaction):
+        if str(interaction.user.id) != user_id:
+            return await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
+        await interaction.response.send_modal(RepayModal(user_id))
+
+    async def deposit_callback(interaction):
+        if str(interaction.user.id) != user_id:
+            return await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
+        await interaction.response.send_modal(DepositModal(user_id))
+
+    async def withdraw_callback(interaction):
+        if str(interaction.user.id) != user_id:
+            return await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
+        await interaction.response.send_modal(WithdrawModal(user_id))
+
+    loan_button.callback = loan_callback
+    repay_button.callback = repay_callback
+    deposit_button.callback = deposit_callback
+    withdraw_button.callback = withdraw_callback
+
+    view.add_item(loan_button)
+    view.add_item(repay_button)
+    view.add_item(deposit_button)
+    view.add_item(withdraw_button)
+
+    await ctx.send(embed=embed, view=view)
+
+# ✅ Modal 정의
+class LoanModal(Modal, title="💵 대출 금액 입력"):
+    amount = TextInput(label="대출할 금액", placeholder="숫자만 입력", required=True)
+
+    def __init__(self, user_id):
+        super().__init__()
+        self.user_id = user_id
+
+    async def on_submit(self, interaction):
+        amount = float(self.amount.value)
+        data = ensure_bank_user(self.user_id)
+        max_loan = data["credit_score"] * 50
+
+        if data["loan_amount"] > 0:
+            return await interaction.response.send_message("❌ 기존 대출이 있습니다.", ephemeral=True)
+        if amount > max_loan:
+            return await interaction.response.send_message("❌ 대출 한도를 초과했습니다.", ephemeral=True)
+
+        data["loan_amount"] = amount
+        data["loan_date"] = datetime.datetime.now().isoformat()
+        money_data[self.user_id] = money_data.get(self.user_id, 0) + amount
+
+        save_json(money_data_file, money_data)
+        save_json(BANK_SYSTEM_FILE, bank_system)
+
+        await interaction.response.send_message(f"✅ {amount:.2f} byte 대출 완료!", ephemeral=True)
+
+class RepayModal(Modal, title="✅ 상환 금액 입력"):
+    amount = TextInput(label="상환할 금액", placeholder="숫자만 입력", required=True)
+
+    def __init__(self, user_id): super().__init__(); self.user_id = user_id
+
+    async def on_submit(self, interaction):
+        amount = float(self.amount.value)
+        now = datetime.datetime.now()
+        data = ensure_bank_user(self.user_id)
+
+        if amount <= 0 or amount > data["loan_amount"]:
+            return await interaction.response.send_message("❌ 상환 금액 오류", ephemeral=True)
+        if money_data.get(self.user_id, 0) < amount:
+            return await interaction.response.send_message("❌ 잔액 부족", ephemeral=True)
+
+        money_data[self.user_id] -= amount
+        data["loan_amount"] -= amount
+
+        if data["loan_amount"] <= 0:
+            if data["loan_date"]:
+                loan_date = datetime.datetime.fromisoformat(data["loan_date"])
+                if now <= loan_date + datetime.timedelta(days=7):
+                    min(data["credit_score"] * 1.025, 1000.0)
+                else:
+                    data["credit_score"] *= 0.9
+            data["loan_date"] = None
+
+        save_json(money_data_file, money_data)
+        save_json(BANK_SYSTEM_FILE, bank_system)
+
+        await interaction.response.send_message(f"✅ {amount:.2f} byte 상환 완료!", ephemeral=True)
+
+class DepositModal(Modal, title="💰 적금 금액 입력"):
+    amount = TextInput(label="적금할 금액", placeholder="숫자만 입력", required=True)
+
+    def __init__(self, user_id): super().__init__(); self.user_id = user_id
+
+    async def on_submit(self, interaction):
+        amount = float(self.amount.value)
+        data = ensure_bank_user(self.user_id)
+
+        if money_data.get(self.user_id, 0) < amount:
+            return await interaction.response.send_message("❌ 잔액 부족", ephemeral=True)
+
+        money_data[self.user_id] -= amount
+        data["deposit_amount"] += amount
+        data["deposit_start"] = datetime.datetime.now().isoformat()
+        data["credit_score"] = min(data["credit_score"] * 1.025, 1000.0)
+
+        save_json(money_data_file, money_data)
+        save_json(BANK_SYSTEM_FILE, bank_system)
+
+        await interaction.response.send_message(f"✅ {amount:.2f} byte 적금 완료!", ephemeral=True)
+
+class WithdrawModal(Modal, title="💳 출금"):
+    dummy = TextInput(label="(입력 필요 없음)", required=False)
+
+    def __init__(self, user_id): super().__init__(); self.user_id = user_id
+
+    async def on_submit(self, interaction):
+        data = ensure_bank_user(self.user_id)
+
+        if data["deposit_amount"] <= 0:
+            return await interaction.response.send_message("❌ 적금 없음", ephemeral=True)
+
+        now = datetime.datetime.now()
+        start = datetime.datetime.fromisoformat(data["deposit_start"])
+        days = max((now - start).days, 0)
+        total = data["deposit_amount"] * ((1.01) ** days)
+
+        money_data[self.user_id] = money_data.get(self.user_id, 0) + round(total, 2)
+        data["deposit_amount"] = 0.0
+        data["deposit_start"] = None
+
+        save_json(money_data_file, money_data)
+        save_json(BANK_SYSTEM_FILE, bank_system)
+
+        await interaction.response.send_message(f"✅ 출금 완료! {round(total, 2)} byte 반환됨", ephemeral=True)
+
+WELFARE_FILE = "welfare_data.json"
+
+def load_welfare():
+    return load_json(WELFARE_FILE, {})
+
+def save_welfare(data):
+    save_json(WELFARE_FILE, data)
+
+@client.command(aliases=["기초수급"])
+async def welfare(ctx):
+    await ctx.message.delete()
+    user_id = str(ctx.author.id)
+    today = datetime.datetime.now().date()
+
+    welfare_data = load_welfare()
+    user = welfare_data.get(user_id, {"last_claim": None, "streak": 0})
+
+    last_claim_date = datetime.date.fromisoformat(user["last_claim"]) if user["last_claim"] else None
+
+    if last_claim_date == today:
+        embed = discord.Embed(
+            title="📛 수급 불가",
+            description="오늘은 이미 기초수급을 받으셨습니다.",
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="내일 다시 이용해주세요.")
+        return await ctx.send(embed=embed)
+
+    # 연속 수급 여부 확인
+    yesterday = today - datetime.timedelta(days=1)
+    if last_claim_date == yesterday:
+        user["streak"] += 1
+    else:
+        user["streak"] = 0
+
+    bonus_times = min(user["streak"], 10)
+    amount = 10 * (2 ** bonus_times)
+
+    # 지급
+    money_data[user_id] = money_data.get(user_id, 0) + amount
+    save_json(money_data_file, money_data)
+
+    # 수급 정보 저장
+    user["last_claim"] = today.isoformat()
+    welfare_data[user_id] = user
+    save_welfare(welfare_data)
+
+    embed = discord.Embed(
+        title="✅ 기초수급 지급 완료!",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="💰 지급 금액", value=f"{amount} byte", inline=True)
+    embed.add_field(name="📆 연속 수급", value=f"{user['streak'] + 1}일차", inline=True)
+    embed.set_footer(text="내일 다시 오시면 2배 보너스를 받을 수 있어요!")
+    embed.set_author(name=str(ctx.author), icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
+
     await ctx.send(embed=embed)
 
 

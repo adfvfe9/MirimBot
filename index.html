@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>📈 주식 시세 그래프</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@1.1.0"></script>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 2rem;
+      background-color: #f5f7fa;
+      text-align: center;
+    }
+    canvas {
+      width: 100% !important;
+      max-width: 1000px;
+      margin: 2rem auto;
+      background: white;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      padding: 1rem;
+      border-radius: 1rem;
+      display: block;
+    }
+    .checkbox-group {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    .checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: #fff;
+      padding: 0.4rem 0.8rem;
+      border-radius: 0.5rem;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+    .checkbox-label .color-box {
+      width: 1rem;
+      height: 1rem;
+      border-radius: 0.2rem;
+      display: inline-block;
+    }
+  </style>
+</head>
+<body>
+  <h1>📈 주식 시세 그래프</h1>
+  <p>최근 1440개의 가격 변동 (최대 24시간치)을 표시합니다.</p>
+  <p id="marketState">📊 현재 시장 상태: 로딩 중...</p>
+
+  <div id="checkboxes" class="checkbox-group"></div>
+  <canvas id="stockChart"></canvas>
+
+  <script>
+    let chart;
+    let stockData = {};
+    const colorMap = {};
+    const basePrices = {
+      "JAVA": 50,
+      "C": 30,
+      "C++": 80,
+      "C#": 100,
+      "PYTHON": 10,
+      "HTML": 40,
+      "JS": 300,
+      "TS": 100
+    };
+
+    async function loadData() {
+      const res = await fetch("price_history.json");
+      stockData = await res.json();
+
+      const checkboxContainer = document.getElementById("checkboxes");
+      checkboxContainer.innerHTML = "";
+      Object.keys(stockData).forEach((stock, i) => {
+        const color = getColor(i);
+        colorMap[stock] = color;
+        const label = document.createElement("label");
+        label.className = "checkbox-label";
+        label.innerHTML = `
+          <span class="color-box" style="background:${color}"></span>
+          <input type="checkbox" value="${stock}" checked /> ${stock}
+        `;
+        checkboxContainer.appendChild(label);
+      });
+
+      drawChart();
+      document.querySelectorAll("#checkboxes input").forEach(cb =>
+        cb.addEventListener("change", () => drawChart())
+      );
+    }
+
+    async function updateMarketState() {
+      try {
+        const res = await fetch("market_state.json?ts=" + Date.now());
+        const stateData = await res.json();
+        const stateMap = {
+          "BULL": "📈 상승장",
+          "BEAR": "📉 하락장",
+          "HYPER_BULL": "🚀 초상승장",
+          "CRASH": "💥 주식부도"
+        };
+        document.getElementById("marketState").textContent =
+          `📊 현재 시장 상태: ${stateMap[stateData.state] || "❓ 알 수 없음"}`;
+      } catch (e) {
+        console.error("시장 상태 불러오기 실패", e);
+      }
+    }
+
+    function drawChart() {
+      const ctx = document.getElementById("stockChart").getContext("2d");
+      if (chart) chart.destroy();
+
+      const checked = Array.from(document.querySelectorAll("#checkboxes input:checked"))
+        .map(cb => cb.value);
+
+      if (checked.length === 0) return;
+
+      const datasets = checked.flatMap(stock => {
+        const data = stockData[stock];
+        const dataset = {
+          label: `${stock} 가격`,
+          data,
+          borderColor: colorMap[stock],
+          backgroundColor: colorMap[stock],
+          fill: false,
+          tension: 0.3,
+          pointRadius: 0,
+          pointHoverRadius: 5
+        };
+
+        if (checked.length === 1) {
+          const avg = data.reduce((a, b) => a + b, 0) / data.length;
+          const base = basePrices[stock];
+
+          const avgLine = {
+            label: `${stock} 평균`,
+            data: Array(data.length).fill(avg),
+            borderColor: '#999',
+            borderDash: [6, 4],
+            borderWidth: 1,
+            pointRadius: 0,
+            fill: false
+          };
+
+          const baseLine = {
+            label: `${stock} 기준가`,
+            data: Array(data.length).fill(base),
+            borderColor: '#000',
+            borderDash: [],
+            borderWidth: 1,
+            pointRadius: 0,
+            fill: false
+          };
+
+          return [dataset, avgLine, baseLine];
+        }
+
+        return [dataset];
+      });
+
+      const dataLength = stockData[checked[0]]?.length || 0;
+      const labels = Array.from({ length: dataLength + 1 }, (_, i) =>
+        i < dataLength ? `${dataLength - i}분 전` : "현재"
+      );
+
+      const annotations = [];
+      checked.forEach(stock => {
+        const data = stockData[stock];
+        const base = basePrices[stock] || 100;
+        data.forEach((price, idx) => {
+          if (price <= base * 0.01) {
+            annotations.push({
+              type: "line",
+              xMin: idx,
+              xMax: idx,
+              borderColor: "rgba(231, 76, 60, 0.9)",
+              borderWidth: 2,
+              label: {
+                enabled: true,
+                content: `${stock} 상장폐지`,
+                position: "start",
+                backgroundColor: "rgba(231, 76, 60, 0.9)",
+                color: "#fff"
+              }
+            });
+          }
+        });
+      });
+
+      chart = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels,
+          datasets
+        },
+        options: {
+          responsive: true,
+          interaction: { mode: 'nearest', intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: { enabled: true },
+            annotation: { annotations }
+          },
+          scales: {
+            x: { ticks: { maxTicksLimit: 12 } },
+            y: { beginAtZero: false }
+          }
+        },
+        plugins: [Chart.registry.getPlugin('annotation')]
+      });
+    }
+
+    function getColor(index) {
+      const colors = ["#4e73df", "#e74c3c", "#1abc9c", "#f39c12", "#9b59b6", "#34495e", "#2ecc71", "#d35400", "#8e44ad", "#27ae60"];
+      return colors[index % colors.length];
+    }
+
+    loadData();
+    updateMarketState(); // 초기 상태 1회 호출
+    setInterval(loadData, 60000);
+    setInterval(updateMarketState, 60000); // ✅ 시장 상태 실시간 갱신
+  </script>
+</body>
+</html>

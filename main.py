@@ -2581,7 +2581,7 @@ class CheckinButtonView(View):
         if leveled_up:
             embed.set_footer(text="🎉 출석 레벨이 상승했습니다!")
         else:
-            embed.set_footer(text="📌 출석 레벨 상승에 실패했습니다")
+            embed.set_footer(text="📌 출석 레벨 상승에 실패했습니다.")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 

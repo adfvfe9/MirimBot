@@ -208,18 +208,6 @@ def save_checkin_data(data):
     with open(CHECKIN_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-CHECKIN_STATUS_FILE = "checkin_status.json"
-
-def load_checkin_status():
-    if os.path.exists(CHECKIN_STATUS_FILE):
-        with open(CHECKIN_STATUS_FILE, "r") as f:
-            return json.load(f)
-    return {}
-
-def save_checkin_status(data):
-    with open(CHECKIN_STATUS_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-
 
 # on_message는 커맨드와 충돌 방지 필요 → process_commands 사용
 @client.event
@@ -768,7 +756,7 @@ def update_stocks():
         elif effective_state == "HYPER_BULL":
             new_price *= (1 + random.uniform(0.05, 0.25))  # +5~25%
         elif effective_state == "CRASH":
-            new_price *= (1 - random.uniform(0.03, 0.15))    # -3~15%
+            new_price *= (1 - random.uniform(0.03, 0.5))    # -3~50%
 
         # 상장폐지 처리
         if new_price <= base * 0.01:
@@ -961,28 +949,16 @@ async def on_ready():
         print(f"⚠️ 채널 ID {channel_id}를 찾을 수 없습니다.")
     asyncio.create_task(auto_remove_expired_roles())
 
-    today_str = datetime.datetime.now().strftime("%Y-%m-%d")
-    checkin_status = load_checkin_status()
-    last_sent_date = checkin_status.get("last_sent")
-
-    if last_sent_date != today_str:
-        channel = client.get_channel(1352302752394510436)
-        if channel:
-            await channel.send(
-                embed=discord.Embed(
-                    title="📌 오늘의 출석 체크",
-                    description="버튼을 눌러 출석을 완료하세요!\n(50% 확률로 출석 레벨이 상승하고, 1.2^레벨 만큼 보상을 받습니다)",
-                    color=discord.Color.blurple()
-                ),
-                view=CheckinButtonView()
-            )
-            checkin_status["last_sent"] = today_str
-            save_checkin_status(checkin_status)
-        else:
-            print("❌ 출첵 채널을 찾을 수 없습니다.")
+    checkin_channel = client.get_channel(1352302752394510436)
+    if checkin_channel:
+        embed = discord.Embed(
+            title="📅 출석 체크",
+            description="버튼을 눌러 오늘의 출석을 완료하세요!",
+            color=discord.Color.blurple()
+        )
+        await checkin_channel.send(embed=embed, view=CheckinButtonView())
     else:
-        print("📅 오늘 이미 출석 버튼을 보냈습니다.")
-
+        print("⚠️ 출석 채널 ID를 찾을 수 없습니다.")
 
 @client.command(aliases=["주식초기화"])
 @commands.has_permissions(administrator=True)
@@ -2045,9 +2021,6 @@ async def use_item(ctx, *, item_name: str):
         await ctx.send("📩 시장 정보를 DM으로 보냈습니다!")
     elif item_name == "주식과열":
         global override_state, override_end
-        if override_state:
-            await ctx.send("⚠️ 이미 시장이 특수 상태입니다.")
-            return
         set_override_state("HYPER_BULL", 10 * 60)
         await ctx.send("🔥 '주식과열' 아이템을 사용했습니다! 10분간 초상승장이 시작됩니다.")
     else:
@@ -2350,7 +2323,7 @@ async def welfare(ctx):
     else:
         user["streak"] = 0
 
-    bonus_times = min(user["streak"], 10)
+    bonus_times = min(user["streak"], 12)
     amount = 10 * (2 ** bonus_times)
 
     # 지급
@@ -2577,7 +2550,7 @@ class CheckinButtonView(View):
             color=discord.Color.green()
         )
         embed.add_field(name="📈 현재 출석 레벨", value=f"Lv. {level}", inline=True)
-        embed.add_field(name="💰 지급 보상", value=f"{reward} byte", inline=True)
+        embed.add_field(name="💰 지급 보상", value=f"{reward:.2f} byte", inline=True)
         if leveled_up:
             embed.set_footer(text="🎉 출석 레벨이 상승했습니다!")
         else:

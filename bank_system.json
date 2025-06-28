@@ -3,35 +3,49 @@
         "credit_score": 1000.0,
         "loan_amount": 0.0,
         "loan_date": null,
-        "deposit_amount": 6000000.0,
-        "deposit_start": "2025-06-24T08:23:32.661239"
+        "deposit_amount": 0.0,
+        "deposit_start": null
     },
     "1340531405356138536": {
         "credit_score": 1000.0,
         "loan_amount": 0.0,
         "loan_date": null,
-        "deposit_amount": 29000.0,
-        "deposit_start": "2025-06-24T13:10:10.879867"
-    },
-    "1006335527068385280": {
-        "credit_score": 1000.0,
-        "loan_amount": 10000.0,
-        "loan_date": "2025-06-20T10:01:14.472424",
         "deposit_amount": 0.0,
         "deposit_start": null
     },
-    "823005815333191710": {
+    "1006335527068385280": {
         "credit_score": 1000.0,
         "loan_amount": 0.0,
         "loan_date": null,
         "deposit_amount": 0.0,
         "deposit_start": null
     },
-    "735834804397932565": {
+    "823005815333191710": {
         "credit_score": 1000.0,
         "loan_amount": 50000.0,
-        "loan_date": "2025-06-20T21:39:03.131328",
+        "loan_date": "2025-06-25T11:11:05.027365",
         "deposit_amount": 0.0,
         "deposit_start": null
+    },
+    "735834804397932565": {
+        "credit_score": 1000.0,
+        "loan_amount": 0.0,
+        "loan_date": null,
+        "deposit_amount": 0.0,
+        "deposit_start": null
+    },
+    "719812594453577748": {
+        "credit_score": 1000.0,
+        "loan_amount": 0.0,
+        "loan_date": null,
+        "deposit_amount": 0.0,
+        "deposit_start": null
+    },
+    "786081892348854272": {
+        "credit_score": 1000.0,
+        "loan_amount": 0.0,
+        "loan_date": null,
+        "deposit_amount": 30000.0,
+        "deposit_start": "2025-06-26T19:54:00.358277"
     }
 }

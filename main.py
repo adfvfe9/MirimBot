@@ -9,6 +9,8 @@ import os
 import requests
 import discord
 from discord.ext import commands
+from discord.ui import Select, View
+from discord import SelectOption
 import datetime
 import math
 import json
@@ -23,6 +25,7 @@ import random
 from discord.ext import commands, tasks
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
+import time
 
 # 한글 폰트 설정 (Windows 기준: 'Malgun Gothic')
 plt.rcParams['font.family'] = 'Malgun Gothic'
@@ -178,13 +181,13 @@ WARNING_FILE = "warnings.json"
 # 경고 데이터 불러오기/저장
 
 def load_warnings():
-    if os.path.exists(WARNING_FILE):
-        with open(WARNING_FILE, "r", encoding="utf-8") as f:
+    if os.path.exists("warnings.json"):
+        with open("warnings.json", "r", encoding="utf-8") as f:
             return json.load(f)
     return {}
 
 def save_warnings(data):
-    with open(WARNING_FILE, "w", encoding="utf-8") as f:
+    with open("warnings.json", "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
 warnings_data = load_warnings()
@@ -208,6 +211,152 @@ def save_checkin_data(data):
     with open(CHECKIN_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
+ACHIEVEMENT_FILE = "achievements.json"
+
+def load_achievements():
+    if os.path.exists(ACHIEVEMENT_FILE):
+        with open(ACHIEVEMENT_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_achievements(data):
+    with open(ACHIEVEMENT_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+
+achievements_data = load_achievements()
+
+def load_attendance_channels():
+    if os.path.exists("attendance_channels.json"):
+        with open("attendance_channels.json", "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_attendance_channels(data):
+    with open("attendance_channels.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
+attendance_channels = load_attendance_channels()
+
+TOKEN_FILE = "token_data.json"
+
+def load_token_data():
+    if os.path.exists(TOKEN_FILE):
+        with open(TOKEN_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_token_data(data):
+    with open(TOKEN_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+token_data = load_token_data()
+
+SHOP_FILE = "shop_items.json"
+
+ALL_ITEMS = [
+    {
+        "name": "값싼 정보원",
+        "min_price": 1, "max_price": 1,
+        "desc": "이 정보원은 시장의 중요한 정보를 흘려줍니다!\n단.. 애매하게 말이죠.",
+        "effect": "상승/하락장 남은 시간 대충 알림"
+    },
+    {
+        "name": "파산신청서",
+        "min_price": 5, "max_price": 5,
+        "desc": "마이너스 통장을 0원으로!",
+        "effect": "머니 음수 → 0"
+    },
+    {
+        "name": "주가조작",
+        "min_price": 8, "max_price": 8,
+        "desc": "당신이 산 주식이 오르질 않는다고요?\n주가조작으로 당신의 주식을 올려보세요!\n(주의 : 다른 사람들의 주식도 올릴 수 있습니다..)",
+        "effect": "10분 초상승장, 이후 20분 부도"
+    },
+    {
+        "name": "하급 제물",
+        "min_price": 2, "max_price": 2,
+        "desc": "강화 확률을 2배로 늘려주는 제물입니다.",
+        "effect": "100레벨 가치 제물 제공 (판매불가)"
+    },
+    {
+        "name": "중급 제물",
+        "min_price": 5, "max_price": 8,
+        "desc": "강화 확률을 5배로 늘려주는 제물입니다.",
+        "effect": "400레벨 가치 제물 제공 (판매불가)"
+    },
+    {
+        "name": "상급 제물",
+        "min_price": 7, "max_price": 18,
+        "desc": "강화 시 확률을 10배로 늘려주는 제물입니다.",
+        "effect": "900레벨 가치 제물 제공 (판매불가)"
+    },
+    {
+        "name": "최상급 제물",
+        "min_price": 9, "max_price": 30,
+        "desc": "강화 시 확률을 50배로 늘려주는 제물입니다.",
+        "effect": "4900레벨 가치 제물 제공 (판매불가)"
+    },
+    {
+        "name": "사쿠라",
+        "min_price": 1, "max_price": 50,
+        "desc": "사쿠라네?\n사용 시 '유리한' 도박을 실시합니다.\n자동으로 올인됩니다.",
+        "effect": "도박 (-5 ~ 15)"
+    },
+]
+
+def load_shop_items():
+    if os.path.exists(SHOP_FILE):
+        with open(SHOP_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return refresh_shop_items()
+
+def save_shop_items(data):
+    with open(SHOP_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+def refresh_shop_items():
+    selected = random.sample(ALL_ITEMS, 3)
+    for item in selected:
+        item["price"] = random.randint(item["min_price"], item["max_price"])
+    data = {
+        "timestamp": int(time.time()),
+        "items": selected
+    }
+    save_shop_items(data)
+    return data
+
+def get_current_shop():
+    shop = load_shop_items()
+    now = int(time.time())
+    if now - shop["timestamp"] > 3600:
+        shop = refresh_shop_items()
+    return shop
+
+SUGGESTION_FILE = "suggestions.json"
+SUGGESTION_COOLDOWN = 3600  # 초 단위 (1시간)
+
+def load_suggestions():
+    if os.path.exists(SUGGESTION_FILE):
+        with open(SUGGESTION_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_suggestions(data):
+    with open(SUGGESTION_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+
+SUGGESTION_ADMINS_FILE = "suggestion_admins.json"
+
+def load_suggestion_admins():
+    if os.path.exists(SUGGESTION_ADMINS_FILE):
+        with open(SUGGESTION_ADMINS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+def save_suggestion_admins(data):
+    with open(SUGGESTION_ADMINS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
 
 # on_message는 커맨드와 충돌 방지 필요 → process_commands 사용
 @client.event
@@ -229,7 +378,7 @@ async def on_message(message):
     await client.process_commands(message)
 
 @client.command(aliases=['시간'])
-async def time(ctx):
+async def timeget(ctx):
     await ctx.message.delete()
     now = datetime.datetime.now()
     current_time = now.strftime("%Y년 %m월 %d일 %H시 %M분 %S초")
@@ -395,7 +544,7 @@ async def enhance_list(ctx):
     await ctx.send(embed=embed)
 
 # 머니 확인
-@client.command(aliases=['머니확인'])
+@client.command(aliases=['머니확인', '머니'])
 async def money(ctx, member: discord.Member = None):
     await ctx.message.delete()  # 명령어 삭제
     member = member or ctx.author
@@ -550,22 +699,71 @@ async def send(ctx, member: discord.Member, amount: int):
         color=discord.Color.orange()
     )
     await ctx.send(embed=embed, view=view)
+class ShopDropdown(Select):
+    def __init__(self, user: discord.Member, shop_items):
+        self.user = user
+        self.shop_items = shop_items
 
-@client.command(aliases=['상점'])
+        options = [
+            SelectOption(
+                label=item["name"],
+                description=f"💰 {item['price']} 토큰",
+                value=item["name"]
+            ) for item in shop_items
+        ]
+        super().__init__(placeholder="구매할 아이템을 선택하세요", options=options, min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user != self.user:
+            await interaction.response.send_message("이 상점은 당신의 것이 아닙니다!", ephemeral=True)
+            return
+
+        selected_name = self.values[0]
+        item = next(i for i in self.shop_items if i["name"] == selected_name)
+        user_id = str(interaction.user.id)
+        price = item["price"]
+
+        # ✅ 토큰 가져오기
+        user_token = token_data.get(user_id, {}).get("tokens", 0)
+
+        if user_token < price:
+            await interaction.response.send_message(
+                f"❌ `{selected_name}` 구매에 필요한 **{price - user_token} 토큰**이 부족합니다!",
+                ephemeral=True
+            )
+            return
+
+        token_data.setdefault(user_id, {})["tokens"] = user_token - price
+        save_token_data(token_data)
+
+        user_items.setdefault(user_id, {})
+        user_items[user_id][selected_name] = user_items[user_id].get(selected_name, 0) + 1
+        save_items(user_items)
+
+        await interaction.response.send_message(
+            f"✅ `{selected_name}` 아이템을 **{price} 토큰**에 구매했습니다!",
+            ephemeral=True
+        )
+
+@client.command(aliases=["상점"])
 async def shop(ctx):
     await ctx.message.delete()
+    shop_data = get_current_shop()
+    items = shop_data["items"]
 
-    embed = discord.Embed(
-        title="🛒 상점 목록",
-        description="버튼을 눌러 아이템을 구매하세요!",
-        color=0x00bfff
-    )
-    embed.add_field(name="파산신청", value="마이너스 통장을 0원으로!\n💰 가격: 10000 byte", inline=False)
-    embed.add_field(name="상하차", value="상승장 / 하락장 시간 확인\n💰 가격: 2500 byte", inline=False)
-    embed.add_field(name="주식과열", value="📈 10분간 초상승장 + 20분간 주식부도\n💰 가격: 100000 byte", inline=False)
-    embed.set_footer(text="※ 아이템은 향후 업데이트될 수 있습니다.")
+    embed = discord.Embed(title="🛍️ 오늘의 상점", color=discord.Color.gold())
+    for item in items:
+        embed.add_field(
+            name=f"{item['name']} - 💰 {item['price']} 토큰",
+            value=f"```{item['desc']}```",  # 작은 글씨 효과 + 접힘 처리
+            inline=False
+        )
+    embed.set_footer(text="🕒 상점은 1시간마다 갱신됩니다.")
 
-    view = ShopView(ctx.author.id)
+    dropdown = ShopDropdown(ctx.author, items)
+    view = View()
+    view.add_item(dropdown)
+
     await ctx.send(embed=embed, view=view)
 
 import math
@@ -677,14 +875,14 @@ def set_override_state(state, duration_seconds):
 
 # ───────────── 주식 기본 정보 ─────────────
 stock_info = {
-    "JAVA":   {"base": 50,  "limit": 0.075},
-    "C":      {"base": 30,  "limit": 0.033},
-    "C++":    {"base": 80,  "limit": 0.08},
+    "JAVA":   {"base": 50,  "limit": 0.05},
+    "C":      {"base": 30,  "limit": 0.016},
+    "C++":    {"base": 80,  "limit": 0.033},
     "C#":     {"base": 100, "limit": 0.025},
     "PYTHON": {"base": 10,  "limit": 0.1},
     "HTML":   {"base": 40,  "limit": 0.04},
     "JS":     {"base": 300, "limit": 0.0142857},
-    "TS":     {"base": 100, "limit": 0.3}
+    "TS":     {"base": 100, "limit": 0.15}
 }
 
 stock_file = "stock_prices.json"
@@ -743,23 +941,23 @@ def update_stocks():
         change = random.uniform(-limit, limit)
 
         # 과한 변동 억제
-        bias = (base - prev_price) / base * 0.01
+        bias = (base - prev_price) / base * 0.05
         change += bias
 
-        new_price = prev_price * (1 + change)
+        new_price = prev_price + base * change
 
         # ✅ 상승장 / 하락장 / 초상승장 / 주식부도 효과 (곱연산)
         if effective_state == "BULL":
-            new_price *= (1 + random.uniform(0, 0.025))  # +0~2.5%
+            new_price *= (1 + random.uniform(0, 0.02))  # +0~2%
         elif effective_state == "BEAR":
-            new_price *= (1 - random.uniform(0, 0.02))   # -0~2%
+            new_price *= (1 - random.uniform(0, 0.015))   # -0~1.5%
         elif effective_state == "HYPER_BULL":
-            new_price *= (1 + random.uniform(0.05, 0.25))  # +5~25%
+            new_price *= (1 + random.uniform(0.01, 0.1))  # +1~10%
         elif effective_state == "CRASH":
-            new_price *= (1 - random.uniform(0.03, 0.5))    # -3~50%
+            new_price *= (1 - random.uniform(0.02, 0.15))    # -2~15%
 
         # 상장폐지 처리
-        if new_price <= base * 0.01:
+        if new_price <= 0:
             new_price = base
             print(f"[📉 상장폐지] {name} → 기본가로 초기화됨")
 
@@ -817,7 +1015,8 @@ async def stock(ctx):
 
     now = datetime.datetime.now(datetime.timezone.utc)
     elapsed = (now - last_update_time).total_seconds()
-    remain = max(0, 60 - int(elapsed))
+    next_update = last_update_time + datetime.timedelta(seconds=60)
+    timestamp = int(next_update.timestamp())
 
     embed = discord.Embed(
         title="📈 실시간 주식 시세",
@@ -857,7 +1056,11 @@ async def stock(ctx):
             value=f"💵 {current:.2f} byte\n({diff_str})",
             inline=True
         )
-        embed.set_footer(text=f"⏱️ 다음 갱신까지 {remain}초")
+    embed.add_field(
+        name="⏱️ 다음 갱신",
+        value=f"<t:{timestamp}:R>",  # ✅ 여기에 쓰면 디스코드가 해석함
+        inline=False
+    )
 
     await ctx.send(embed=embed)
 
@@ -930,35 +1133,34 @@ async def on_ready():
         print("✅ 주식 자동 갱신 루프 시작됨")
 
     asyncio.create_task(market_cycle())
-    last_update_time = datetime.datetime.now(datetime.timezone.utc)
-
-    # ✅ 미림봇 접속 메시지 전송
-    channel_id = 1352303919312801943
-    channel = client.get_channel(channel_id)
-
-    if channel:
-        embed = discord.Embed(
-            title="✅ 미림봇 접속",
-            description="봇이 온라인 상태입니다.",
-            color=discord.Color.green(),
-            timestamp=datetime.datetime.now()
-        )
-        embed.set_footer(text="MirimBot v1.1.10")
-        await channel.send(embed=embed)
-    else:
-        print(f"⚠️ 채널 ID {channel_id}를 찾을 수 없습니다.")
     asyncio.create_task(auto_remove_expired_roles())
 
-    checkin_channel = client.get_channel(1352302752394510436)
-    if checkin_channel:
-        embed = discord.Embed(
-            title="📅 출석 체크",
-            description="버튼을 눌러 오늘의 출석을 완료하세요!",
-            color=discord.Color.blurple()
-        )
-        await checkin_channel.send(embed=embed, view=CheckinButtonView())
-    else:
-        print("⚠️ 출석 채널 ID를 찾을 수 없습니다.")
+    last_update_time = datetime.datetime.now(datetime.timezone.utc)
+
+    # ✅ 미림봇 접속 메시지 및 출석 메시지 전송
+    for guild in client.guilds:
+        guild_id = str(guild.id)
+        channel_id = attendance_channels.get(guild_id)
+
+        if channel_id:
+            try:
+                channel = await client.fetch_channel(channel_id)
+
+                # 출석 메시지
+                embed = discord.Embed(
+                    title="📅 출석 체크",
+                    description="버튼을 눌러 오늘의 출석을 완료하세요!",
+                    color=discord.Color.blurple()
+                )
+                await channel.send(embed=embed, view=CheckinButtonView())
+            except discord.NotFound:
+                print(f"⚠️ 채널 ID {channel_id}를 찾을 수 없습니다. (존재하지 않음)")
+            except discord.Forbidden:
+                print(f"⚠️ 채널 ID {channel_id}에 접근 권한이 없습니다.")
+            except discord.HTTPException as e:
+                print(f"⚠️ 채널 ID {channel_id} 로드 실패: {e}")
+        else:
+            print(f"⚠️ 서버 {guild_id}의 출석 채널이 설정되어 있지 않습니다.")
 
 @client.command(aliases=["주식초기화"])
 @commands.has_permissions(administrator=True)
@@ -1577,68 +1779,6 @@ async def cancel_callback(interaction: discord.Interaction):
     await interaction.channel.send("❌ 출금이 취소되었습니다.")
     await interaction.message.delete()
 
-# ✅ 명령어 함수
-@client.command(aliases=["출금"])
-async def moneyout(ctx, amount: float):
-    user_id = str(ctx.author.id)
-    amount = round(amount, 2)
-
-    if money_data.get(user_id, 0) < amount:
-        await ctx.send("❌ 보유 금액이 부족합니다.")
-        return
-
-    if amount < 1000:
-        await ctx.send("❌ 최소 출금 금액은 1000입니다.")
-        return
-
-    try:
-        result = math.log(amount - 998) ** 2.5
-    except ValueError:
-        await ctx.send("❌ 로그 계산 실패 (금액 너무 작음).")
-        return
-
-    result = round(result, 2)
-
-    # ✅ 상호작용을 위한 임시 저장
-    if not hasattr(client, "ctx_temp"):
-        client.ctx_temp = {}
-    client.ctx_temp[user_id] = {"amount": amount, "result": result}
-
-    # ✅ 버튼 생성
-    view = View(timeout=10)
-    button_yes = Button(label="확인", style=discord.ButtonStyle.green)
-    button_no = Button(label="취소", style=discord.ButtonStyle.red)
-
-    button_yes.callback = confirm_callback
-    button_no.callback = cancel_callback
-
-    view.add_item(button_yes)
-    view.add_item(button_no)
-
-    embed = discord.Embed(
-        title="💰 출금 확인",
-        description=f"출금 요청 금액: {amount:.2f}\n예상 통장 적립: {result:.2f}\n\n정말 출금하시겠습니까?",
-        color=discord.Color.gold()
-    )
-    embed.set_footer(text="10초 안에 선택하지 않으면 자동 취소됩니다.")
-
-    await ctx.send(embed=embed, view=view)
-
-@client.command(aliases=["통장"])
-async def currentrealmoney(ctx, member: discord.Member = None):
-    target = member or ctx.author
-    user_id = str(target.id)
-    balance = bank_data.get(user_id, 0)
-
-    embed = discord.Embed(
-        title="🏦 통장 잔액 확인",
-        description=f"{target.mention}님의 현재 통장 잔액은 **{balance:.2f}** byte입니다.",
-        color=discord.Color.blue()
-    )
-    embed.set_footer(text=f"요청자: {ctx.author.display_name}")
-
-    await ctx.send(embed=embed)
-
 @client.command(aliases=["도박"])
 async def gamble(ctx, amount: int):
     await ctx.message.delete()
@@ -1718,28 +1858,6 @@ async def money_rank(ctx):
         title="💰 머니 랭킹 TOP 10",
         description="현재 보유한 byte 기준 랭킹입니다.",
         color=discord.Color.gold()
-    )
-
-    for i, (user_id, amount) in enumerate(sorted_users[:10], start=1):
-        member = ctx.guild.get_member(int(user_id))
-        name = member.display_name if member else f"알 수 없음 ({user_id})"
-        embed.add_field(name=f"{i}위: {name}", value=f"{amount:.2f} byte", inline=False)
-
-    await ctx.send(embed=embed)
-
-@client.command(aliases=["통장랭킹"])
-async def bank_rank(ctx):
-    await ctx.message.delete()
-    if not bank_data:
-        await ctx.send("❌ 데이터가 없습니다.")
-        return
-
-    sorted_users = sorted(bank_data.items(), key=lambda x: x[1], reverse=True)
-
-    embed = discord.Embed(
-        title="🏦 통장 랭킹 TOP 10",
-        description="통장에 적립된 byte 기준 랭킹입니다.",
-        color=discord.Color.blue()
     )
 
     for i, (user_id, amount) in enumerate(sorted_users[:10], start=1):
@@ -1884,89 +2002,8 @@ async def gamble_allin(ctx):
 
     await ctx.send(embed=embed)
 
-class ShopView(discord.ui.View):
-    def __init__(self, user_id):
-        super().__init__(timeout=15)
-        self.user_id = str(user_id)
-
-    @discord.ui.button(label="💸 파산신청", style=discord.ButtonStyle.primary)
-    async def buy_pasan(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != int(self.user_id):
-            await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다!", ephemeral=True)
-            return
-
-        current_money = money_data.get(self.user_id, 0)
-        price = 10000
-
-        if current_money < price:
-            await interaction.response.send_message("💸 돈이 부족합니다.", ephemeral=True)
-            return
-
-        # 돈 차감
-        money_data[self.user_id] = current_money - price
-        save_money_data(money_data)
-
-        # 아이템 추가
-        user_items.setdefault(self.user_id, {})
-        user_items[self.user_id]["파산신청"] = user_items[self.user_id].get("파산신청", 0) + 1
-        save_items(user_items)
-
-        await interaction.response.send_message("✅ 파산신청 아이템을 구매했습니다!", ephemeral=True)
-        self.stop()
-
-    @discord.ui.button(label="↕️ 상하차", style=discord.ButtonStyle.primary)
-    async def buy_sanghacha(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != int(self.user_id):
-            await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다!", ephemeral=True)
-            return
-
-        current_money = money_data.get(self.user_id, 0)
-        price = 2500
-
-        if current_money < price:
-            await interaction.response.send_message("💸 돈이 부족합니다.", ephemeral=True)
-            return
-
-        # 돈 차감
-        money_data[self.user_id] = current_money - price
-        save_money_data(money_data)
-
-        # 아이템 추가
-        user_items.setdefault(self.user_id, {})
-        user_items[self.user_id]["️상하차"] = user_items[self.user_id].get("상하차", 0) + 1
-        save_items(user_items)
-
-        await interaction.response.send_message("✅ 상하차 아이템을 구매했습니다!", ephemeral=True)
-        self.stop()
-
-    @discord.ui.button(label="🧨 주식과열", style=discord.ButtonStyle.danger)
-    async def buy_stockover(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != int(self.user_id):
-            await interaction.response.send_message("❌ 이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
-            return
-
-        uid = str(interaction.user.id)
-        price = 100000
-        balance = money_data.get(uid, 0)
-
-        if balance < price:
-            await interaction.response.send_message("💸 돈이 부족합니다.", ephemeral=True)
-            return
-
-        # 돈 차감
-        money_data[uid] = balance - price
-        save_money_data(money_data)
-
-        # 아이템 추가
-        user_items.setdefault(uid, {})
-        user_items[uid]["주식과열"] = user_items[uid].get("주식과열", 0) + 1
-        save_items(user_items)
-
-        await interaction.response.send_message("✅ 주식과열 아이템을 구매했습니다!", ephemeral=True)
-        self.stop()
-
 @client.command(aliases=["가방"])
-async def inventory(ctx, target: discord.Member = None):
+async def inventory(ctx,* ,target: discord.Member = None):
     await ctx.message.delete()
     target = target or ctx.author
     uid = str(target.id)
@@ -2323,7 +2360,7 @@ async def welfare(ctx):
     else:
         user["streak"] = 0
 
-    bonus_times = min(user["streak"], 12)
+    bonus_times = min(user["streak"], 20)
     amount = 10 * (2 ** bonus_times)
 
     # 지급
@@ -2367,6 +2404,7 @@ async def warn(ctx, name: str, amount: int = 1, *, reason: str = None):
         await ctx.send(f"❌ 유저 `{name}` 을 찾을 수 없습니다. 정확한 닉네임이나 멘션을 입력해주세요.")
         return
 
+    guild_id = str(ctx.guild.id)
     user_id = str(member.id)
     view = View()
 
@@ -2375,13 +2413,19 @@ async def warn(ctx, name: str, amount: int = 1, *, reason: str = None):
             await interaction.response.send_message("❌ 당신의 명령이 아닙니다.", ephemeral=True)
             return
 
-        warnings_data.setdefault(user_id, {"count": 0, "reasons": []})
-        warnings_data[user_id]["count"] += amount
-        warnings_data[user_id]["count"] = max(0, warnings_data[user_id]["count"])
+        # 서버 ID에 해당하는 딕셔너리 생성
+        if guild_id not in warnings_data:
+            warnings_data[guild_id] = {}
+        if user_id not in warnings_data[guild_id]:
+            warnings_data[guild_id][user_id] = {"count": 0, "reasons": []}
+
+        # 경고 수 갱신
+        warnings_data[guild_id][user_id]["count"] += amount
+        warnings_data[guild_id][user_id]["count"] = max(0, warnings_data[guild_id][user_id]["count"])
 
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         punishment = "없음"
-        count = warnings_data[user_id]["count"]
+        count = warnings_data[guild_id][user_id]["count"]
 
         try:
             if amount >= 0:
@@ -2404,33 +2448,33 @@ async def warn(ctx, name: str, amount: int = 1, *, reason: str = None):
                     role = ctx.guild.get_role(1352540239985643571)
                     await member.add_roles(role)
                     end_time = datetime.datetime.now() + datetime.timedelta(days=3)
-                    warnings_data[user_id]["restriction_until"] = end_time.strftime("%Y-%m-%d %H:%M:%S")
+                    warnings_data[guild_id][user_id]["restriction_until"] = end_time.strftime("%Y-%m-%d %H:%M:%S")
                     punishment = "서버 이용제한 역할 부여 (3일)"
                 elif count == 7:
                     role = ctx.guild.get_role(1352540239985643571)
                     await member.add_roles(role)
                     end_time = datetime.datetime.now() + datetime.timedelta(days=7)
-                    warnings_data[user_id]["restriction_until"] = end_time.strftime("%Y-%m-%d %H:%M:%S")
+                    warnings_data[guild_id][user_id]["restriction_until"] = end_time.strftime("%Y-%m-%d %H:%M:%S")
                     punishment = "서버 이용제한 역할 부여 (7일)"
                 elif count == 8:
                     role = ctx.guild.get_role(1352540239985643571)
                     await member.add_roles(role)
                     end_time = datetime.datetime.now() + datetime.timedelta(days=30)
-                    warnings_data[user_id]["restriction_until"] = end_time.strftime("%Y-%m-%d %H:%M:%S")
+                    warnings_data[guild_id][user_id]["restriction_until"] = end_time.strftime("%Y-%m-%d %H:%M:%S")
                     punishment = "서버 이용제한 역할 부여 (30일)"
                 elif count == 9:
                     role = ctx.guild.get_role(1352540239985643571)
                     await member.add_roles(role)
                     end_time = datetime.datetime.now() + datetime.timedelta(days=90)
-                    warnings_data[user_id]["restriction_until"] = end_time.strftime("%Y-%m-%d %H:%M:%S")
+                    warnings_data[guild_id][user_id]["restriction_until"] = end_time.strftime("%Y-%m-%d %H:%M:%S")
                     punishment = "서버 이용제한 역할 부여 (90일)"
                 elif count >= 10:
                     await member.ban(reason="경고 10회 누적 - 자동 차단")
                     punishment = "영구 차단 (자동 밴)"
 
-                warnings_data[user_id]["reasons"].append(f"{now} - {reason} (처벌: {punishment})")
+                warnings_data[guild_id][user_id]["reasons"].append(f"{now} - {reason} (처벌: {punishment})")
             else:
-                warnings_data[user_id]["reasons"].append(f"{now} - ❌ 경고 취소: {reason}")
+                warnings_data[guild_id][user_id]["reasons"].append(f"{now} - ❌ 경고 취소: {reason}")
         except Exception as e:
             punishment += f" ⚠️ 제재 실패: {e}"
 
@@ -2463,6 +2507,7 @@ async def warn(ctx, name: str, amount: int = 1, *, reason: str = None):
 
 @client.command(aliases=["경고확인"])
 async def check_warning(ctx, *, target: str = None):
+    await ctx.message.delete()
     if target:
         member = None
         # 멘션일 경우
@@ -2484,8 +2529,10 @@ async def check_warning(ctx, *, target: str = None):
     else:
         member = ctx.author
 
+    guild_id = str(ctx.guild.id)
     user_id = str(member.id)
-    data = warnings_data.get(user_id)
+
+    data = warnings_data.get(guild_id, {}).get(user_id)
 
     if not data:
         await ctx.send(f"✅ {member.display_name}님은 경고 기록이 없습니다.")
@@ -2499,7 +2546,7 @@ async def check_warning(ctx, *, target: str = None):
 
     reasons = data.get("reasons", [])
     if reasons:
-        for i, reason in enumerate(reasons[-10:], 1):
+        for i, reason in enumerate(reasons[-10:], 1):  # 최근 10개만 표시
             embed.add_field(name=f"{i}.", value=reason, inline=False)
     else:
         embed.add_field(name="📄 사유 없음", value="경고 사유가 없습니다.", inline=False)
@@ -2557,6 +2604,492 @@ class CheckinButtonView(View):
             embed.set_footer(text="📌 출석 레벨 상승에 실패했습니다.")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@client.command(aliases=["출석설정"])
+@commands.has_permissions(administrator=True)  # 관리자 권한 제한
+async def set_attendance_channel(ctx, channel_id: int):
+    await ctx.message.delete()
+    guild_id = str(ctx.guild.id)
+    attendance_channels[guild_id] = str(channel_id)
+    save_attendance_channels(attendance_channels)
+    await ctx.send(f"✅ 출석 채널이 <#{channel_id}>로 설정되었습니다.")
+
+@set_attendance_channel.error
+async def set_attendance_channel_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ 이 명령어는 관리자만 사용할 수 있어요!")
+    else:
+        await ctx.send("⚠️ 알 수 없는 오류가 발생했어요.")
+
+@client.command(aliases=["토큰구매", "토큰교환"])
+async def buy_token(ctx, amount: int = 1):
+    await ctx.message.delete()
+    await ctx.message.delete()
+    user_id = str(ctx.author.id)
+    user_name = ctx.author.display_name
+
+    if amount <= 0:
+        await ctx.send("❌ 1 이상의 수량을 입력해주세요.")
+        return
+
+    user_tokens = token_data.get(user_id, {"tokens": 0, "price": 100})
+    price = user_tokens["price"]
+    total_cost = sum([price * (2 ** i) for i in range(amount)])
+
+    if money_data.get(user_id, 0) < total_cost:
+        shortfall = total_cost - money_data.get(user_id, 0)
+        await ctx.send(f"❌ 잔액이 부족합니다. 부족한 금액: **{shortfall:.2f} byte**")
+        return
+
+    # 확인 임베드 및 버튼
+    embed = discord.Embed(
+        title="🎫 토큰 구매 확인",
+        description=f"{ctx.author.mention}님, 아래 내용을 확인해주세요.",
+        color=discord.Color.teal()
+    )
+    embed.add_field(name="구매 수량", value=f"{amount} 개", inline=True)
+    embed.add_field(name="총 가격", value=f"{total_cost} byte", inline=True)
+    embed.set_footer(text="※ 토큰 가격은 구매 시마다 2배로 증가합니다.")
+
+    view = View()
+
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("이 버튼은 당신의 것이 아니에요!", ephemeral=True)
+            return
+
+        # 결제 및 토큰 증가
+        money_data[user_id] -= total_cost
+        user_tokens["tokens"] += amount
+        user_tokens["price"] *= (2 ** amount)
+
+        token_data[user_id] = user_tokens
+        save_money_data(money_data)
+        save_token_data(token_data)
+
+        result = discord.Embed(
+            title="✅ 토큰 구매 완료",
+            description=f"{amount}개의 토큰을 구매하였습니다!",
+            color=discord.Color.green()
+        )
+        result.add_field(name="보유 토큰", value=f"{user_tokens['tokens']} 개", inline=True)
+        result.add_field(name="소모한 금액", value=f"{total_cost} byte", inline=True)
+        result.add_field(name="다음 구매 가격", value=f"{user_tokens['price']} byte", inline=True)
+
+        await interaction.response.edit_message(embed=result, view=None)
+
+    async def cancel_callback(interaction):
+        await interaction.response.edit_message(
+            embed=discord.Embed(title="❌ 구매 취소", description="구매가 취소되었습니다.", color=discord.Color.red()),
+            view=None
+        )
+
+    button_yes = Button(label="확인", style=ButtonStyle.green)
+    button_no = Button(label="취소", style=ButtonStyle.red)
+    button_yes.callback = confirm_callback
+    button_no.callback = cancel_callback
+
+    view.add_item(button_yes)
+    view.add_item(button_no)
+
+    await ctx.send(embed=embed, view=view)
+
+@client.command(aliases=["토큰확인", "토큰"])
+async def check_token(ctx, member: discord.Member = None):
+    await ctx.message.delete()
+    member = member or ctx.author
+    user_id = str(member.id)
+    data = token_data.get(user_id, {"tokens": 0, "price": 100})
+
+    embed = discord.Embed(
+        title="🎫 토큰 현황",
+        description=f"{member.display_name}님의 토큰 정보입니다.",
+        color=discord.Color.purple()
+    )
+    embed.add_field(name="보유 토큰", value=f"{data['tokens']} 개", inline=True)
+    embed.add_field(name="다음 구매 가격", value=f"{data['price']} byte", inline=True)
+
+    await ctx.send(embed=embed)
+
+@client.command(aliases=["토큰최대교환"])
+async def buy_token_max(ctx):
+    await ctx.message.delete()
+    user_id = str(ctx.author.id)
+    user_name = ctx.author.display_name
+
+    current_money = money_data.get(user_id, 0)
+    user_tokens = token_data.get(user_id, {"tokens": 0, "price": 100})
+
+    price = user_tokens["price"]
+    total_cost = 0
+    max_tokens = 0
+
+    # 보유 머니로 교환 가능한 최대 수량 계산
+    while total_cost + price <= current_money:
+        total_cost += price
+        price *= 2
+        max_tokens += 1
+
+    if max_tokens == 0:
+        await ctx.send(f"{ctx.author.mention} ❌ 보유 금액으로는 토큰을 구매할 수 없습니다.")
+        return
+
+    embed = discord.Embed(
+        title="💸 최대 토큰 교환 확인",
+        description=f"{ctx.author.mention}님이 보유한 금액으로 교환 가능한 최대 토큰 수는 다음과 같습니다.",
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="최대 교환 수량", value=f"{max_tokens} 개", inline=True)
+    embed.add_field(name="총 필요 금액", value=f"{total_cost:.2f} byte", inline=True)
+    embed.set_footer(text="※ 확인을 누르면 바로 교환이 진행됩니다.")
+
+    view = View()
+
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다!", ephemeral=True)
+            return
+
+        # 교환 처리
+        money_data[user_id] -= total_cost
+        user_tokens["tokens"] += max_tokens
+        user_tokens["price"] *= (2 ** max_tokens)
+
+        token_data[user_id] = user_tokens
+        save_money_data(money_data)
+        save_token_data(token_data)
+
+        result = discord.Embed(
+            title="✅ 최대 토큰 교환 완료",
+            description=f"{max_tokens}개의 토큰을 교환했습니다!",
+            color=discord.Color.green()
+        )
+        result.add_field(name="남은 금액", value=f"{money_data[user_id]:.2f} byte", inline=True)
+        result.add_field(name="보유 토큰", value=f"{user_tokens['tokens']} 개", inline=True)
+        result.add_field(name="소모한 금액", value=f"{total_cost} byte", inline=True)
+        result.add_field(name="다음 가격", value=f"{user_tokens['price']} byte", inline=True)
+
+        await interaction.response.edit_message(embed=result, view=None)
+
+    async def cancel_callback(interaction):
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="❌ 교환 취소",
+                description="최대 교환이 취소되었습니다.",
+                color=discord.Color.red()
+            ),
+            view=None
+        )
+
+    button_yes = Button(label="확인", style=discord.ButtonStyle.green)
+    button_no = Button(label="취소", style=discord.ButtonStyle.red)
+    button_yes.callback = confirm_callback
+    button_no.callback = cancel_callback
+    view.add_item(button_yes)
+    view.add_item(button_no)
+
+    await ctx.send(embed=embed, view=view)
+
+@client.command(aliases=["토큰추가"])
+@commands.has_permissions(administrator=True)
+async def add_token(ctx, member: discord.Member, amount: int):
+    await ctx.message.delete()
+    if amount <= 0:
+        await ctx.send("❌ 1 이상의 수량을 입력해주세요.")
+        return
+
+    user_id = str(member.id)
+    user_data = token_data.get(user_id, {"tokens": 0, "price": 100})
+
+    embed = discord.Embed(
+        title="🟢 토큰 추가 확인",
+        description=(
+            f"{member.mention}님에게 **{amount}개**의 토큰을 추가하려고 합니다.\n"
+            f"확인을 누르면 즉시 적용됩니다."
+        ),
+        color=discord.Color.teal()
+    )
+
+    view = View()
+
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("이 버튼은 당신의 명령이 아닙니다!", ephemeral=True)
+            return
+
+        user_data["tokens"] += amount
+        token_data[user_id] = user_data
+        save_token_data(token_data)
+
+        result = discord.Embed(
+            title="✅ 토큰 추가 완료",
+            description=f"{member.display_name}님에게 **{amount}개**의 토큰을 지급했습니다.",
+            color=discord.Color.green()
+        )
+        result.add_field(name="총 보유 토큰", value=f"{user_data['tokens']} 개", inline=False)
+        await interaction.response.edit_message(embed=result, view=None)
+
+    async def cancel_callback(interaction):
+        await interaction.response.edit_message(
+            embed=discord.Embed(title="❌ 작업 취소", description="토큰 추가가 취소되었습니다.", color=discord.Color.red()),
+            view=None
+        )
+
+    button_yes = Button(label="확인", style=discord.ButtonStyle.green)
+    button_no = Button(label="취소", style=discord.ButtonStyle.red)
+    button_yes.callback = confirm_callback
+    button_no.callback = cancel_callback
+    view.add_item(button_yes)
+    view.add_item(button_no)
+
+    await ctx.send(embed=embed, view=view)
+
+@client.command(aliases=["토큰제거"])
+@commands.has_permissions(administrator=True)
+async def remove_token(ctx, member: discord.Member, amount: int):
+    await ctx.message.delete()
+    if amount <= 0:
+        await ctx.send("❌ 1 이상의 수량을 입력해주세요.")
+        return
+
+    user_id = str(member.id)
+    user_data = token_data.get(user_id, {"tokens": 0, "price": 100})
+
+    if user_data["tokens"] < amount:
+        await ctx.send("❌ 해당 유저의 토큰 수가 부족합니다.")
+        return
+
+    embed = discord.Embed(
+        title="🔴 토큰 제거 확인",
+        description=(
+            f"{member.mention}님에게서 **{amount}개**의 토큰을 제거하려고 합니다.\n"
+            f"확인을 누르면 즉시 적용됩니다."
+        ),
+        color=discord.Color.orange()
+    )
+
+    view = View()
+
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("이 버튼은 당신의 명령이 아닙니다!", ephemeral=True)
+            return
+
+        user_data["tokens"] -= amount
+        token_data[user_id] = user_data
+        save_token_data(token_data)
+
+        result = discord.Embed(
+            title="🗑️ 토큰 제거 완료",
+            description=f"{member.display_name}님에게서 **{amount}개**의 토큰을 제거했습니다.",
+            color=discord.Color.red()
+        )
+        result.add_field(name="남은 토큰", value=f"{user_data['tokens']} 개", inline=False)
+        await interaction.response.edit_message(embed=result, view=None)
+
+    async def cancel_callback(interaction):
+        await interaction.response.edit_message(
+            embed=discord.Embed(title="❌ 작업 취소", description="토큰 제거가 취소되었습니다.", color=discord.Color.red()),
+            view=None
+        )
+
+    button_yes = Button(label="확인", style=discord.ButtonStyle.green)
+    button_no = Button(label="취소", style=discord.ButtonStyle.red)
+    button_yes.callback = confirm_callback
+    button_no.callback = cancel_callback
+    view.add_item(button_yes)
+    view.add_item(button_no)
+
+    await ctx.send(embed=embed, view=view)
+
+@client.command(aliases=["토큰구매가"])
+@commands.has_permissions(administrator=True)
+async def set_token_price(ctx, member: discord.Member, new_price: int = 100):
+    await ctx.message.delete()
+
+    if new_price <= 0:
+        await ctx.send("❌ 가격은 1 이상이어야 합니다.")
+        return
+
+    user_id = str(member.id)
+    user_data = token_data.get(user_id, {"tokens": 0, "price": 100})
+    old_price = user_data["price"]
+
+    embed = discord.Embed(
+        title="⚙️ 토큰 구매가 설정 확인",
+        description=(
+            f"{member.mention}님의 토큰 **구매가를 {old_price} → {new_price}** byte로 변경하려고 합니다.\n"
+            f"확인을 누르면 즉시 적용됩니다."
+        ),
+        color=discord.Color.blurple()
+    )
+
+    view = View()
+
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("이 버튼은 당신의 명령이 아닙니다!", ephemeral=True)
+            return
+
+        user_data["price"] = new_price
+        token_data[user_id] = user_data
+        save_token_data(token_data)
+
+        result = discord.Embed(
+            title="✅ 토큰 구매가 설정 완료",
+            description=(
+                f"{member.display_name}님의 토큰 구매가를 **{new_price} byte**로 설정했습니다."
+            ),
+            color=discord.Color.green()
+        )
+        await interaction.response.edit_message(embed=result, view=None)
+
+    async def cancel_callback(interaction):
+        await interaction.response.edit_message(
+            embed=discord.Embed(title="❌ 작업 취소", description="구매가 설정이 취소되었습니다.", color=discord.Color.red()),
+            view=None
+        )
+
+    button_yes = Button(label="확인", style=discord.ButtonStyle.green)
+    button_no = Button(label="취소", style=discord.ButtonStyle.red)
+    button_yes.callback = confirm_callback
+    button_no.callback = cancel_callback
+    view.add_item(button_yes)
+    view.add_item(button_no)
+
+    await ctx.send(embed=embed, view=view)
+
+@client.command(aliases=["건의"])
+async def suggestion(ctx, *, content: str = None):
+    await ctx.message.delete()
+    user_id = str(ctx.author.id)
+    now = datetime.datetime.now()
+
+    suggestion_data = load_suggestions()  # 항상 최신 상태 유지
+
+    if not content:
+        await ctx.send("❌ 건의 내용을 입력해주세요.\n예: `%건의 강화 시스템 개선해주세요`")
+        return
+
+    user_record = suggestion_data.get(user_id, {})
+    last_time_str = user_record.get("last_time")
+
+    if last_time_str:
+        try:
+            last_time = datetime.datetime.fromisoformat(last_time_str)
+            diff = (now - last_time).total_seconds()
+            if diff < SUGGESTION_COOLDOWN:
+                remain = int(SUGGESTION_COOLDOWN - diff)
+                minutes, seconds = divmod(remain, 60)
+                await ctx.send(f"⏳ 아직 건의를 할 수 없어요! 다시 시도하려면 **{minutes}분 {seconds}초** 후에 가능해요.")
+                return
+        except Exception as e:
+            print(f"[건의 쿨타임 파싱 오류] {e}")
+
+    # 건의 저장
+    user_record["last_time"] = now.isoformat()
+    user_record.setdefault("logs", []).append({
+        "time": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "content": content
+    })
+    suggestion_data[user_id] = user_record
+    save_suggestions(suggestion_data)
+
+    embed = discord.Embed(
+        title="📮 건의 접수 완료",
+        description=f"{ctx.author.mention}님의 건의가 접수되었습니다!\n```{content}```",
+        color=discord.Color.blurple()
+    )
+    embed.set_footer(text="관리자가 확인할 수 있도록 저장되었습니다.")
+    await ctx.send(embed=embed)
+
+@client.command(aliases=["건의목록"])
+async def suggestion_list(ctx):
+    if not isinstance(ctx.channel, discord.DMChannel):
+        return  # ❌ DM에서만 허용
+
+    user_id = str(ctx.author.id)
+    allowed_ids = load_suggestion_admins()
+
+    if user_id not in allowed_ids:
+        await ctx.send("❌ 이 명령어를 사용할 수 있는 권한이 없습니다.")
+        return
+
+    suggestion_data = load_suggestions()
+    all_logs = []
+
+    for uid, data in suggestion_data.items():
+        for entry in data.get("logs", []):
+            all_logs.append((uid, entry["time"], entry["content"]))
+
+    if not all_logs:
+        await ctx.send("📭 현재 등록된 건의가 없습니다.")
+        return
+
+    embed = discord.Embed(
+        title="📮 전체 건의사항 목록",
+        description="`%건의제거 <번호>`로 개별 삭제 가능",
+        color=discord.Color.blurple()
+    )
+
+    for idx, (uid, time_str, content) in enumerate(all_logs, start=1):
+        try:
+            user = await client.fetch_user(int(uid))
+            username = f"{user.name}#{user.discriminator}"
+        except:
+            username = f"Unknown ({uid})"
+
+        embed.add_field(
+            name=f"{idx}. ({username}) {time_str}",
+            value=content,
+            inline=False
+        )
+
+    await ctx.send(embed=embed)
+
+@client.command(aliases=["건의제거"])
+async def remove_suggestion(ctx, number: int = None):
+    if not isinstance(ctx.channel, discord.DMChannel):
+        return  # ❌ DM에서만 허용
+
+    user_id = str(ctx.author.id)
+    allowed_ids = load_suggestion_admins()
+
+    if user_id not in allowed_ids:
+        await ctx.send("❌ 이 명령어를 사용할 수 있는 권한이 없습니다.")
+        return
+
+    if number is None:
+        await ctx.send("❗ 삭제할 건의 번호를 입력해주세요.\n예: `%건의제거 2`")
+        return
+
+    suggestion_data = load_suggestions()
+    all_logs = []
+
+    for uid, data in suggestion_data.items():
+        for log in data.get("logs", []):
+            all_logs.append((uid, log))
+
+    if number <= 0 or number > len(all_logs):
+        await ctx.send("❌ 올바른 건의 번호를 입력해주세요.")
+        return
+
+    # 삭제할 항목
+    del_uid, del_entry = all_logs[number - 1]
+    logs = suggestion_data[del_uid]["logs"]
+    suggestion_data[del_uid]["logs"] = [l for l in logs if l != del_entry]
+
+    save_suggestions(suggestion_data)
+
+    embed = discord.Embed(
+        title="🗑️ 건의 삭제 완료",
+        description=f"{number}번 건의가 삭제되었습니다.",
+        color=discord.Color.red()
+    )
+    embed.add_field(name="삭제된 건의 내용", value=del_entry["content"], inline=False)
+    embed.set_footer(text=f"작성자 ID: {del_uid}, 시간: {del_entry['time']}")
+
+    await ctx.send(embed=embed)
 
 
 client.run(os.getenv("DISCORD_TOKEN"))

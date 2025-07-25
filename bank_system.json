@@ -1,7 +1,7 @@
 {
     "1061662133491879976": {
         "credit_score": 1000.0,
-        "loan_amount": 0.0,
+        "loan_amount": 50000.0,
         "loan_date": null,
         "deposit_amount": 0.0,
         "deposit_start": null
@@ -23,7 +23,7 @@
     "823005815333191710": {
         "credit_score": 1000.0,
         "loan_amount": 50000.0,
-        "loan_date": "2025-06-25T11:11:05.027365",
+        "loan_date": null,
         "deposit_amount": 0.0,
         "deposit_start": null
     },
@@ -46,6 +46,6 @@
         "loan_amount": 0.0,
         "loan_date": null,
         "deposit_amount": 30000.0,
-        "deposit_start": "2025-06-26T19:54:00.358277"
+        "deposit_start": null
     }
 }

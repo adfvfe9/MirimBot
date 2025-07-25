@@ -1,30 +1,6 @@
 {
     "735834804397932565": {},
     "1006335527068385280": {
-        "C": {
-            "quantity": 16017,
-            "avg_price": 1.4324742461135045
-        },
-        "PYTHON": {
-            "quantity": 9999,
-            "avg_price": 1.5
-        },
-        "JAVA": {
-            "quantity": 9999,
-            "avg_price": 28.38
-        },
-        "C++": {
-            "quantity": 9999,
-            "avg_price": 1.7
-        },
-        "C#": {
-            "quantity": 9999,
-            "avg_price": 84.5
-        },
-        "HTML": {
-            "quantity": 9999,
-            "avg_price": 27.490000000000002
-        },
         "JS": {
             "quantity": 19998,
             "avg_price": 222.13500000000002

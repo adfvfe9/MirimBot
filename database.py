@@ -710,6 +710,29 @@ async def set_state(key: str, value: str) -> None:
     )
 
 
+# ───────────── 주식 뉴스 ─────────────
+
+async def add_news(kind: str, symbol, headline: str, body: str) -> None:
+    await pool().execute(
+        "INSERT INTO news (kind, symbol, headline, body) VALUES ($1, $2, $3, $4)",
+        kind, symbol, headline, body,
+    )
+
+
+async def recent_news(limit: int = 5) -> list[dict]:
+    rows = await pool().fetch("SELECT * FROM news ORDER BY id DESC LIMIT $1", limit)
+    return [dict(r) for r in rows]
+
+
+async def get_news_channels() -> list[int]:
+    rows = await pool().fetch("SELECT value FROM bot_state WHERE key LIKE 'news_channel:%'")
+    return [int(r["value"]) for r in rows]
+
+
+async def set_news_channel(guild_id, channel_id) -> None:
+    await set_state(f"news_channel:{int(guild_id)}", str(int(channel_id)))
+
+
 # ───────────── 전체 초기화 ─────────────
 
 # %초기화 로 비우는 테이블.
@@ -717,7 +740,7 @@ async def set_state(key: str, value: str) -> None:
 RESET_TABLES = [
     "users", "loans", "enhance_items", "inventory",
     "stocks", "price_history", "portfolio", "stock_positions", "stock_notices", "market_state",
-    "warnings", "warning_logs", "suggestions",
+    "warnings", "warning_logs", "suggestions", "news",
 ]
 
 

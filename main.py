@@ -8,6 +8,7 @@
   features/enhance.py      강화
   features/stocks.py       주식
   features/futures.py      레버리지 (롱/숏)
+  features/news.py         주식 뉴스 (30~90분마다 랜덤 뉴스)
   features/assets.py       순자산, 자산랭킹
   features/gamble.py       도박, 가위바위보
   features/bank.py         은행 (대출/상환/적금/출금)
@@ -36,6 +37,7 @@ from features import (  # noqa: F401
     gamble,
     general,
     moderation,
+    news,
     renewal,
     stocks,
     futures,

@@ -160,6 +160,9 @@ async def update_stocks():
         bias = (base - prev_price) / base * 0.05
         change += bias
 
+        # 📰 뉴스 효과: 기준가의 몇 % 만큼 더하거나 뺀다. (호재 +, 악재 -, features/news.py)
+        change += news().current_drift(name)
+
         new_price = prev_price + base * change
 
         # ✅ 상승장 / 하락장 / 초상승장 / 주식부도 효과 (곱연산)
@@ -192,10 +195,18 @@ async def update_stocks():
     # 새 가격으로 레버리지 포지션 강제청산 검사
     await futures().check_liquidations()
 
+    # 뉴스 효과 1분 경과
+    news().tick_effects()
 
+
+# features/futures.py, features/news.py 가 이 파일을 import 하므로, 서로 물고 물리지 않게 쓸 때 가져온다.
 def futures():
-    # features/futures.py 가 이 파일을 import 하므로, 서로 물고 물리지 않게 쓸 때 가져온다.
     from features import futures as module
+    return module
+
+
+def news():
+    from features import news as module
     return module
 
 # ───────────── 자동 1분 갱신 루프 ─────────────

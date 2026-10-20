@@ -161,6 +161,16 @@ BEGIN
     END IF;
 END $$;
 
+-- 주식 뉴스 (features/news.py). %뉴스 로 최근 기록을 본다.
+CREATE TABLE IF NOT EXISTS news (
+    id         BIGSERIAL PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    kind       TEXT        NOT NULL,                  -- good / bad / market_good / market_bad / bubble / default_risk
+    symbol     TEXT,                                  -- 시장 전체 뉴스면 NULL
+    headline   TEXT        NOT NULL,
+    body       TEXT        NOT NULL
+);
+
 -- 시장 상태: 항상 1행 (id = 1)
 -- JSON 에서는 "남은 초"를 매초 저장했지만, 여기서는 "언제 끝나는지"를 저장해서 매초 쓸 필요가 없다.
 CREATE TABLE IF NOT EXISTS market_state (             -- market_state.json

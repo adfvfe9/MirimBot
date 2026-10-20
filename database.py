@@ -107,12 +107,13 @@ def today() -> datetime.date:
 
 
 def _num(value) -> Decimal:
-    """파이썬 숫자 → DB NUMERIC. 정수는 그대로, 실수는 소수 둘째 자리까지."""
+    """파이썬 숫자 → DB NUMERIC. 계산한 값을 반올림하지 않고 그대로 저장한다.
+    (화면에 보여줄 때만 fmt.num 으로 소수 2자리까지 내림해서 보여준다)"""
     if isinstance(value, Decimal):
         return value
     if isinstance(value, int):
         return Decimal(value)
-    return Decimal(repr(round(float(value), 2)))
+    return Decimal(repr(float(value)))
 
 
 def _float(value) -> float:
@@ -136,8 +137,12 @@ USER_DEFAULTS = {
     "deposit_start": None,
     "unpaid_amount": 0.0,
     "suggestion_last_at": None,
+    "rps_date": None,
+    "rps_count": 0,
+    "send_date": None,
+    "send_total": 0.0,
 }
-_MONEY_FIELDS = {"money", "gamble_net", "deposit_amount", "unpaid_amount"}
+_MONEY_FIELDS = {"money", "gamble_net", "deposit_amount", "unpaid_amount", "send_total"}
 _INT_NUMERIC_FIELDS = {"token_price"}
 
 
@@ -159,6 +164,13 @@ async def get_user(user_id, conn=None) -> dict:
     return _user_from_row(row)
 
 
+async def _ensure_user(c, user_id) -> None:
+    """유저 행이 없으면 기본값으로 만든다.
+    돈을 바꿀 때는 항상 "행 만들기 → UPDATE" 순서로 한다. (INSERT ... ON CONFLICT DO UPDATE 를 쓰면
+    schema.sql 의 미납금 트리거와 엇갈려서 돈을 빼는 값이 사라질 수 있다)"""
+    await c.execute("INSERT INTO users (user_id) VALUES ($1) ON CONFLICT DO NOTHING", int(user_id))
+
+
 async def update_user(user_id, conn=None, **fields) -> None:
     """유저 필드 일부를 바꾼다. 행이 없으면 만든다.
         await db.update_user(uid, conn, money=1000, tokens=3)
@@ -174,13 +186,10 @@ async def update_user(user_id, conn=None, **fields) -> None:
         _num(value) if column in _MONEY_FIELDS | _INT_NUMERIC_FIELDS else value
         for column, value in fields.items()
     ]
-    placeholders = ", ".join(f"${i}" for i in range(2, len(columns) + 2))
-    updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in columns)
-    await (conn or pool()).execute(
-        f"INSERT INTO users (user_id, {', '.join(columns)}) VALUES ($1, {placeholders}) "
-        f"ON CONFLICT (user_id) DO UPDATE SET {updates}",
-        int(user_id), *values,
-    )
+    sets = ", ".join(f"{c} = ${i}" for i, c in enumerate(columns, start=2))
+    c = conn or pool()
+    await _ensure_user(c, user_id)
+    await c.execute(f"UPDATE users SET {sets} WHERE user_id = $1", int(user_id), *values)
 
 
 async def get_money(user_id, conn=None) -> float:
@@ -192,15 +201,54 @@ async def get_money(user_id, conn=None) -> float:
 
 async def add_money(user_id, delta, conn=None) -> float:
     """돈을 더한다 (음수면 뺀다). 한 문장이라 user_tx 없이 써도 안전하다. 바뀐 잔액을 돌려준다."""
-    value = await (conn or pool()).fetchval(
-        """
-        INSERT INTO users (user_id, money) VALUES ($1, $2)
-        ON CONFLICT (user_id) DO UPDATE SET money = users.money + EXCLUDED.money
-        RETURNING money
-        """,
+    c = conn or pool()
+    await _ensure_user(c, user_id)
+    value = await c.fetchval(
+        "UPDATE users SET money = money + $2 WHERE user_id = $1 RETURNING money",
         int(user_id), _num(delta),
     )
     return _float(value)
+
+
+async def receive(user_id, amount, conn=None) -> dict:
+    """돈을 받는다. 미납금이 있으면 그중 일부/전부가 바로 징수된다. (schema.sql 의 트리거)
+    {"balance": 받은 뒤 잔액, "collected": 미납금으로 징수된 금액, "unpaid": 남은 미납금}"""
+    c = conn or pool()
+    await _ensure_user(c, user_id)
+    row = await c.fetchrow(
+        """
+        WITH old AS (SELECT unpaid_amount FROM users WHERE user_id = $1)
+        UPDATE users SET money = money + $2 WHERE user_id = $1
+        RETURNING money, unpaid_amount, (SELECT unpaid_amount FROM old) AS old_unpaid
+        """,
+        int(user_id), _num(amount),
+    )
+    return {
+        "balance": float(row["money"]),
+        "collected": max(0.0, float(row["old_unpaid"] - row["unpaid_amount"])),
+        "unpaid": float(row["unpaid_amount"]),
+    }
+
+
+async def bankrupt(user_id, day: datetime.date, conn=None) -> None:
+    """파산: 돈, 미납금, 대출, 적금, 주식, 레버리지 포지션, 강화 아이템을 전부 정리한다."""
+    uid = int(user_id)
+
+    async def run(c):
+        await c.execute("DELETE FROM loans WHERE user_id = $1", uid)
+        await c.execute("DELETE FROM portfolio WHERE user_id = $1", uid)
+        await c.execute("DELETE FROM stock_positions WHERE user_id = $1", uid)
+        await c.execute("DELETE FROM enhance_items WHERE user_id = $1", uid)
+        await update_user(
+            uid, c, money=0, unpaid_amount=0, deposit_amount=0, deposit_start=None,
+            bankruptcy_date=day,
+        )
+
+    if conn is not None:
+        await run(conn)
+    else:
+        async with transaction() as c:
+            await run(c)
 
 
 async def add_tokens(user_id, delta: int, conn=None) -> int | None:
@@ -211,12 +259,10 @@ async def add_tokens(user_id, delta: int, conn=None) -> int | None:
             "RETURNING tokens",
             int(user_id), delta,
         )
-    return await (conn or pool()).fetchval(
-        """
-        INSERT INTO users (user_id, tokens) VALUES ($1, $2)
-        ON CONFLICT (user_id) DO UPDATE SET tokens = users.tokens + EXCLUDED.tokens
-        RETURNING tokens
-        """,
+    c = conn or pool()
+    await _ensure_user(c, user_id)
+    return await c.fetchval(
+        "UPDATE users SET tokens = tokens + $2 WHERE user_id = $1 RETURNING tokens",
         int(user_id), delta,
     )
 
@@ -401,19 +447,82 @@ async def delist_stock(symbol: str) -> list[int]:
     async with transaction() as conn:
         rows = await conn.fetch("DELETE FROM portfolio WHERE symbol = $1 RETURNING user_id", symbol)
         user_ids = [r["user_id"] for r in rows]
-        await conn.executemany(
-            "INSERT INTO delisted_notices (user_id, symbol) VALUES ($1, $2)",
-            [(uid, symbol) for uid in user_ids],
-        )
+        for uid in user_ids:
+            await add_notice(uid, f"⚠️ `{symbol}` 주식은 상장폐지되어 자동 제거되었습니다.", conn)
     return user_ids
 
 
-async def pop_delisted_notices(user_id) -> list[str]:
-    """아직 안 보여준 상장폐지 알림을 꺼내고 지운다."""
-    rows = await pool().fetch(
-        "DELETE FROM delisted_notices WHERE user_id = $1 RETURNING id, symbol", int(user_id)
+async def add_notice(user_id, message: str, conn=None) -> None:
+    """유저가 없을 때 생긴 일(상장폐지, 강제청산 등)을 다음에 보여주려고 남겨둔다."""
+    await (conn or pool()).execute(
+        "INSERT INTO stock_notices (user_id, message) VALUES ($1, $2)", int(user_id), message
     )
-    return [r["symbol"] for r in sorted(rows, key=lambda r: r["id"])]
+
+
+async def pop_notices(user_id) -> list[str]:
+    """아직 안 보여준 알림을 꺼내고 지운다."""
+    rows = await pool().fetch(
+        "DELETE FROM stock_notices WHERE user_id = $1 RETURNING id, message", int(user_id)
+    )
+    return [r["message"] for r in sorted(rows, key=lambda r: r["id"])]
+
+
+# ───────────── 레버리지 포지션 ─────────────
+
+def _position_from_row(row) -> dict:
+    pos = dict(row)
+    pos["margin"] = float(pos["margin"])
+    pos["entry_price"] = float(pos["entry_price"])
+    return pos
+
+
+async def get_positions(user_id, conn=None) -> list[dict]:
+    """[{id, symbol, side, margin, leverage, entry_price, opened_at}, ...] 오래된 순"""
+    rows = await (conn or pool()).fetch(
+        "SELECT * FROM stock_positions WHERE user_id = $1 ORDER BY id", int(user_id)
+    )
+    return [_position_from_row(r) for r in rows]
+
+
+async def all_positions() -> list[dict]:
+    rows = await pool().fetch("SELECT * FROM stock_positions ORDER BY id")
+    return [_position_from_row(r) for r in rows]
+
+
+async def add_position(user_id, symbol: str, side: str, margin: float, leverage: int,
+                       entry_price: float, conn=None) -> int:
+    return await (conn or pool()).fetchval(
+        """
+        INSERT INTO stock_positions (user_id, symbol, side, margin, leverage, entry_price)
+        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
+        """,
+        int(user_id), symbol, side, _num(margin), leverage, _num(entry_price),
+    )
+
+
+async def delete_position(position_id: int, conn=None) -> dict | None:
+    """포지션을 지우고 지워진 포지션을 돌려준다. 이미 없으면 None. (두 번 청산 방지)"""
+    row = await (conn or pool()).fetchrow(
+        "DELETE FROM stock_positions WHERE id = $1 RETURNING *", position_id
+    )
+    return _position_from_row(row) if row else None
+
+
+async def delete_all_positions(user_id, conn=None) -> None:
+    await (conn or pool()).execute("DELETE FROM stock_positions WHERE user_id = $1", int(user_id))
+
+
+# ───────────── 자산 랭킹용 전체 조회 ─────────────
+
+async def all_users() -> list[dict]:
+    rows = await pool().fetch("SELECT * FROM users")
+    return [_user_from_row(r) for r in rows]
+
+
+async def all_open_loans() -> list[dict]:
+    """아직 연체 처리되지 않은 대출 전부"""
+    rows = await pool().fetch("SELECT * FROM loans WHERE NOT collected ORDER BY id")
+    return [_loan_from_row(r) for r in rows]
 
 
 async def load_market_state() -> dict | None:
@@ -599,7 +708,7 @@ async def set_state(key: str, value: str) -> None:
 # suggestion_admins(건의 관리자 목록)는 게임 데이터가 아니라 권한 설정이라 남긴다.
 RESET_TABLES = [
     "users", "loans", "enhance_items", "inventory",
-    "stocks", "price_history", "portfolio", "delisted_notices", "market_state",
+    "stocks", "price_history", "portfolio", "stock_positions", "stock_notices", "market_state",
     "warnings", "warning_logs", "suggestions",
 ]
 

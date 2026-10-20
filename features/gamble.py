@@ -7,13 +7,26 @@ import discord
 
 import database as db
 from bot import client
+from fmt import debt_line, num
 
 
 # ───────────── 도박 ─────────────
-GAMBLE_COOLDOWN = 10  # 초
+GAMBLE_COOLDOWN = 10      # 초
+GAMBLE_MAX_BET = 50000    # 1회 최대 판돈 (%도박올인 도 이 금액까지만)
+
+# (배율, 확률 %) — 판돈 × 배율 을 돌려받는다. 기대값 = 0.95 (평균적으로 판돈의 5% 손해)
+# 아무리 져도 판돈만 잃는다. (빚이 생기지 않음)
+GAMBLE_TABLE = [
+    (0.0, 50),   # 꽝: 판돈을 잃음
+    (1.5, 30),
+    (2.0, 14),
+    (3.0, 5),
+    (7.0, 1),    # 잭팟
+]
+
 
 async def play_gamble(user_id, amount=None):
-    """도박 1회 처리. amount 가 None 이면 올인.
+    """도박 1회 처리. amount 가 None 이면 올인 (최대 판돈까지).
     실패하면 안내 메시지(str), 성공하면 결과 dict 를 돌려준다."""
     now = db.now()
 
@@ -29,61 +42,71 @@ async def play_gamble(user_id, amount=None):
         if last_time:
             elapsed = (now - last_time).total_seconds()
             if elapsed < GAMBLE_COOLDOWN:
-                remain = int(GAMBLE_COOLDOWN - elapsed)
+                remain = int(GAMBLE_COOLDOWN - elapsed) + 1
                 return f"⏳ 아직 도박할 수 없어요! 다시 시도하려면 **{remain}초** 기다려주세요."
 
         if amount is None:
-            amount = current_money  # 올인!
+            amount = min(current_money, GAMBLE_MAX_BET)  # 올인!
         elif amount <= 0:
             return "❌ 1 이상의 금액을 입력해주세요."
+        elif amount > GAMBLE_MAX_BET:
+            return f"❌ 한 번에 걸 수 있는 최대 금액은 **{num(GAMBLE_MAX_BET)} byte**입니다."
         elif current_money < amount:
             return "❌ 잔액이 부족합니다."
 
-        # -1000% ~ +1000%
-        multiplier = random.uniform(-10.0, 10.0)
-        # 실제 도박 결과 계산 (float 유지)
-        profit = round(amount * multiplier, 2)
-        net_change = profit - amount
-        new_balance = round(current_money - amount + profit, 2)
+        multiplier = random.choices(
+            [m for m, _ in GAMBLE_TABLE], weights=[w for _, w in GAMBLE_TABLE]
+        )[0]
+        payout = amount * multiplier
+        net_change = payout - amount
+        new_balance = current_money + net_change
 
         # 잔액, 도박 통계, 쿨타임을 한 번에 저장
         await db.update_user(
             user_id, conn,
             money=new_balance,
-            gamble_net=round(user["gamble_net"] + net_change, 2),
+            gamble_net=user["gamble_net"] + net_change,
             gamble_last_at=now,
         )
 
     return {
         "amount": amount,
         "multiplier": multiplier,
-        "profit": profit,
+        "payout": payout,
         "net_change": net_change,
         "balance": new_balance,
     }
 
 
+def gamble_odds_text():
+    return " / ".join(
+        f"{'꽝' if m == 0 else f'{num(m)}배'} {w}%" for m, w in GAMBLE_TABLE
+    )
+
+
 def gamble_embed(result, title, description):
-    amount = result["amount"]
     multiplier = result["multiplier"]
-    profit = result["profit"]
     net_change = result["net_change"]
 
     # 결과 메시지
-    color = 0x2ecc71 if profit > amount else (0xe74c3c if profit < amount else 0x95a5a6)
-    outcome = "🎉 잭팟!" if multiplier > 5 else "👍 성공!" if profit > amount else "😢 손해..." if profit < amount else "💸 본전"
-    net_symbol = "📈" if net_change > 0 else "📉" if net_change < 0 else "💸"
+    color = 0x2ecc71 if net_change > 0 else 0xe74c3c
+    outcome = (
+        "🎉 잭팟!" if multiplier >= 7 else
+        "👍 성공!" if net_change > 0 else
+        "😢 꽝..."
+    )
+    net_symbol = "📈" if net_change > 0 else "📉"
 
     embed = discord.Embed(
         title=title,
         description=description,
         color=color
     )
-    embed.add_field(name="배율", value=f"{multiplier:.2f}배", inline=True)
-    embed.add_field(name="획득 금액", value=f"{profit:.2f} byte", inline=True)
-    embed.add_field(name="순이익", value=f"{net_symbol} {net_change:+.2f} byte", inline=True)
-    embed.add_field(name="현재 잔액", value=f"{result['balance']:.2f} byte", inline=False)
-    embed.set_footer(text=outcome)
+    embed.add_field(name="배율", value="꽝" if multiplier == 0 else f"{num(multiplier)}배", inline=True)
+    embed.add_field(name="돌려받은 금액", value=f"{num(result['payout'])} byte", inline=True)
+    embed.add_field(name="순이익", value=f"{net_symbol} {num(net_change, sign=True)} byte", inline=True)
+    embed.add_field(name="현재 잔액", value=f"{num(result['balance'])} byte", inline=False)
+    embed.set_footer(text=f"{outcome}  |  확률: {gamble_odds_text()}")
     return embed
 
 
@@ -97,7 +120,7 @@ async def gamble(ctx, amount: int):
         return
 
     await ctx.send(embed=gamble_embed(
-        result, "🎲 도박 결과", f"{ctx.author.mention}님이 **{amount} byte**를 도박했습니다!"
+        result, "🎲 도박 결과", f"{ctx.author.mention}님이 **{num(amount)} byte**를 걸었습니다!"
     ))
 
 
@@ -119,7 +142,7 @@ async def gamble_rank(ctx):
         member = ctx.guild.get_member(user_id)
         name = member.display_name if member else f"알 수 없음 ({user_id})"
         symbol = "📈" if profit > 0 else "📉" if profit < 0 else "💸"
-        embed.add_field(name=f"{i}위: {name}", value=f"{symbol} {profit:+.2f} byte", inline=False)
+        embed.add_field(name=f"{i}위: {name}", value=f"{symbol} {num(profit, sign=True)} byte", inline=False)
 
     await ctx.send(embed=embed)
 
@@ -134,12 +157,45 @@ async def gamble_allin(ctx):
         return
 
     await ctx.send(embed=gamble_embed(
-        result, "🎲 도박 올인 결과", f"{ctx.author.mention}님이 **{result['amount']:.2f} byte**를 올인했습니다!"
+        result, "🎲 도박 올인 결과",
+        f"{ctx.author.mention}님이 **{num(result['amount'])} byte**를 올인했습니다! "
+        f"(최대 {num(GAMBLE_MAX_BET)} byte)"
     ))
 
 
+# ───────────── 가위바위보 ─────────────
+# 이기면 보상이 2배씩 커진다: 1천 → 2천 → 4천 → 8천 ... (k번째 승리 보상 = 1,000 × 2^(k-1))
+# 지면 누적 보상을 전부 잃는다. 어디서 멈춰도 기대값은 비슷해서 "고 or 스탑" 배짱 싸움이 된다.
+RPS_BASE_REWARD = 1000
+RPS_MAX_STREAK = 10       # 10연승하면 자동으로 수령하고 끝 (누적 1,023,000)
+RPS_DAILY_LIMIT = 20      # 하루 최대 판수
+RPS_COOLDOWN = 60         # 판 사이 쿨타임 (초)
+
 rps_streaks = {}
 rps_cooldowns = {}
+
+
+def rps_reward(streak):
+    """streak 번째 승리의 보상"""
+    return RPS_BASE_REWARD * 2 ** (streak - 1)
+
+
+async def start_rps_game(user_id):
+    """오늘 판수를 하나 쓴다. 한도를 넘었으면 False."""
+    today = db.today()
+    async with db.user_tx(user_id) as conn:
+        user = await db.get_user(user_id, conn)
+        count = user["rps_count"] if user["rps_date"] == today else 0
+        if count >= RPS_DAILY_LIMIT:
+            return False
+        await db.update_user(user_id, conn, rps_date=today, rps_count=count + 1)
+        return True
+
+
+async def rps_games_left(user_id):
+    user = await db.get_user(user_id)
+    count = user["rps_count"] if user["rps_date"] == db.today() else 0
+    return RPS_DAILY_LIMIT - count
 
 
 class RPSView(discord.ui.View):
@@ -200,15 +256,15 @@ class RPSView(discord.ui.View):
 
         embed.add_field(
             name="💰 누적 보상",
-            value=f"**{self.pending_reward:,} Byte**",
+            value=f"**{num(self.pending_reward)} Byte**",
             inline=True
         )
 
-        next_reward = 1000 * math.factorial(self.streak + 1)
+        next_reward = rps_reward(self.streak + 1)
 
         embed.add_field(
             name="🎁 다음 승리 보상",
-            value=f"**+{next_reward:,} Byte**",
+            value=f"**+{num(next_reward)} Byte** (최대 {RPS_MAX_STREAK}연승)",
             inline=False
         )
 
@@ -233,14 +289,21 @@ class RPSView(discord.ui.View):
         user_id = str(self.player_id)
         now = time.time()
 
-        # 첫 판 시작 시에만 쿨타임 검사
+        # 첫 판 시작 시에만 쿨타임 / 하루 판수 검사
         if not self.played:
             last_play = rps_cooldowns.get(user_id, 0)
-            remaining = 60 - (now - last_play)
+            remaining = RPS_COOLDOWN - (now - last_play)
 
             if remaining > 0:
                 await interaction.response.send_message(
                     f"⏳ 쿨타임이 **{math.ceil(remaining)}초** 남았습니다.",
+                    ephemeral=True
+                )
+                return
+
+            if not await start_rps_game(self.player_id):
+                await interaction.response.send_message(
+                    f"❌ 오늘은 가위바위보를 {RPS_DAILY_LIMIT}판 모두 했어요. 내일 다시 도전하세요!",
                     ephemeral=True
                 )
                 return
@@ -285,7 +348,7 @@ class RPSView(discord.ui.View):
         ):
             self.streak += 1
 
-            reward = 1000 * math.factorial(self.streak)
+            reward = rps_reward(self.streak)
             self.pending_reward += reward
 
             embed.color = discord.Color.green()
@@ -293,11 +356,16 @@ class RPSView(discord.ui.View):
             embed.add_field(
                 name="🎉 승리!",
                 value=(
-                    f"이번 승리 보상: **{reward:,} Byte**\n"
-                    f"누적 보상: **{self.pending_reward:,} Byte**"
+                    f"이번 승리 보상: **{num(reward)} Byte**\n"
+                    f"누적 보상: **{num(self.pending_reward)} Byte**"
                 ),
                 inline=False
             )
+
+            # 최대 연승에 도달하면 자동으로 수령하고 끝
+            if self.streak >= RPS_MAX_STREAK:
+                await self.pay_out(interaction, title=f"🏆 {RPS_MAX_STREAK}연승 달성! 자동 수령")
+                return
 
         # 패배: 연승과 누적 보상 초기화
         else:
@@ -453,8 +521,6 @@ class RPSView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
-        user_id = str(self.player_id)
-
         if self.pending_reward <= 0:
             await interaction.response.send_message(
                 "수령할 보상이 없습니다.",
@@ -462,22 +528,25 @@ class RPSView(discord.ui.View):
             )
             return
 
+        await self.pay_out(interaction)
+
+    async def pay_out(self, interaction, title="💰 보상 수령 완료!"):
         reward = self.pending_reward
-
-        # 보상 지급 및 저장
-        balance = await db.add_money(user_id, reward)
-
         self.finished = True
+
+        # 보상 지급 및 저장 (미납금이 있으면 자동 징수)
+        result = await db.receive(self.player_id, reward)
 
         for button in self.children:
             button.disabled = True
 
         embed = discord.Embed(
-            title="💰 보상 수령 완료!",
+            title=title,
             description=(
-                f"수령 보상: **+{reward:,} Byte**\n"
-                f"현재 잔액: **{balance:,} Byte**\n"
+                f"수령 보상: **+{num(reward)} Byte**\n"
+                f"현재 잔액: **{num(result['balance'])} Byte**\n"
                 f"최종 연승: **{self.streak}연승**"
+                + debt_line(result["collected"])
             ),
             color=discord.Color.green()
         )
@@ -519,7 +588,7 @@ async def rps(ctx):
     user_id = str(ctx.author.id)
 
     # 새 게임 시작 쿨타임 확인
-    remaining = 60 - (
+    remaining = RPS_COOLDOWN - (
         time.time() - rps_cooldowns.get(user_id, 0)
     )
 
@@ -529,6 +598,11 @@ async def rps(ctx):
         )
         return
 
+    games_left = await rps_games_left(ctx.author.id)
+    if games_left <= 0:
+        await ctx.send(f"❌ 오늘은 가위바위보를 {RPS_DAILY_LIMIT}판 모두 했어요. 내일 다시 도전하세요!")
+        return
+
     view = RPSView(ctx.author.id)
 
     embed = discord.Embed(
@@ -536,6 +610,8 @@ async def rps(ctx):
         description=(
             "아래 버튼을 눌러 봇과 대결하세요!\n\n"
             "✌️ **가위** · ✊ **바위** · ✋ **보**\n\n"
+            f"이길 때마다 보상이 2배! (1천 → 2천 → 4천 …, 최대 {RPS_MAX_STREAK}연승)\n"
+            "지면 누적 보상을 전부 잃어요. 언제 멈출지가 승부!"
         ),
         color=discord.Color.blurple()
     )
@@ -553,7 +629,7 @@ async def rps(ctx):
     )
 
     embed.set_footer(
-        text=f"{ctx.author.display_name}의 가위바위보"
+        text=f"{ctx.author.display_name}의 가위바위보  |  오늘 남은 판수: {games_left}판"
     )
 
     view.message = await ctx.send(

@@ -14,6 +14,7 @@ from matplotlib import font_manager
 
 import database as db
 from bot import client
+from fmt import num
 
 # 그래프에 한글이 나오도록 맑은 고딕 폰트 등록 (malgun.ttf 는 프로젝트 폴더에 있다)
 font_path = os.path.join(
@@ -86,6 +87,8 @@ async def set_override_state(state, duration_seconds):
     await save_market_state()
 
 # ───────────── 주식 기본 정보 ─────────────
+SELL_FEE = 0.02   # 주식 판매 수수료 2% (모든 판매 명령어 공통)
+
 stock_info = {
     "JAVA":   {"base": 500,  "limit": 0.08},
     "C":      {"base": 300,  "limit": 0.06},
@@ -160,10 +163,11 @@ async def update_stocks():
         new_price = prev_price + base * change
 
         # ✅ 상승장 / 하락장 / 초상승장 / 주식부도 효과 (곱연산)
+        # 상승장/하락장은 1분에 평균 ±0.2% → 가격이 기준가의 약 1.04배 / 0.96배 근처에서 놀게 된다.
         if effective_state == "BULL":
-            new_price *= (1 + random.uniform(-0.005, 0.015))  # +-0.5~1%
+            new_price *= (1 + random.uniform(-0.004, 0.008))   # 평균 +0.2%
         elif effective_state == "BEAR":
-            new_price *= (1 - random.uniform(-0.005, 0.01))   # 0.5~-1.5%
+            new_price *= (1 - random.uniform(-0.004, 0.008))   # 평균 -0.2%
         elif effective_state == "HYPER_BULL":
             new_price *= (1 + random.uniform(-0.02, 0.1))  # -2~10%
         elif effective_state == "CRASH":
@@ -174,6 +178,8 @@ async def update_stocks():
             new_price = base
             print(f"[📉 상장폐지] {name} → 기본가로 초기화됨")
             await db.delist_stock(name)
+            # 레버리지 포지션은 가격 0 으로 정산 (롱은 증거금을 잃고, 숏은 크게 번다)
+            await futures().settle_symbol(name, exit_price=0, reason="상장폐지")
 
         stock_prices[name]["previous"] = prev_price
         stock_prices[name]["current"] = round(new_price, 2)
@@ -182,6 +188,15 @@ async def update_stocks():
 
     # 현재가 저장 + 가격 기록 추가 (종목당 최근 1440개 = 24시간만 보관)
     await db.save_stock_tick(stock_prices, keep=1440)
+
+    # 새 가격으로 레버리지 포지션 강제청산 검사
+    await futures().check_liquidations()
+
+
+def futures():
+    # features/futures.py 가 이 파일을 import 하므로, 서로 물고 물리지 않게 쓸 때 가져온다.
+    from features import futures as module
+    return module
 
 # ───────────── 자동 1분 갱신 루프 ─────────────
 @tasks.loop(minutes=1)
@@ -230,14 +245,14 @@ async def stock(ctx):
         percent = (current / previous) * 100 - 100 if previous != 0 else 0
 
         diff_str = (
-            f"▲ {abs(diff):.2f} byte (+{percent:.2f}%)" if diff > 0 else
-            f"▼ {abs(diff):.2f} byte ({percent:.2f}%)" if diff < 0 else
+            f"▲ {num(abs(diff))} byte (+{num(percent)}%)" if diff > 0 else
+            f"▼ {num(abs(diff))} byte ({num(percent)}%)" if diff < 0 else
             "― 변동 없음"
         )
 
         embed.add_field(
             name=name,
-            value=f"💵 {current:.2f} byte\n({diff_str})",
+            value=f"💵 {num(current)} byte\n({diff_str})",
             inline=True
         )
     embed.add_field(
@@ -346,7 +361,7 @@ async def buy_stock(ctx, stock_name: str, amount: int):
     )
     embed.add_field(name="종목", value=stock_key, inline=True)
     embed.add_field(name="수량", value=f"{amount} 주", inline=True)
-    embed.add_field(name="총 가격", value=f"{total_cost} byte", inline=False)
+    embed.add_field(name="총 가격", value=f"{num(total_cost)} byte", inline=False)
 
     view = View()
 
@@ -422,7 +437,7 @@ async def sell_stock(ctx, stock_name: str, amount: int):
 
 
     price = stock_prices[stock_key]["current"]
-    total_earned = round(price * amount * 0.98, 2)  # 수수료 20%
+    total_earned = price * amount * (1 - SELL_FEE)  # 판매 수수료 2%
 
     embed = discord.Embed(
         title="📤 주식 판매 확인",
@@ -431,7 +446,7 @@ async def sell_stock(ctx, stock_name: str, amount: int):
     )
     embed.add_field(name="종목", value=stock_key, inline=True)
     embed.add_field(name="수량", value=f"{amount} 주", inline=True)
-    embed.add_field(name="수수료 차감 후", value=f"{total_earned} byte", inline=False)
+    embed.add_field(name=f"수수료 {num(SELL_FEE * 100)}% 차감 후", value=f"{num(total_earned)} byte", inline=False)
 
     view = View()
 
@@ -485,11 +500,11 @@ async def stock_status(ctx, member: discord.Member = None):
     member = member or ctx.author
     user_id = member.id
 
-    # ✅ 알림 먼저 띄우기
-    deleted_list = await db.pop_delisted_notices(user_id)
-    if deleted_list:
-        alert = ", ".join(deleted_list)
-        await ctx.send(f"⚠️ 알림: `{alert}` 주식은 상장폐지되어 자동 제거되었습니다.")
+    # ✅ 알림 먼저 띄우기 (상장폐지, 강제청산 등)
+    if member == ctx.author:
+        notices = await db.pop_notices(user_id)
+        if notices:
+            await ctx.send("\n".join(notices))
 
     holdings = await db.get_portfolio(user_id)
     if not holdings:
@@ -517,14 +532,14 @@ async def stock_status(ctx, member: discord.Member = None):
 
         # 손익률 계산
         profit_rate = ((current_price - avg_price) / avg_price * 100) if avg_price > 0 else 0
-        profit_str = f"{profit_rate:+.2f}%"
+        profit_str = f"{num(profit_rate, sign=True)}%"
 
         embed.add_field(
             name=name,
             value=(
                 f"보유량: **{quantity}주**\n"
-                f"총 매입가: **{avg_price * quantity:.2f} byte**\n"
-                f"평가액: **{value:.2f} byte**\n"
+                f"총 매입가: **{num(avg_price * quantity)} byte**\n"
+                f"평가액: **{num(value)} byte**\n"
                 f"손익률: **{profit_str}**"
             ),
             inline=False
@@ -533,8 +548,8 @@ async def stock_status(ctx, member: discord.Member = None):
     if total_cost > 0:
         profit_amount = round(total_value - total_cost, 2)
         total_profit_rate = (profit_amount / total_cost) * 100
-        profit_str = f"{total_profit_rate:+.2f}%"
-        profit_amount_str = f"{profit_amount:+.2f} byte"
+        profit_str = f"{num(total_profit_rate, sign=True)}%"
+        profit_amount_str = f"{num(profit_amount, sign=True)} byte"
     else:
         profit_str = "N/A"
         profit_amount_str = "N/A"
@@ -571,8 +586,8 @@ async def buy_all_stock(ctx, stock_name: str):
         color=discord.Color.blue()
     )
     embed.add_field(name="구매 수량", value=f"{max_amount} 주", inline=True)
-    embed.add_field(name="1주 가격", value=f"{price:.2f} byte", inline=True)
-    embed.add_field(name="총 가격", value=f"{total_cost:.2f} byte", inline=False)
+    embed.add_field(name="1주 가격", value=f"{num(price)} byte", inline=True)
+    embed.add_field(name="총 가격", value=f"{num(total_cost)} byte", inline=False)
 
     view = View()
 
@@ -647,11 +662,11 @@ async def buy_half_stock(ctx, stock_name: str):
         color=discord.Color.blue()
     )
     embed.add_field(name="구매 수량", value=f"{buy_amount} 주", inline=True)
-    embed.add_field(name="1주 가격", value=f"{price:.2f} byte", inline=True)
-    embed.add_field(name="총 가격", value=f"{total_cost:.2f} byte", inline=False)
+    embed.add_field(name="1주 가격", value=f"{num(price)} byte", inline=True)
+    embed.add_field(name="총 가격", value=f"{num(total_cost)} byte", inline=False)
     embed.add_field(
         name="구매 후 예상 잔액",
-        value=f"{balance - total_cost:.2f} byte",
+        value=f"{num(balance - total_cost)} byte",
         inline=False
     )
 
@@ -690,12 +705,12 @@ async def buy_half_stock(ctx, stock_name: str):
         )
         result.add_field(
             name="사용 금액",
-            value=f"{total_cost:.2f} byte",
+            value=f"{num(total_cost)} byte",
             inline=True
         )
         result.add_field(
             name="남은 잔액",
-            value=f"{new_balance:.2f} byte",
+            value=f"{num(new_balance)} byte",
             inline=True
         )
 
@@ -750,15 +765,15 @@ async def sell_all_stock(ctx, stock_name: str = None):
         quantity = stock["quantity"]
         price = stock_prices[stock_key]["current"]
         gross = price * quantity
-        net = round(gross * 0.8, 2)  # 20% 수수료
+        net = gross * (1 - SELL_FEE)  # 판매 수수료 2%
 
         embed = discord.Embed(
             title="📤 전량 판매 확인",
             description=f"{ctx.author.mention}, **{stock_key}** {quantity}주를 판매하시겠습니까?",
             color=discord.Color.orange()
         )
-        embed.add_field(name="1주 가격", value=f"{price:.2f} byte", inline=True)
-        embed.add_field(name="수익 (수수료 적용)", value=f"{net:.2f} byte", inline=False)
+        embed.add_field(name="1주 가격", value=f"{num(price)} byte", inline=True)
+        embed.add_field(name="수익 (수수료 적용)", value=f"{num(net)} byte", inline=False)
 
         view = View()
 
@@ -822,14 +837,14 @@ async def sell_all_stock(ctx, stock_name: str = None):
 
         p = stock_prices.get(name, {}).get("current", stock_info[name]["base"])
         gross = p * q
-        net = gross * 0.8
+        net = gross * (1 - SELL_FEE)
 
         is_loss = net < cost  # ✅ 손해 여부 판단
 
         if is_loss:
-            summary_lines.append(f"⚠️ {name}: {q}주 → {net:.2f} byte (손해!)")
+            summary_lines.append(f"⚠️ {name}: {q}주 → {num(net)} byte (손해!)")
         else:
-            summary_lines.append(f"{name}: {q}주 → {net:.2f} byte")
+            summary_lines.append(f"{name}: {q}주 → {num(net)} byte")
 
         total_quantity += q
         total_net += net
@@ -840,7 +855,7 @@ async def sell_all_stock(ctx, stock_name: str = None):
         color=discord.Color.red()
     )
     embed.add_field(name="총 수량", value=f"{total_quantity} 주", inline=True)
-    embed.add_field(name="예상 수익", value=f"{total_net:.2f} byte", inline=True)
+    embed.add_field(name="예상 수익", value=f"{num(total_net)} byte", inline=True)
     embed.add_field(name="📋 상세 목록", value="\n".join(summary_lines), inline=False)
 
     view = View()
@@ -851,7 +866,7 @@ async def sell_all_stock(ctx, stock_name: str = None):
             return
 
         sales = {name: stock["quantity"] for name, stock in user_stocks.items()}
-        if await sell_shares(user_id, sales, round(total_net, 2)) is None:
+        if await sell_shares(user_id, sales, total_net) is None:
             await interaction.response.edit_message(
                 embed=discord.Embed(
                     title="❌ 판매 실패",
@@ -864,7 +879,7 @@ async def sell_all_stock(ctx, stock_name: str = None):
 
         result = discord.Embed(
             title="✅ 전체 주식 전량 판매 완료",
-            description=f"{round(total_net, 2):.2f} byte를 획득했습니다.",
+            description=f"{num(total_net)} byte를 획득했습니다.",
             color=discord.Color.green()
         )
         await interaction.response.edit_message(embed=result, view=None)
@@ -990,7 +1005,7 @@ async def stock_rank(ctx):
         symbol = "📈" if profit > 0 else "📉" if profit < 0 else "💸"
         embed.add_field(
             name=f"{i}위: {name}",
-            value=f"{symbol} 수익금: {profit:+.2f} byte\n💹 수익률: {rate:+.2f}%",
+            value=f"{symbol} 수익금: {num(profit, sign=True)} byte\n💹 수익률: {num(rate, sign=True)}%",
             inline=False
         )
 

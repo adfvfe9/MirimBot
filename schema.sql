@@ -11,7 +11,7 @@
 CREATE TABLE IF NOT EXISTS users (
     user_id              BIGINT PRIMARY KEY,
 
-    money                NUMERIC NOT NULL DEFAULT 0,      -- money_data.json (음수 = 빚)
+    money                NUMERIC NOT NULL DEFAULT 0,      -- 잔액 (항상 0 이상, 빚은 unpaid_amount 로)
 
     gamble_net           NUMERIC NOT NULL DEFAULT 0,      -- gamble_stats.json (도박 누적 손익)
     gamble_last_at       TIMESTAMPTZ,                     -- gamble_cooldowns.json
@@ -27,22 +27,60 @@ CREATE TABLE IF NOT EXISTS users (
 
     deposit_amount       NUMERIC NOT NULL DEFAULT 0,      -- bank_system.json (적금 원금)
     deposit_start        TIMESTAMPTZ,
-    unpaid_amount        NUMERIC NOT NULL DEFAULT 0,      -- 강제징수 미납금
+    unpaid_amount        NUMERIC NOT NULL DEFAULT 0,      -- 미납금(빚). 돈이 들어오면 자동으로 징수된다 (아래 트리거)
 
-    suggestion_last_at   TIMESTAMPTZ                      -- suggestions.json 의 last_time (건의 쿨타임)
+    suggestion_last_at   TIMESTAMPTZ,                     -- suggestions.json 의 last_time (건의 쿨타임)
+
+    rps_date             DATE,                            -- 가위바위보 하루 판수 제한
+    rps_count            INT     NOT NULL DEFAULT 0,
+    send_date            DATE,                            -- 송금 하루 한도
+    send_total           NUMERIC NOT NULL DEFAULT 0
 );
+
+-- 예전에 만들어진 users 테이블에 새 컬럼 추가 (이미 있으면 아무 일도 안 한다)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS rps_date   DATE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS rps_count  INT     NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS send_date  DATE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS send_total NUMERIC NOT NULL DEFAULT 0;
+
+-- 미납금 자동 징수
+-- users 행이 UPDATE 될 때마다 자동으로 실행된다. (database.py 는 돈을 항상 UPDATE 로 바꾼다)
+--   1) 잔액이 마이너스가 되면 → 그만큼 미납금으로 옮기고 잔액은 0
+--   2) 미납금이 있는데 잔액이 생기면 → 잔액에서 미납금을 갚을 수 있는 만큼 바로 징수
+-- 그래서 빚이 있는 동안에는 잔액이 늘 0 이라 돈을 쓸 수 없다.
+CREATE OR REPLACE FUNCTION users_collect_debt() RETURNS trigger AS $$
+DECLARE
+    pay NUMERIC;
+BEGIN
+    IF NEW.money < 0 THEN
+        NEW.unpaid_amount := NEW.unpaid_amount - NEW.money;
+        NEW.money := 0;
+    END IF;
+    IF NEW.unpaid_amount > 0 AND NEW.money > 0 THEN
+        pay := LEAST(NEW.money, NEW.unpaid_amount);
+        NEW.money := NEW.money - pay;
+        NEW.unpaid_amount := NEW.unpaid_amount - pay;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS users_collect_debt ON users;
+CREATE TRIGGER users_collect_debt
+    BEFORE UPDATE ON users
+    FOR EACH ROW EXECUTE FUNCTION users_collect_debt();
 
 
 -- ───────────── 은행 대출 (유저 1명이 여러 건) ─────────────
 CREATE TABLE IF NOT EXISTS loans (
     id                BIGSERIAL PRIMARY KEY,
     user_id           BIGINT      NOT NULL,
-    amount            NUMERIC     NOT NULL,               -- 남은 원금 (상환하면 줄어든다)
-    taken_at          TIMESTAMPTZ NOT NULL,               -- 대출 시각 (24시간 뒤 강제징수)
-    collected         BOOLEAN     NOT NULL DEFAULT FALSE, -- 강제징수 처리 여부
-    collection_amount NUMERIC,                            -- 징수해야 했던 금액 (원금²)
-    collected_amount  NUMERIC,                            -- 실제로 징수한 금액
-    unpaid_from_loan  NUMERIC,                            -- 못 걷어서 미납금으로 넘어간 금액
+    amount            NUMERIC     NOT NULL,               -- 남은 상환액 (원금 + 이자 10%, 갚으면 줄어든다)
+    taken_at          TIMESTAMPTZ NOT NULL,               -- 대출 시각 (24시간 안에 갚아야 한다)
+    collected         BOOLEAN     NOT NULL DEFAULT FALSE, -- 연체 처리 여부 (처리되면 미납금으로 넘어감)
+    collection_amount NUMERIC,                            -- 연체로 미납금에 더해진 금액 (남은 상환액 × 1.5)
+    collected_amount  NUMERIC,                            -- (예전 규칙에서 쓰던 값)
+    unpaid_from_loan  NUMERIC,                            -- (예전 규칙에서 쓰던 값)
     collected_at      TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS loans_user_idx ON loans (user_id, id);
@@ -89,12 +127,37 @@ CREATE TABLE IF NOT EXISTS portfolio (                -- portfolio.json
     PRIMARY KEY (user_id, symbol)
 );
 
--- 상장폐지로 주식을 잃은 유저에게 다음 %주식확인 때 보여줄 알림
-CREATE TABLE IF NOT EXISTS delisted_notices (         -- delisted_stocks.json
+-- 레버리지 포지션 (롱 / 숏)
+-- 증거금 × 배율 만큼의 규모로 진입하고, 손실이 증거금의 90% 에 닿으면 강제청산된다.
+CREATE TABLE IF NOT EXISTS stock_positions (
+    id          BIGSERIAL PRIMARY KEY,
+    user_id     BIGINT      NOT NULL,
+    symbol      TEXT        NOT NULL,
+    side        TEXT        NOT NULL CHECK (side IN ('LONG', 'SHORT')),
+    margin      NUMERIC     NOT NULL,                 -- 증거금 (내 돈)
+    leverage    INT         NOT NULL,                 -- 배율 (1~10)
+    entry_price NUMERIC     NOT NULL,                 -- 진입 가격
+    opened_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS stock_positions_user_idx ON stock_positions (user_id, id);
+
+-- 상장폐지, 강제청산처럼 유저가 없을 때 생긴 일을 다음 %주식확인 / %포지션 때 보여줄 알림
+CREATE TABLE IF NOT EXISTS stock_notices (
     id      BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL,
-    symbol  TEXT   NOT NULL
+    message TEXT   NOT NULL
 );
+
+-- 예전 상장폐지 알림 테이블(delisted_notices)이 있으면 새 알림 테이블로 옮기고 지운다.
+DO $$
+BEGIN
+    IF to_regclass('delisted_notices') IS NOT NULL THEN
+        INSERT INTO stock_notices (user_id, message)
+        SELECT user_id, '⚠️ `' || symbol || '` 주식은 상장폐지되어 자동 제거되었습니다.'
+        FROM delisted_notices ORDER BY id;
+        DROP TABLE delisted_notices;
+    END IF;
+END $$;
 
 -- 시장 상태: 항상 1행 (id = 1)
 -- JSON 에서는 "남은 초"를 매초 저장했지만, 여기서는 "언제 끝나는지"를 저장해서 매초 쓸 필요가 없다.

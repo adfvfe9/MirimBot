@@ -6,6 +6,7 @@ import discord
 
 import database as db
 from bot import client
+from fmt import num
 
 
 class EnhanceView(discord.ui.View):
@@ -128,8 +129,8 @@ async def enhance(
     if balance < cost:
         await ctx.send(
             f"💸 돈이 부족합니다!\n"
-            f"현재 보유 금액: {balance:,} byte\n"
-            f"다음 강화 비용: {cost:,} byte"
+            f"현재 보유 금액: {num(balance)} byte\n"
+            f"다음 강화 비용: {num(cost)} byte"
         )
         return
 
@@ -152,9 +153,9 @@ async def enhance(
             f"**현재 레벨:** +{current_level}\n"
             f"**목표 레벨:** "
             f"{f'+{target_level}' if target_level is not None else '미지정'}\n"
-            f"**보유 금액:** {balance:,} byte\n"
-            f"**다음 강화 비용:** {cost:,} byte\n"
-            f"**현재 판매가:** {int(100 * (2.25 ** current_level)):,} byte\n\n"
+            f"**보유 금액:** {num(balance)} byte\n"
+            f"**다음 강화 비용:** {num(cost)} byte\n"
+            f"**현재 판매가:** {num(int(100 * (2.25 ** current_level)))} byte\n\n"
             "강화 방식을 선택해주세요."
         ),
         color=0x3498DB
@@ -163,10 +164,10 @@ async def enhance(
     embed.add_field(
         name=f"📊 다음 강화 (+{next_level}) 결과 확률",
         value=(
-            f"✅ 강화 성공: **{success_rate:.2f}%**\n"
-            f"⚪ 레벨 유지: **{maintain_rate:.2f}%**\n"
-            f"📉 레벨 하락: **{downgrade_rate:.2f}%**\n"
-            f"💥 아이템 파괴: **{destroy_rate:.2f}%**"
+            f"✅ 강화 성공: **{num(success_rate)}%**\n"
+            f"⚪ 레벨 유지: **{num(maintain_rate)}%**\n"
+            f"📉 레벨 하락: **{num(downgrade_rate)}%**\n"
+            f"💥 아이템 파괴: **{num(destroy_rate)}%**"
         ),
         inline=False
     )
@@ -289,8 +290,8 @@ async def enhance(
             result = discord.Embed(
                 title="💸 강화 불가",
                 description=(
-                    f"필요한 금액: {blocked_cost:,} byte\n"
-                    f"보유 금액: {balance:,} byte"
+                    f"필요한 금액: {num(blocked_cost)} byte\n"
+                    f"보유 금액: {num(balance)} byte"
                 ),
                 color=discord.Color.red()
             )
@@ -368,12 +369,12 @@ async def enhance(
         )
         result.add_field(
             name="총 강화 비용",
-            value=f"{total_cost:,} byte",
+            value=f"{num(total_cost)} byte",
             inline=True
         )
         result.add_field(
             name="남은 돈",
-            value=f"{balance:,} byte",
+            value=f"{num(balance)} byte",
             inline=True
         )
         result.add_field(
@@ -381,7 +382,7 @@ async def enhance(
             value=(
                 "0 byte"
                 if destroyed
-                else f"{int(100 * (2.25 ** level)):,} byte"
+                else f"{num(int(100 * (2.25 ** level)))} byte"
             ),
             inline=True
         )
@@ -465,13 +466,13 @@ async def sell_enhance(ctx, item_name: str):
 
     embed.add_field(
         name="💵 획득 Byte",
-        value=f"**{earned:,} byte**",
+        value=f"**{num(earned)} byte**",
         inline=False
     )
 
     embed.add_field(
         name="💳 현재 보유 금액",
-        value=f"**{balance:,} byte**",
+        value=f"**{num(balance)} byte**",
         inline=False
     )
 

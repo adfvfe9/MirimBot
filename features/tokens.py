@@ -8,6 +8,7 @@ from discord.ui import Button, Select, View
 
 import database as db
 from bot import client
+from fmt import num
 
 
 class ShopDropdown(Select):
@@ -92,7 +93,7 @@ async def buy_token(ctx, amount: int = 1):
 
     if user["money"] < total_cost:
         shortfall = total_cost - user["money"]
-        await ctx.send(f"❌ 잔액이 부족합니다. 부족한 금액: **{shortfall:.2f} byte**")
+        await ctx.send(f"❌ 잔액이 부족합니다. 부족한 금액: **{num(shortfall)} byte**")
         return
 
     # 확인 임베드 및 버튼
@@ -102,7 +103,7 @@ async def buy_token(ctx, amount: int = 1):
         color=discord.Color.teal()
     )
     embed.add_field(name="구매 수량", value=f"{amount} 개", inline=True)
-    embed.add_field(name="총 가격", value=f"{total_cost} byte", inline=True)
+    embed.add_field(name="총 가격", value=f"{num(total_cost)} byte", inline=True)
     embed.set_footer(text="※ 토큰 가격은 구매 시마다 2배로 증가합니다.")
 
     view = View()
@@ -131,8 +132,8 @@ async def buy_token(ctx, amount: int = 1):
             color=discord.Color.green()
         )
         result.add_field(name="보유 토큰", value=f"{user_tokens['tokens']} 개", inline=True)
-        result.add_field(name="소모한 금액", value=f"{total_cost} byte", inline=True)
-        result.add_field(name="다음 구매 가격", value=f"{user_tokens['price']} byte", inline=True)
+        result.add_field(name="소모한 금액", value=f"{num(total_cost)} byte", inline=True)
+        result.add_field(name="다음 구매 가격", value=f"{num(user_tokens['price'])} byte", inline=True)
 
         await interaction.response.edit_message(embed=result, view=None)
 
@@ -164,7 +165,7 @@ async def check_token(ctx, member: discord.Member = None):
         color=discord.Color.purple()
     )
     embed.add_field(name="보유 토큰", value=f"{data['tokens']} 개", inline=True)
-    embed.add_field(name="다음 구매 가격", value=f"{data['token_price']} byte", inline=True)
+    embed.add_field(name="다음 구매 가격", value=f"{num(data['token_price'])} byte", inline=True)
 
     await ctx.send(embed=embed)
 
@@ -197,7 +198,7 @@ async def buy_token_max(ctx):
         color=discord.Color.blue()
     )
     embed.add_field(name="최대 교환 수량", value=f"{max_tokens} 개", inline=True)
-    embed.add_field(name="총 필요 금액", value=f"{total_cost:.2f} byte", inline=True)
+    embed.add_field(name="총 필요 금액", value=f"{num(total_cost)} byte", inline=True)
     embed.set_footer(text="※ 확인을 누르면 바로 교환이 진행됩니다.")
 
     view = View()
@@ -225,10 +226,10 @@ async def buy_token_max(ctx):
             description=f"{max_tokens}개의 토큰을 교환했습니다!",
             color=discord.Color.green()
         )
-        result.add_field(name="남은 금액", value=f"{user_tokens['money']:.2f} byte", inline=True)
+        result.add_field(name="남은 금액", value=f"{num(user_tokens['money'])} byte", inline=True)
         result.add_field(name="보유 토큰", value=f"{user_tokens['tokens']} 개", inline=True)
-        result.add_field(name="소모한 금액", value=f"{total_cost} byte", inline=True)
-        result.add_field(name="다음 가격", value=f"{user_tokens['price']} byte", inline=True)
+        result.add_field(name="소모한 금액", value=f"{num(total_cost)} byte", inline=True)
+        result.add_field(name="다음 가격", value=f"{num(user_tokens['price'])} byte", inline=True)
 
         await interaction.response.edit_message(embed=result, view=None)
 
@@ -400,7 +401,7 @@ async def set_token_price(ctx, member: discord.Member, new_price: int = 100):
         result = discord.Embed(
             title="✅ 토큰 구매가 설정 완료",
             description=(
-                f"{member.display_name}님의 토큰 구매가를 **{new_price} byte**로 설정했습니다."
+                f"{member.display_name}님의 토큰 구매가를 **{num(new_price)} byte**로 설정했습니다."
             ),
             color=discord.Color.green()
         )

@@ -7,6 +7,8 @@
   features/economy.py      머니, 송금, 머니랭킹, 위로금, 기초수급, 파산
   features/enhance.py      강화
   features/stocks.py       주식
+  features/futures.py      레버리지 (롱/숏)
+  features/assets.py       순자산, 자산랭킹
   features/gamble.py       도박, 가위바위보
   features/bank.py         은행 (대출/상환/적금/출금)
   features/tokens.py       토큰, 상점
@@ -26,6 +28,7 @@ from bot import client, get_token
 # import 하는 순간 각 파일의 명령어가 봇에 등록된다.
 from features import (  # noqa: F401
     admin,
+    assets,
     bank,
     economy,
     enhance,
@@ -34,6 +37,7 @@ from features import (  # noqa: F401
     moderation,
     renewal,
     stocks,
+    futures,
     suggestions,
     tokens,
 )

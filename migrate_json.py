@@ -33,7 +33,8 @@ BASE_DIR = Path(__file__).resolve().parent
 # --reset 때 지울 테이블. 예전에 쓰던 테이블(attendance_channels, bank_accounts, user_warnings)도 포함한다.
 ALL_TABLES = [
     "users", "loans", "enhance_items", "inventory", "stocks", "price_history",
-    "portfolio", "delisted_notices", "market_state", "warnings", "warning_logs",
+    "portfolio", "stock_positions", "stock_notices", "delisted_notices",
+    "market_state", "warnings", "warning_logs",
     "suggestions", "suggestion_admins", "attendance_channels",
     "bank_accounts", "user_warnings",
 ]
@@ -172,7 +173,7 @@ def convert(data_dir: Path) -> dict[str, list[tuple]]:
                 portfolio.append((int(uid), symbol, quantity, Decimal(repr(float(avg)))))
 
     delisted = [
-        (int(uid), symbol)
+        (int(uid), f"⚠️ `{symbol}` 주식은 상장폐지되어 자동 제거되었습니다.")
         for uid, symbols in load(data_dir, "delisted_stocks.json", {}).items()
         for symbol in symbols
     ]
@@ -201,7 +202,7 @@ def convert(data_dir: Path) -> dict[str, list[tuple]]:
 
     columns = list(db.USER_DEFAULTS)
     defaults = {
-        c: db._num(v) if isinstance(v, (int, float)) and c not in ("welfare_streak", "tokens") else v
+        c: db._num(v) if isinstance(v, (int, float)) and c not in ("welfare_streak", "tokens", "rps_count") else v
         for c, v in db.USER_DEFAULTS.items()
     }
     user_rows = [(uid, *(fields.get(c, defaults[c]) for c in columns)) for uid, fields in users.items()]
@@ -215,7 +216,7 @@ def convert(data_dir: Path) -> dict[str, list[tuple]]:
         "stocks (symbol, current_price, previous_price)": stocks,
         "price_history (symbol, price, recorded_at)": price_history,
         "portfolio (user_id, symbol, quantity, avg_price)": portfolio,
-        "delisted_notices (user_id, symbol)": delisted,
+        "stock_notices (user_id, message)": delisted,
         "market_state (id, state, state_ends_at, override_state, override_end)":
             [(1, *row) for row in market_state],
         "warnings (guild_id, user_id, count, restriction_until)": warnings,

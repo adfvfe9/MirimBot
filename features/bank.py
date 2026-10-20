@@ -1,4 +1,15 @@
-"""은행: 대출, 상환, 적금, 출금, 24시간 강제징수"""
+"""은행: 대출, 상환, 적금, 출금, 연체 처리
+
+대출
+- 한 사람이 동시에 빌릴 수 있는 원금은 최대 LOAN_LIMIT.
+- 빌린 순간 이자 10% 가 붙는다. (1만 빌리면 1.1만을 갚아야 함)
+- 24시간 안에 갚지 못하면 남은 상환액의 1.5배가 미납금(빚)이 된다.
+- 미납금은 잔액에서 0 이 될 때까지 바로 징수되고, 모자란 만큼은 남아 있다가
+  나중에 돈이 들어올 때마다 (기초수급, 주식 판매 등) 자동으로 징수된다. (schema.sql 트리거)
+
+적금
+- 하루 1.5% 단리, 최대 14일치까지만 이자가 붙는다. 원금은 최대 DEPOSIT_LIMIT.
+"""
 import datetime
 import math
 
@@ -9,24 +20,41 @@ from discord.ui import Button, Modal, TextInput, View
 
 import database as db
 from bot import client
+from fmt import debt_line, num
 
+# ───────────── 밸런스 설정 ─────────────
+LOAN_LIMIT = 50000            # 동시에 빌릴 수 있는 원금 한도
+LOAN_INTEREST = 0.10          # 대출 이자 10%
+LOAN_DEADLINE_HOURS = 24      # 상환 기한
+LOAN_PENALTY = 1.5            # 연체 시 남은 상환액 × 1.5 가 미납금으로
 
-# =========================
-# 은행 (대출 / 상환 / 적금 / 출금)
-# =========================
+DEPOSIT_RATE = 0.015          # 적금 하루 이자 1.5% (단리)
+DEPOSIT_MAX_DAYS = 14         # 이자가 붙는 최대 일수
+DEPOSIT_LIMIT = 200000        # 적금 원금 한도
 
-LOAN_DEADLINE_HOURS = 24
 COLLECTION_INTERVAL_SECONDS = 60
 
 
 def get_total_loan(loans):
-    """아직 강제징수되지 않은 대출의 남은 원금 합계.
-    강제징수가 끝난 대출은 정산이 끝난 것이라 대출금/한도/상환 대상에서 빠진다."""
+    """아직 연체 처리되지 않은 대출의 남은 상환액 합계."""
     return sum(
         max(0.0, float(loan["amount"]))
         for loan in loans
         if not loan["collected"]
     )
+
+
+def deposit_multiplier(start, now=None):
+    """적금 원금에 곱할 값. 하루 1.5% 단리, 최대 14일."""
+    if not start:
+        return 1.0
+    days = max(((now or db.now()) - start).days, 0)
+    return 1 + DEPOSIT_RATE * min(days, DEPOSIT_MAX_DAYS)
+
+
+def deposit_value(user, now=None):
+    """적금의 현재 가치 (원금 + 이자)"""
+    return user["deposit_amount"] * deposit_multiplier(user["deposit_start"], now)
 
 
 def parse_amount(value):
@@ -43,79 +71,51 @@ def parse_amount(value):
 
 
 # =========================
-# 강제징수 처리
+# 연체 처리
 # =========================
 
 async def collect_overdue(user_id):
     """
-    대출별 24시간 경과 여부를 확인한다.
+    기한(24시간)이 지난 대출을 연체 처리한다.
 
-    강제징수액 = 대출 원금의 제곱
-    잔액이 부족하면 보유 잔액을 징수하고 부족분을 미납금에 누적한다.
-    이미 처리한 대출은 다시 징수하지 않는다.
+    남은 상환액 × 1.5 를 미납금에 더하고, 잔액에서 갚을 수 있는 만큼 바로 징수한다.
+    이미 처리한 대출은 다시 처리하지 않는다.
     """
     now = db.now()
     messages = []
 
     async with db.user_tx(user_id) as conn:
         user = await db.get_user(user_id, conn)
-        balance = user["money"]
-        unpaid_total = user["unpaid_amount"]
-        changed = False
+        penalty_total = 0.0
 
         for loan in await db.get_loans(user_id, conn):
             if loan["collected"]:
                 continue
 
-            deadline = loan["taken_at"] + datetime.timedelta(
-                hours=LOAN_DEADLINE_HOURS
-            )
-
+            deadline = loan["taken_at"] + datetime.timedelta(hours=LOAN_DEADLINE_HOURS)
             if now < deadline:
                 continue
 
-            principal = loan["amount"]
+            penalty = loan["amount"] * LOAN_PENALTY
+            penalty_total += penalty
 
-            if principal <= 0:
-                await db.update_loan(loan["id"], conn, collected=True)
-                continue
-
-            collection_amount = principal ** 2
-
-            # 징수 가능한 금액은 현재 보유 잔액까지
-            collected_now = min(max(balance, 0.0), collection_amount)
-            balance -= collected_now
-
-            unpaid = max(0.0, collection_amount - collected_now)
-            unpaid_total += unpaid
-
-            # 중복 징수 방지
             await db.update_loan(
                 loan["id"], conn,
                 collected=True,
-                collection_amount=collection_amount,
-                collected_amount=collected_now,
-                unpaid_from_loan=unpaid,
+                collection_amount=penalty,
                 collected_at=now,
             )
-
-            changed = True
-
-            message = (
-                f"대출 원금 {principal:.2f} Byte: "
-                f"징수 {collected_now:.2f} Byte"
+            messages.append(
+                f"연체된 상환액 {num(loan['amount'])} Byte → 미납금 {num(penalty)} Byte"
             )
 
-            if unpaid > 0:
-                message += f", 미납 {unpaid:.2f} Byte"
-
-            messages.append(message)
-
-        if changed:
-            await db.update_user(
-                user_id, conn,
-                money=round(balance, 2),
-                unpaid_amount=unpaid_total,
+        if penalty_total > 0:
+            # 미납금이 늘면 트리거가 잔액에서 바로 징수한다.
+            await db.update_user(user_id, conn, unpaid_amount=user["unpaid_amount"] + penalty_total)
+            after = await db.get_user(user_id, conn)
+            collected = user["money"] - after["money"]
+            messages.append(
+                f"잔액에서 {num(collected)} Byte 징수, 남은 미납금 {num(after['unpaid_amount'])} Byte"
             )
 
     return messages
@@ -123,7 +123,7 @@ async def collect_overdue(user_id):
 
 async def collect_all_overdue():
     """
-    기한이 지난 대출이 있는 모든 유저를 검사한다.
+    기한이 지난 대출이 있는 모든 유저를 처리한다.
     은행 명령어를 사용하지 않은 유저의 연체도 처리한다.
     """
     all_messages = []
@@ -139,7 +139,7 @@ async def collect_all_overdue():
 
 
 # =========================
-# 자동 강제징수 작업
+# 자동 연체 처리 작업
 # =========================
 
 @tasks.loop(seconds=COLLECTION_INTERVAL_SECONDS)
@@ -149,12 +149,12 @@ async def bank_collection_loop():
 
         for user_id, messages in results:
             print(
-                f"[은행 강제징수] 유저 {user_id}: "
+                f"[은행 연체 처리] 유저 {user_id}: "
                 + " / ".join(messages)
             )
 
     except Exception as e:
-        print(f"[은행 강제징수 오류] {e}")
+        print(f"[은행 연체 처리 오류] {e}")
 
 
 @bank_collection_loop.before_loop
@@ -164,7 +164,7 @@ async def before_bank_collection_loop():
 
 @client.listen("on_ready")
 async def start_bank_collection_loop():
-    # 봇이 꺼져 있던 동안 발생한 연체도 루프 첫 실행 때 바로 처리된다.
+    # 봇이 꺼져 있던 동안 생긴 연체도 루프 첫 실행 때 바로 처리된다.
     if not bank_collection_loop.is_running():
         bank_collection_loop.start()
 
@@ -185,20 +185,13 @@ async def bank(ctx):
     user = await db.get_user(user_id)
     loans = await db.get_loans(user_id)
 
-    total_loan = get_total_loan(loans)
-    average_balance = await db.average_positive_money()
-    max_loan = average_balance
+    total_owed = get_total_loan(loans)
+    loan_room = max(0.0, LOAN_LIMIT - total_owed / (1 + LOAN_INTEREST))
 
     deadline_lines = []
 
-    for index, loan in enumerate(loans, start=1):
-        if loan["collected"]:
-            continue
-
-        deadline = loan["taken_at"] + datetime.timedelta(
-            hours=LOAN_DEADLINE_HOURS
-        )
-
+    for index, loan in enumerate([l for l in loans if not l["collected"]], start=1):
+        deadline = loan["taken_at"] + datetime.timedelta(hours=LOAN_DEADLINE_HOURS)
         remain = deadline - db.now()
 
         if remain.total_seconds() > 0:
@@ -207,11 +200,10 @@ async def bank(ctx):
             minutes = (total_seconds % 3600) // 60
             deadline_text = f"{hours}시간 {minutes}분 남음"
         else:
-            deadline_text = "강제징수 대기"
+            deadline_text = "연체 처리 대기"
 
         deadline_lines.append(
-            f"대출 {index}: {float(loan['amount']):.2f} Byte "
-            f"({deadline_text})"
+            f"대출 {index}: 갚을 돈 {num(loan['amount'])} Byte ({deadline_text})"
         )
 
     embed = discord.Embed(
@@ -221,31 +213,38 @@ async def bank(ctx):
     )
 
     embed.add_field(
-        name="💳 총 대출금",
-        value=f"{total_loan:.2f} Byte",
+        name="💳 갚을 대출금",
+        value=f"{num(total_owed)} Byte\n(이자 {int(LOAN_INTEREST * 100)}% 포함)",
         inline=True
     )
 
     embed.add_field(
-        name="💰 적금 원금",
-        value=f"{user['deposit_amount']:.2f} Byte",
+        name="🏦 추가 대출 가능",
+        value=f"{num(loan_room)} Byte\n(한도 {num(LOAN_LIMIT)})",
         inline=True
     )
 
     embed.add_field(
-        name="⚠️ 미납 강제징수액",
-        value=f"{user['unpaid_amount']:.2f} Byte",
+        name="⚠️ 미납금",
+        value=f"{num(user['unpaid_amount'])} Byte",
         inline=True
     )
 
+    days = (
+        min(max((db.now() - user["deposit_start"]).days, 0), DEPOSIT_MAX_DAYS)
+        if user["deposit_start"] else 0
+    )
     embed.add_field(
-        name="🏦 최대 총대출 한도",
-        value=f"{max_loan:.2f} Byte",
-        inline=True
+        name="💰 적금",
+        value=(
+            f"원금 {num(user['deposit_amount'])} Byte\n"
+            f"현재 {num(deposit_value(user))} Byte ({days}일째, 하루 {num(DEPOSIT_RATE * 100)}%)"
+        ),
+        inline=False
     )
 
     embed.add_field(
-        name="📆 대출별 강제징수 기한",
+        name=f"📆 상환 기한 ({LOAN_DEADLINE_HOURS}시간, 넘기면 {num(LOAN_PENALTY)}배가 미납금)",
         value=(
             "\n".join(deadline_lines)
             if deadline_lines
@@ -261,7 +260,7 @@ async def bank(ctx):
 
     if collection_messages:
         embed.add_field(
-            name="🚨 강제징수 결과",
+            name="🚨 연체 처리 결과",
             value="\n".join(collection_messages),
             inline=False
         )
@@ -340,7 +339,7 @@ async def bank(ctx):
 
 class LoanModal(Modal, title="💵 대출 금액 입력"):
     amount = TextInput(
-        label="대출할 금액",
+        label="대출할 금액 (이자 10%, 24시간 안에 상환)",
         placeholder="숫자만 입력",
         required=True
     )
@@ -361,38 +360,34 @@ class LoanModal(Modal, title="💵 대출 금액 입력"):
         # 신청자 본인의 연체 대출부터 처리
         await collect_overdue(self.user_id)
 
-        # 총대출금 기준으로 한도 검사
-        average_balance = await db.average_positive_money()
-        max_total_loan = average_balance
-
+        error = None
         async with db.user_tx(self.user_id) as conn:
+            user = await db.get_user(self.user_id, conn)
             loans = await db.get_loans(self.user_id, conn)
-            current_total_loan = get_total_loan(loans)
-            remaining_limit = max(
-                0.0,
-                max_total_loan - current_total_loan
-            )
+            borrowed = get_total_loan(loans) / (1 + LOAN_INTEREST)
+            room = max(0.0, LOAN_LIMIT - borrowed)
 
-            approved = amount <= remaining_limit
-            if approved:
-                await db.add_loan(self.user_id, amount, db.now(), conn)
-                await db.add_money(self.user_id, amount, conn)
+            if user["unpaid_amount"] > 0:
+                error = "❌ 미납금이 있으면 대출할 수 없어요. 미납금을 먼저 갚아주세요."
+            elif amount > room:
+                error = (
+                    f"❌ 대출 한도를 초과했습니다.\n"
+                    f"대출 한도: {num(LOAN_LIMIT)} Byte\n"
+                    f"추가 대출 가능 금액: {num(room)} Byte"
+                )
+            else:
+                owed = amount * (1 + LOAN_INTEREST)
+                await db.add_loan(self.user_id, owed, db.now(), conn)
+                await db.receive(self.user_id, amount, conn)
 
-        if not approved:
-            return await interaction.response.send_message(
-                f"❌ 대출 한도를 초과했습니다.\n"
-                f"서버 평균 잔액: {average_balance:.2f} Byte\n"
-                f"현재 총대출금: {current_total_loan:.2f} Byte\n"
-                f"최대 총대출 한도: {max_total_loan:.2f} Byte\n"
-                f"추가 대출 가능 금액: {remaining_limit:.2f} Byte",
-                ephemeral=True
-            )
+        if error:
+            return await interaction.response.send_message(error, ephemeral=True)
 
         await interaction.response.send_message(
-            f"✅ {amount:.2f} Byte 대출 완료!\n"
-            f"현재 총대출금: {current_total_loan + amount:.2f} Byte\n"
-            f"최대 총대출 한도: {max_total_loan:.2f} Byte\n"
-            f"대출일로부터 24시간 후 강제징수됩니다.",
+            f"✅ {num(amount)} Byte 대출 완료!\n"
+            f"갚아야 할 돈: **{num(owed)} Byte** (이자 {int(LOAN_INTEREST * 100)}%)\n"
+            f"⏰ {LOAN_DEADLINE_HOURS}시간 안에 갚지 않으면 "
+            f"{num(owed * LOAN_PENALTY)} Byte가 미납금이 되어 돈이 들어올 때마다 징수됩니다.",
             ephemeral=True
         )
 
@@ -403,8 +398,8 @@ class LoanModal(Modal, title="💵 대출 금액 입력"):
 
 class RepayModal(Modal, title="✅ 상환 금액 입력"):
     amount = TextInput(
-        label="상환할 금액",
-        placeholder="숫자만 입력",
+        label="상환할 금액 (전액은 '전액')",
+        placeholder="예: 1000 또는 전액",
         required=True
     )
 
@@ -413,43 +408,38 @@ class RepayModal(Modal, title="✅ 상환 금액 입력"):
         self.user_id = user_id
 
     async def on_submit(self, interaction):
-        amount = parse_amount(self.amount.value)
-
-        if amount is None or amount <= 0:
-            return await interaction.response.send_message(
-                "❌ 올바른 상환 금액을 입력하세요.",
-                ephemeral=True
-            )
-
+        raw = self.amount.value.strip()
         error = None
 
         async with db.user_tx(self.user_id) as conn:
             balance = await db.get_money(self.user_id, conn)
-            loans = await db.get_loans(self.user_id, conn)
+            loans = [l for l in await db.get_loans(self.user_id, conn) if not l["collected"]]
             total_loan = get_total_loan(loans)
 
-            if total_loan <= 0:
+            if raw.lower() in ("전액", "전체", "all", "max"):
+                amount = total_loan
+            else:
+                amount = parse_amount(raw)
+
+            if amount is None or amount <= 0:
+                error = "❌ 올바른 상환 금액을 입력하세요."
+            elif total_loan <= 0:
                 error = "❌ 상환할 대출이 없습니다."
             elif amount > total_loan:
-                error = f"❌ 총 대출금은 {total_loan:.2f} Byte입니다."
+                error = f"❌ 갚을 대출금은 {num(total_loan)} Byte입니다."
             elif amount > balance:
                 error = "❌ 잔액이 부족합니다."
             else:
                 remaining = amount
 
-                # 오래된 대출부터 상환 (강제징수된 대출은 제외)
+                # 오래된 대출부터 상환
                 for loan in loans:
                     if remaining <= 0:
                         break
 
-                    if loan["collected"]:
-                        continue
-
-                    loan_amount = float(loan["amount"])
-                    paid = min(loan_amount, remaining)
-
-                    loan["amount"] = round(loan_amount - paid, 2)
-                    remaining = round(remaining - paid, 2)
+                    paid = min(loan["amount"], remaining)
+                    loan["amount"] -= paid
+                    remaining -= paid
 
                     # 다 갚은 대출은 삭제
                     if loan["amount"] > 0.001:
@@ -457,17 +447,15 @@ class RepayModal(Modal, title="✅ 상환 금액 입력"):
                     else:
                         await db.delete_loan(loan["id"], conn)
 
-                await db.update_user(self.user_id, conn, money=round(balance - amount, 2))
-                remaining_loan = get_total_loan(
-                    [loan for loan in loans if loan["amount"] > 0.001]
-                )
+                await db.update_user(self.user_id, conn, money=balance - amount)
+                remaining_loan = get_total_loan([l for l in loans if l["amount"] > 0.001])
 
         if error:
             return await interaction.response.send_message(error, ephemeral=True)
 
         await interaction.response.send_message(
-            f"✅ {amount:.2f} Byte 상환 완료!\n"
-            f"남은 대출금: {remaining_loan:.2f} Byte",
+            f"✅ {num(amount)} Byte 상환 완료!\n"
+            f"남은 대출금: {num(remaining_loan)} Byte",
             ephemeral=True
         )
 
@@ -478,7 +466,7 @@ class RepayModal(Modal, title="✅ 상환 금액 입력"):
 
 class DepositModal(Modal, title="💰 적금 금액 입력"):
     amount = TextInput(
-        label="적금할 금액",
+        label="적금할 금액 (하루 1.5%, 최대 14일)",
         placeholder="숫자만 입력",
         required=True
     )
@@ -496,34 +484,34 @@ class DepositModal(Modal, title="💰 적금 금액 입력"):
                 ephemeral=True
             )
 
+        error = None
         async with db.user_tx(self.user_id) as conn:
             user = await db.get_user(self.user_id, conn)
-            balance = user["money"]
-            enough = balance >= amount
+            # 지금까지 붙은 이자를 원금에 합치고, 오늘부터 다시 센다.
+            new_principal = deposit_value(user) + amount
 
-            if enough:
-                deposit_start = user["deposit_start"]
-                if user["deposit_amount"] <= 0:
-                    deposit_start = db.now()
-
-                deposit_amount = round(user["deposit_amount"] + amount, 2)
-
+            if user["money"] < amount:
+                error = "❌ 잔액이 부족합니다."
+            elif new_principal > DEPOSIT_LIMIT:
+                error = (
+                    f"❌ 적금 원금은 최대 {num(DEPOSIT_LIMIT)} Byte까지예요.\n"
+                    f"더 넣을 수 있는 금액: {num(max(0, DEPOSIT_LIMIT - deposit_value(user)))} Byte"
+                )
+            else:
                 await db.update_user(
                     self.user_id, conn,
-                    money=round(balance - amount, 2),
-                    deposit_amount=deposit_amount,
-                    deposit_start=deposit_start,
+                    money=user["money"] - amount,
+                    deposit_amount=new_principal,
+                    deposit_start=db.now(),
                 )
 
-        if not enough:
-            return await interaction.response.send_message(
-                "❌ 잔액이 부족합니다.",
-                ephemeral=True
-            )
+        if error:
+            return await interaction.response.send_message(error, ephemeral=True)
 
         await interaction.response.send_message(
-            f"✅ {amount:.2f} Byte 적금 완료!\n"
-            f"현재 적금 원금: {deposit_amount:.2f} Byte",
+            f"✅ {num(amount)} Byte 적금 완료!\n"
+            f"현재 적금 원금: {num(new_principal)} Byte\n"
+            f"(그동안 붙은 이자는 원금에 합쳐지고, 오늘부터 다시 하루 {num(DEPOSIT_RATE * 100)}%씩 붙어요)",
             ephemeral=True
         )
 
@@ -548,19 +536,11 @@ class WithdrawModal(Modal, title="💳 적금 출금"):
 
         async with db.user_tx(self.user_id) as conn:
             user = await db.get_user(self.user_id, conn)
-            principal = user["deposit_amount"]
+            total_value = deposit_value(user)
 
-            if principal <= 0:
+            if user["deposit_amount"] <= 0:
                 error = "❌ 적금이 없습니다."
             else:
-                now = db.now()
-                start = user["deposit_start"]
-                days = max((now - start).days, 0) if start else 0
-
-                # 기존 일복리 10% 유지
-                multiplier = 1.1 ** days
-                total_value = principal * multiplier
-
                 raw_amount = self.amount.value.strip()
 
                 if raw_amount.lower() in ("전액", "전체", "all", "max"):
@@ -571,43 +551,26 @@ class WithdrawModal(Modal, title="💳 적금 출금"):
                     if withdraw_amount is None or withdraw_amount <= 0:
                         error = "❌ 올바른 출금 금액을 입력하세요."
                     elif withdraw_amount > total_value:
-                        error = f"❌ 출금 가능 금액은 {total_value:.2f} Byte입니다."
+                        error = f"❌ 출금 가능 금액은 {num(total_value)} Byte입니다."
 
             if error is None:
-                withdraw_amount = round(withdraw_amount, 2)
-
-                # 출금액에 비례해 적금 원금 차감
-                principal_to_remove = min(
-                    principal,
-                    withdraw_amount / multiplier
-                )
-
-                remaining_principal = max(
-                    0.0,
-                    principal - principal_to_remove
-                )
-
-                if remaining_principal < 0.01:
-                    deposit_amount = 0.0
-                    deposit_start = None
+                # 남은 금액(이자 포함)이 새 원금이 되고, 오늘부터 다시 센다.
+                remaining = total_value - withdraw_amount
+                if remaining < 0.01:
+                    await db.update_user(self.user_id, conn, deposit_amount=0, deposit_start=None)
+                    remaining = 0.0
                 else:
-                    deposit_amount = round(remaining_principal, 2)
-
-                    # 잔여 적금의 이자는 출금 시점부터 다시 계산
-                    deposit_start = now
-
-                await db.update_user(
-                    self.user_id, conn,
-                    money=round(user["money"] + withdraw_amount, 2),
-                    deposit_amount=deposit_amount,
-                    deposit_start=deposit_start,
-                )
+                    await db.update_user(
+                        self.user_id, conn, deposit_amount=remaining, deposit_start=db.now()
+                    )
+                result = await db.receive(self.user_id, withdraw_amount, conn)
 
         if error:
             return await interaction.response.send_message(error, ephemeral=True)
 
         await interaction.response.send_message(
-            f"✅ {withdraw_amount:.2f} Byte 출금 완료!\n"
-            f"남은 적금 원금: {deposit_amount:.2f} Byte",
+            f"✅ {num(withdraw_amount)} Byte 출금 완료!\n"
+            f"남은 적금: {num(remaining)} Byte"
+            + debt_line(result["collected"]),
             ephemeral=True
         )

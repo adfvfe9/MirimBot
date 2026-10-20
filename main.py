@@ -13,6 +13,7 @@
   features/moderation.py   경고
   features/suggestions.py  건의
   features/admin.py        전체 초기화
+  features/renewal.py      서버 연장 알림 (봇 주인에게 DM)
 데이터 저장은 database.py (테이블 구조는 schema.sql).
 """
 import asyncio
@@ -32,6 +33,7 @@ from features import (  # noqa: F401
     gamble,
     general,
     moderation,
+    renewal,
     stocks,
     suggestions,
     tokens,
@@ -44,6 +46,9 @@ async def setup_hook():
     await db.connect()
     await stocks.load_market_state()
     await stocks.load_stock_prices()
+
+    # 봇을 재시작해도 예전에 보낸 연장 알림 DM 의 [연장 완료] 버튼이 동작하게 등록
+    client.add_view(renewal.RenewView())
 
     # 백그라운드 작업 (on_ready 는 재접속할 때마다 다시 불리므로 여기서 한 번만 시작)
     asyncio.create_task(stocks.market_cycle())

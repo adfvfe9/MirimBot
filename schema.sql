@@ -139,6 +139,14 @@ CREATE TABLE IF NOT EXISTS suggestion_admins (        -- suggestion_admins.json
 
 
 
+-- ───────────── 봇 운영 상태 ─────────────
+-- 서버 연장 알림처럼 봇 자체가 기억해야 하는 값. (%초기화 로 지워지지 않는다)
+CREATE TABLE IF NOT EXISTS bot_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+
 -- ───────────── 정리: 삭제한 기능이 DB 에 남긴 흔적 지우기 ─────────────
 -- 출석 체크 기능을 없애면서 쓰지 않게 된 컬럼/테이블. (이미 없으면 아무 일도 안 한다)
 ALTER TABLE users DROP COLUMN IF EXISTS checkin_last_date;

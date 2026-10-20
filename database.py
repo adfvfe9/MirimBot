@@ -577,6 +577,22 @@ async def is_suggestion_admin(user_id) -> bool:
     )
 
 
+# ───────────── 봇 운영 상태 (key-value) ─────────────
+
+async def get_state(key: str) -> str | None:
+    return await pool().fetchval("SELECT value FROM bot_state WHERE key = $1", key)
+
+
+async def set_state(key: str, value: str) -> None:
+    await pool().execute(
+        """
+        INSERT INTO bot_state (key, value) VALUES ($1, $2)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """,
+        key, value,
+    )
+
+
 # ───────────── 전체 초기화 ─────────────
 
 # %초기화 로 비우는 테이블.

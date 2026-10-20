@@ -321,7 +321,7 @@ async def patchnote(ctx):
     await ctx.message.delete()
     embed = discord.Embed(
         title="📜 패치노트 v1.2.0",
-        description="최신 버전 업데이트입니다.",
+        description="최근 업데이트 내역입니다.",
         color=0xf1c40f  # 노란색
     )
     embed.add_field(name="✨ 새로운 기능", value="- 봇 24시간 구동", inline=False)

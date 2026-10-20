@@ -1,23 +1,32 @@
-"""DB 접근 계층.
+"""미림봇 DB 접근 모듈 (PostgreSQL + asyncpg).
 
-명령어 코드는 SQL을 직접 쓰지 않고 이 모듈의 함수만 호출한다.
-(1단계: users 테이블 = 돈 / 도박 / 출석 / 복지 / 위로금 / 토큰)
-은행, 주식, 강화, 경고, 건의는 다음 단계에서 같은 방식으로 이 파일에 추가한다.
+main.py 는 SQL 을 직접 쓰지 않고 이 파일의 함수만 호출한다.
+테이블 구조는 schema.sql 에 있다.
 
-사용 예 (main.py):
-    import database as db
+사용 규칙
+1. 모든 함수는 async 라서 `await db.함수()` 로 호출한다.
+2. user_id / guild_id 는 int 든 str 이든 넘겨도 된다.
+3. 돈은 float 로 주고받는다. (DB 안에서는 NUMERIC 으로 정확하게 저장된다)
+4. "잔액 확인 → 차감"처럼 여러 단계로 돈을 바꿀 때는 user_tx 로 감싼다.
 
-    @client.event
-    async def setup_hook():
-        await db.connect()
+       async with db.user_tx(user_id) as conn:
+           user = await db.get_user(user_id, conn)
+           if user["money"] < cost:
+               return
+           await db.update_user(user_id, conn, money=user["money"] - cost)
 
-    ok = await db.transfer(sender_id, receiver_id, amount, fee)
+   user_tx 안에서는 그 유저의 행이 잠기기 때문에, 버튼을 연타하거나 같은 명령을
+   동시에 보내도 앞의 처리가 끝날 때까지 기다린다. (돈 복사 / 이중 지출 방지)
+   또 중간에 에러가 나면 그 안에서 바꾼 내용이 전부 취소된다.
+   잠근 상태로 디스코드 메시지를 보내면 그동안 다른 명령이 기다리게 되므로,
+   메시지 전송은 user_tx 블록이 끝난 뒤에 한다.
 """
 from __future__ import annotations
 
 import datetime
 import os
-from decimal import ROUND_HALF_UP, Decimal
+from contextlib import asynccontextmanager
+from decimal import Decimal
 from pathlib import Path
 
 import asyncpg
@@ -30,20 +39,27 @@ _pool: asyncpg.Pool | None = None
 
 # ───────────── 연결 ─────────────
 
-
 async def connect(dsn: str | None = None) -> None:
-    """봇 시작 시 한 번 호출. 풀을 만들고 테이블이 없으면 생성한다."""
+    """봇 시작 시 한 번 호출. 연결 풀을 만들고, 테이블이 없으면 만든다."""
     global _pool
-    dsn = dsn or os.environ["DATABASE_URL"]
-    # statement_cache_size=0: Neon/Supabase 의 pooler(pgbouncer) 주소로도 동작하게 한다.
-    _pool = await asyncpg.create_pool(dsn, min_size=1, max_size=5, statement_cache_size=0)
+    if _pool is not None:
+        return
+    # statement_cache_size=0: Neon 의 -pooler 주소(pgbouncer)에서도 동작하게 한다.
+    _pool = await asyncpg.create_pool(
+        dsn or os.environ["DATABASE_URL"],
+        min_size=1,
+        max_size=5,
+        statement_cache_size=0,
+    )
     async with _pool.acquire() as conn:
         await conn.execute(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
 async def close() -> None:
-    if _pool:
+    global _pool
+    if _pool is not None:
         await _pool.close()
+        _pool = None
 
 
 def pool() -> asyncpg.Pool:
@@ -52,139 +68,526 @@ def pool() -> asyncpg.Pool:
     return _pool
 
 
-# ───────────── 헬퍼 ─────────────
+@asynccontextmanager
+async def transaction():
+    """여러 쿼리를 한 번에 처리 (중간에 실패하면 전부 취소)."""
+    async with pool().acquire() as conn:
+        async with conn.transaction():
+            yield conn
 
 
-def _dec(value) -> Decimal:
-    """돈 계산용: float → 소수 2자리 Decimal."""
-    return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+@asynccontextmanager
+async def user_tx(*user_ids):
+    """트랜잭션을 열고 해당 유저 행들을 잠근다. (모듈 설명 참고)
+    송금처럼 두 명을 다룰 때는 user_tx(보내는사람, 받는사람) 으로 둘 다 잠근다."""
+    ids = sorted({int(u) for u in user_ids})
+    async with transaction() as conn:
+        await conn.execute(
+            "INSERT INTO users (user_id) SELECT unnest($1::bigint[]) ON CONFLICT DO NOTHING",
+            ids,
+        )
+        # 항상 같은 순서(user_id 오름차순)로 잠가야 서로 기다리다 멈추는(deadlock) 일이 없다.
+        await conn.execute(
+            "SELECT 1 FROM users WHERE user_id = ANY($1::bigint[]) ORDER BY user_id FOR UPDATE",
+            ids,
+        )
+        yield conn
 
 
-def _f(value):
-    """기존 코드가 float 로 계산하므로, DB에서 읽은 Decimal 은 float 로 돌려준다.
-    (실제 덧셈/뺄셈은 DB 안에서 Decimal 로 하므로 오차는 쌓이지 않는다.)"""
-    return float(value) if isinstance(value, Decimal) else value
+# ───────────── 시간 / 숫자 헬퍼 ─────────────
 
-
-def now_kst() -> datetime.datetime:
+def now() -> datetime.datetime:
+    """현재 한국 시간 (타임존 포함). DB 에 저장하는 시각은 전부 이걸 쓴다."""
     return datetime.datetime.now(KST)
 
 
-def today_kst() -> datetime.date:
-    """'오늘' 기준은 항상 한국 시간. (호스팅 서버가 UTC여도 출석 날짜가 어긋나지 않는다.)"""
-    return now_kst().date()
+def today() -> datetime.date:
+    """오늘 날짜 (한국 기준). 봇을 UTC 서버에서 돌려도 출석/수급 날짜가 어긋나지 않는다."""
+    return now().date()
 
 
-# ───────────── 돈 ─────────────
+def _num(value) -> Decimal:
+    """파이썬 숫자 → DB NUMERIC. 정수는 그대로, 실수는 소수 둘째 자리까지."""
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, int):
+        return Decimal(value)
+    return Decimal(repr(round(float(value), 2)))
 
 
-async def get_money(user_id: int) -> float:
-    v = await pool().fetchval("SELECT money FROM users WHERE user_id = $1", user_id)
-    return _f(v) if v is not None else 0.0
+def _float(value) -> float:
+    return float(value) if value is not None else 0.0
 
 
-async def add_money(user_id: int, delta, conn=None) -> float:
-    """돈을 더한다 (음수면 뺀다). 유저 행이 없으면 만든다. 변경 후 잔액을 반환."""
-    v = await (conn or pool()).fetchval(
+# ───────────── 유저 ─────────────
+
+# 행이 없는 유저의 기본값 (schema.sql 의 DEFAULT 와 같아야 한다)
+USER_DEFAULTS = {
+    "money": 0.0,
+    "gamble_net": 0.0,
+    "gamble_last_at": None,
+    "welfare_last_date": None,
+    "welfare_streak": 0,
+    "consolation_date": None,
+    "bankruptcy_date": None,
+    "tokens": 0,
+    "token_price": 100,
+    "deposit_amount": 0.0,
+    "deposit_start": None,
+    "unpaid_amount": 0.0,
+    "suggestion_last_at": None,
+}
+_MONEY_FIELDS = {"money", "gamble_net", "deposit_amount", "unpaid_amount"}
+_INT_NUMERIC_FIELDS = {"token_price"}
+
+
+def _user_from_row(row) -> dict:
+    user = dict(row)
+    for key in _MONEY_FIELDS:
+        user[key] = _float(user[key])
+    for key in _INT_NUMERIC_FIELDS:
+        user[key] = int(user[key])
+    return user
+
+
+async def get_user(user_id, conn=None) -> dict:
+    """유저 데이터 전체를 dict 로. 처음 보는 유저면 기본값을 돌려준다 (행은 만들지 않음)."""
+    uid = int(user_id)
+    row = await (conn or pool()).fetchrow("SELECT * FROM users WHERE user_id = $1", uid)
+    if row is None:
+        return {"user_id": uid, **USER_DEFAULTS}
+    return _user_from_row(row)
+
+
+async def update_user(user_id, conn=None, **fields) -> None:
+    """유저 필드 일부를 바꾼다. 행이 없으면 만든다.
+        await db.update_user(uid, conn, money=1000, tokens=3)
+    """
+    if not fields:
+        return
+    unknown = set(fields) - set(USER_DEFAULTS)
+    if unknown:
+        raise ValueError(f"users 테이블에 없는 필드: {sorted(unknown)}")
+
+    columns = list(fields)
+    values = [
+        _num(value) if column in _MONEY_FIELDS | _INT_NUMERIC_FIELDS else value
+        for column, value in fields.items()
+    ]
+    placeholders = ", ".join(f"${i}" for i in range(2, len(columns) + 2))
+    updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in columns)
+    await (conn or pool()).execute(
+        f"INSERT INTO users (user_id, {', '.join(columns)}) VALUES ($1, {placeholders}) "
+        f"ON CONFLICT (user_id) DO UPDATE SET {updates}",
+        int(user_id), *values,
+    )
+
+
+async def get_money(user_id, conn=None) -> float:
+    value = await (conn or pool()).fetchval(
+        "SELECT money FROM users WHERE user_id = $1", int(user_id)
+    )
+    return _float(value)
+
+
+async def add_money(user_id, delta, conn=None) -> float:
+    """돈을 더한다 (음수면 뺀다). 한 문장이라 user_tx 없이 써도 안전하다. 바뀐 잔액을 돌려준다."""
+    value = await (conn or pool()).fetchval(
         """
         INSERT INTO users (user_id, money) VALUES ($1, $2)
         ON CONFLICT (user_id) DO UPDATE SET money = users.money + EXCLUDED.money
         RETURNING money
         """,
-        user_id, _dec(delta),
+        int(user_id), _num(delta),
     )
-    return _f(v)
+    return _float(value)
 
 
-async def try_spend(user_id: int, amount, conn=None) -> bool:
-    """잔액이 충분할 때만 차감. 확인과 차감이 한 쿼리라서 동시에 눌러도 이중 지출이 안 생긴다."""
-    v = await (conn or pool()).fetchval(
-        "UPDATE users SET money = money - $2 WHERE user_id = $1 AND money >= $2 RETURNING money",
-        user_id, _dec(amount),
+async def add_tokens(user_id, delta: int, conn=None) -> int | None:
+    """토큰을 더한다 (음수면 뺀다). 0 개 미만이 되면 바꾸지 않고 None, 성공하면 바뀐 개수."""
+    if delta < 0:
+        return await (conn or pool()).fetchval(
+            "UPDATE users SET tokens = tokens + $2 WHERE user_id = $1 AND tokens + $2 >= 0 "
+            "RETURNING tokens",
+            int(user_id), delta,
+        )
+    return await (conn or pool()).fetchval(
+        """
+        INSERT INTO users (user_id, tokens) VALUES ($1, $2)
+        ON CONFLICT (user_id) DO UPDATE SET tokens = users.tokens + EXCLUDED.tokens
+        RETURNING tokens
+        """,
+        int(user_id), delta,
     )
-    return v is not None
 
 
-async def transfer(sender_id: int, receiver_id: int, amount, fee=0) -> bool:
-    """송금. (보내는 사람은 amount + fee 차감, 받는 사람은 amount 증가) 한 트랜잭션이라
-    중간에 봇이 꺼져도 돈이 사라지거나 복제되지 않는다. 잔액 부족이면 False."""
-    async with pool().acquire() as conn:
-        async with conn.transaction():
-            if not await try_spend(sender_id, _dec(amount) + _dec(fee), conn):
-                return False
-            await add_money(receiver_id, amount, conn)
-            return True
+async def top_users(column: str, limit: int = 10, where: str = "TRUE") -> list[tuple[int, float]]:
+    """랭킹용: column 기준 내림차순 상위 limit 명. [(user_id, 값), ...]"""
+    if column not in _MONEY_FIELDS:
+        raise ValueError(column)
+    rows = await pool().fetch(
+        f"SELECT user_id, {column} AS value FROM users WHERE {where} "
+        f"ORDER BY {column} DESC LIMIT $1",
+        limit,
+    )
+    return [(r["user_id"], _float(r["value"])) for r in rows]
 
 
 async def top_money(limit: int = 10) -> list[tuple[int, float]]:
-    rows = await pool().fetch(
-        "SELECT user_id, money FROM users ORDER BY money DESC LIMIT $1", limit
+    return await top_users("money", limit)
+
+
+async def top_gamble(limit: int = 10) -> list[tuple[int, float]]:
+    """도박을 한 번이라도 한 유저만."""
+    return await top_users(
+        "gamble_net", limit, where="gamble_last_at IS NOT NULL OR gamble_net <> 0"
     )
-    return [(r["user_id"], _f(r["money"])) for r in rows]
 
 
-# ───────────── 도박 ─────────────
+async def average_positive_money() -> float:
+    """잔액이 양수인 유저들의 평균 잔액 (은행 대출 한도)."""
+    value = await pool().fetchval("SELECT avg(money) FROM users WHERE money > 0")
+    return _float(value)
 
 
-async def add_gamble_net(user_id: int, delta) -> float:
-    """도박 누적 손익에 더한다. 변경 후 값을 반환."""
-    v = await pool().fetchval(
+# ───────────── 강화 아이템 ─────────────
+
+async def get_enhance_items(user_id, conn=None) -> dict[str, int]:
+    """{아이템 이름: 레벨}"""
+    rows = await (conn or pool()).fetch(
+        "SELECT item_name, level FROM enhance_items WHERE user_id = $1 ORDER BY item_name",
+        int(user_id),
+    )
+    return {r["item_name"]: r["level"] for r in rows}
+
+
+async def set_enhance_level(user_id, item_name: str, level: int, conn=None) -> None:
+    await (conn or pool()).execute(
         """
-        INSERT INTO users (user_id, gamble_net) VALUES ($1, $2)
-        ON CONFLICT (user_id) DO UPDATE SET gamble_net = users.gamble_net + EXCLUDED.gamble_net
-        RETURNING gamble_net
+        INSERT INTO enhance_items (user_id, item_name, level) VALUES ($1, $2, $3)
+        ON CONFLICT (user_id, item_name) DO UPDATE SET level = EXCLUDED.level
         """,
-        user_id, _dec(delta),
+        int(user_id), item_name, level,
     )
-    return _f(v)
 
 
-async def top_gamble(limit: int = 10, best: bool = True) -> list[tuple[int, float]]:
-    """도박 손익 랭킹. best=False 면 가장 많이 잃은 순."""
-    order = "DESC" if best else "ASC"
-    rows = await pool().fetch(
-        f"SELECT user_id, gamble_net FROM users ORDER BY gamble_net {order} LIMIT $1", limit
+async def delete_enhance_item(user_id, item_name: str, conn=None) -> int | None:
+    """아이템을 지우고 지워진 아이템의 레벨을 돌려준다. 없으면 None."""
+    return await (conn or pool()).fetchval(
+        "DELETE FROM enhance_items WHERE user_id = $1 AND item_name = $2 RETURNING level",
+        int(user_id), item_name,
     )
-    return [(r["user_id"], _f(r["gamble_net"])) for r in rows]
 
 
-# ───────────── 유저 필드 (쿨타임, 출석, 복지, 토큰 등) ─────────────
+# ───────────── 상점 아이템 (인벤토리) ─────────────
 
-# 돈(money)은 일부러 제외: 반드시 add_money / try_spend / transfer 로만 바꾼다.
-_NUMERIC_FIELDS = {"savings", "gamble_net"}
-_USER_FIELDS = _NUMERIC_FIELDS | {
-    "gamble_last_at", "welfare_last_claim", "welfare_streak",
-    "checkin_last_date", "checkin_streak", "consolation_date",
-    "tokens", "token_price",
-}
-
-
-async def get_user(user_id: int) -> dict:
-    """유저 한 명의 전체 데이터. 행이 없으면 기본값으로 만들어서 반환."""
-    await pool().execute(
-        "INSERT INTO users (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING", user_id
+async def add_inventory_item(user_id, item_name: str, quantity: int = 1, conn=None) -> int:
+    """아이템 개수를 더하고 바뀐 개수를 돌려준다."""
+    return await (conn or pool()).fetchval(
+        """
+        INSERT INTO inventory (user_id, item_name, quantity) VALUES ($1, $2, $3)
+        ON CONFLICT (user_id, item_name) DO UPDATE
+            SET quantity = inventory.quantity + EXCLUDED.quantity
+        RETURNING quantity
+        """,
+        int(user_id), item_name, quantity,
     )
-    row = await pool().fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
-    return {k: _f(v) for k, v in dict(row).items()}
 
 
-async def update_user(user_id: int, **fields) -> None:
-    """유저 필드 일부를 갱신. 예:
-        await db.update_user(uid, welfare_last_claim=db.today_kst(), welfare_streak=3)
-        await db.update_user(uid, gamble_last_at=db.now_kst())
-    """
-    if not fields:
+# ───────────── 주식 ─────────────
+
+async def load_stock_prices() -> dict[str, dict]:
+    """{종목: {"current": 현재가, "previous": 직전가}}"""
+    rows = await pool().fetch("SELECT symbol, current_price, previous_price FROM stocks")
+    return {
+        r["symbol"]: {"current": _float(r["current_price"]), "previous": _float(r["previous_price"])}
+        for r in rows
+    }
+
+
+async def save_stock_prices(stock_prices: dict, conn=None) -> None:
+    await (conn or pool()).executemany(
+        """
+        INSERT INTO stocks (symbol, current_price, previous_price) VALUES ($1, $2, $3)
+        ON CONFLICT (symbol) DO UPDATE
+            SET current_price = EXCLUDED.current_price, previous_price = EXCLUDED.previous_price
+        """,
+        [(s, _num(p["current"]), _num(p["previous"])) for s, p in stock_prices.items()],
+    )
+
+
+async def save_stock_tick(stock_prices: dict, keep: int = 1440) -> None:
+    """1분 갱신 결과 저장: 현재가 저장 + 가격 기록 추가 + 종목당 최근 keep 개만 남기기."""
+    async with transaction() as conn:
+        await save_stock_prices(stock_prices, conn)
+        await conn.executemany(
+            "INSERT INTO price_history (symbol, price) VALUES ($1, $2)",
+            [(s, _num(p["current"])) for s, p in stock_prices.items()],
+        )
+        await conn.execute(
+            """
+            DELETE FROM price_history WHERE id IN (
+                SELECT id FROM (
+                    SELECT id, row_number() OVER (PARTITION BY symbol ORDER BY id DESC) AS rn
+                    FROM price_history
+                ) t WHERE rn > $1
+            )
+            """,
+            keep,
+        )
+
+
+async def load_price_history() -> dict[str, list[float]]:
+    """{종목: [오래된 가격, ..., 최신 가격]}"""
+    rows = await pool().fetch("SELECT symbol, price FROM price_history ORDER BY id")
+    history: dict[str, list[float]] = {}
+    for r in rows:
+        history.setdefault(r["symbol"], []).append(_float(r["price"]))
+    return history
+
+
+async def clear_price_history() -> None:
+    await pool().execute("DELETE FROM price_history")
+
+
+async def get_portfolio(user_id, conn=None) -> dict[str, dict]:
+    """{종목: {"quantity": 수량, "avg_price": 평균단가}}"""
+    rows = await (conn or pool()).fetch(
+        "SELECT symbol, quantity, avg_price FROM portfolio WHERE user_id = $1 ORDER BY symbol",
+        int(user_id),
+    )
+    return {
+        r["symbol"]: {"quantity": r["quantity"], "avg_price": float(r["avg_price"])}
+        for r in rows
+    }
+
+
+async def all_portfolios() -> dict[int, dict[str, dict]]:
+    """주식 랭킹용: {user_id: {종목: {...}}}"""
+    rows = await pool().fetch("SELECT user_id, symbol, quantity, avg_price FROM portfolio")
+    result: dict[int, dict[str, dict]] = {}
+    for r in rows:
+        result.setdefault(r["user_id"], {})[r["symbol"]] = {
+            "quantity": r["quantity"],
+            "avg_price": float(r["avg_price"]),
+        }
+    return result
+
+
+async def set_holding(user_id, symbol: str, quantity: int, avg_price: float, conn=None) -> None:
+    """보유 주식 저장. 수량이 0 이하면 삭제한다."""
+    if quantity <= 0:
+        await delete_holdings(user_id, [symbol], conn)
         return
-    bad = set(fields) - _USER_FIELDS
-    if bad:
-        raise ValueError(f"update_user 로 바꿀 수 없는 필드: {sorted(bad)}")
-
-    cols = list(fields)
-    values = [_dec(v) if c in _NUMERIC_FIELDS else v for c, v in fields.items()]
-    placeholders = ", ".join(f"${i}" for i in range(2, len(cols) + 2))
-    updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols)
-    await pool().execute(
-        f"INSERT INTO users (user_id, {', '.join(cols)}) VALUES ($1, {placeholders}) "
-        f"ON CONFLICT (user_id) DO UPDATE SET {updates}",
-        user_id, *values,
+    await (conn or pool()).execute(
+        """
+        INSERT INTO portfolio (user_id, symbol, quantity, avg_price) VALUES ($1, $2, $3, $4)
+        ON CONFLICT (user_id, symbol) DO UPDATE
+            SET quantity = EXCLUDED.quantity, avg_price = EXCLUDED.avg_price
+        """,
+        int(user_id), symbol, quantity, Decimal(repr(float(avg_price))),
     )
+
+
+async def delete_holdings(user_id, symbols: list[str], conn=None) -> None:
+    await (conn or pool()).execute(
+        "DELETE FROM portfolio WHERE user_id = $1 AND symbol = ANY($2::text[])",
+        int(user_id), list(symbols),
+    )
+
+
+async def delist_stock(symbol: str) -> list[int]:
+    """상장폐지: 모든 유저의 해당 주식을 지우고 알림을 남긴다. 주식을 잃은 유저 ID 목록을 돌려준다."""
+    async with transaction() as conn:
+        rows = await conn.fetch("DELETE FROM portfolio WHERE symbol = $1 RETURNING user_id", symbol)
+        user_ids = [r["user_id"] for r in rows]
+        await conn.executemany(
+            "INSERT INTO delisted_notices (user_id, symbol) VALUES ($1, $2)",
+            [(uid, symbol) for uid in user_ids],
+        )
+    return user_ids
+
+
+async def pop_delisted_notices(user_id) -> list[str]:
+    """아직 안 보여준 상장폐지 알림을 꺼내고 지운다."""
+    rows = await pool().fetch(
+        "DELETE FROM delisted_notices WHERE user_id = $1 RETURNING id, symbol", int(user_id)
+    )
+    return [r["symbol"] for r in sorted(rows, key=lambda r: r["id"])]
+
+
+async def load_market_state() -> dict | None:
+    """{"state", "state_ends_at", "override_state", "override_end"} 또는 저장된 적 없으면 None"""
+    row = await pool().fetchrow("SELECT * FROM market_state WHERE id = 1")
+    return dict(row) if row else None
+
+
+async def save_market_state(state: str, state_ends_at, override_state, override_end) -> None:
+    await pool().execute(
+        """
+        INSERT INTO market_state (id, state, state_ends_at, override_state, override_end)
+        VALUES (1, $1, $2, $3, $4)
+        ON CONFLICT (id) DO UPDATE SET
+            state = EXCLUDED.state,
+            state_ends_at = EXCLUDED.state_ends_at,
+            override_state = EXCLUDED.override_state,
+            override_end = EXCLUDED.override_end
+        """,
+        state, state_ends_at, override_state, override_end,
+    )
+
+
+# ───────────── 은행 대출 ─────────────
+
+def _loan_from_row(row) -> dict:
+    loan = dict(row)
+    for key in ("amount", "collection_amount", "collected_amount", "unpaid_from_loan"):
+        if loan[key] is not None:
+            loan[key] = float(loan[key])
+    return loan
+
+
+async def get_loans(user_id, conn=None) -> list[dict]:
+    """대출 목록 (오래된 순). 각 항목: id, amount, taken_at, collected, ..."""
+    rows = await (conn or pool()).fetch(
+        "SELECT * FROM loans WHERE user_id = $1 ORDER BY id", int(user_id)
+    )
+    return [_loan_from_row(r) for r in rows]
+
+
+async def add_loan(user_id, amount: float, taken_at, conn=None) -> None:
+    await (conn or pool()).execute(
+        "INSERT INTO loans (user_id, amount, taken_at) VALUES ($1, $2, $3)",
+        int(user_id), _num(amount), taken_at,
+    )
+
+
+_LOAN_FIELDS = {"amount", "collected", "collection_amount", "collected_amount",
+                "unpaid_from_loan", "collected_at"}
+
+
+async def update_loan(loan_id: int, conn=None, **fields) -> None:
+    unknown = set(fields) - _LOAN_FIELDS
+    if unknown:
+        raise ValueError(f"loans 테이블에 없는 필드: {sorted(unknown)}")
+    columns = list(fields)
+    values = [
+        _num(v) if c in {"amount", "collection_amount", "collected_amount", "unpaid_from_loan"} else v
+        for c, v in fields.items()
+    ]
+    sets = ", ".join(f"{c} = ${i}" for i, c in enumerate(columns, start=2))
+    await (conn or pool()).execute(f"UPDATE loans SET {sets} WHERE id = $1", loan_id, *values)
+
+
+async def delete_loan(loan_id: int, conn=None) -> None:
+    await (conn or pool()).execute("DELETE FROM loans WHERE id = $1", loan_id)
+
+
+async def users_with_overdue_loans(deadline: datetime.datetime) -> list[int]:
+    """deadline 이전에 받은, 아직 강제징수 안 된 대출이 있는 유저 목록."""
+    rows = await pool().fetch(
+        "SELECT DISTINCT user_id FROM loans WHERE NOT collected AND taken_at <= $1", deadline
+    )
+    return [r["user_id"] for r in rows]
+
+
+# ───────────── 경고 ─────────────
+
+async def get_warning(guild_id, user_id) -> dict | None:
+    """{"count", "restriction_until", "reasons": [기록 문자열, ...]} 또는 기록이 없으면 None"""
+    gid, uid = int(guild_id), int(user_id)
+    row = await pool().fetchrow(
+        "SELECT count, restriction_until FROM warnings WHERE guild_id = $1 AND user_id = $2",
+        gid, uid,
+    )
+    if row is None:
+        return None
+    logs = await pool().fetch(
+        "SELECT entry FROM warning_logs WHERE guild_id = $1 AND user_id = $2 ORDER BY id",
+        gid, uid,
+    )
+    return {
+        "count": row["count"],
+        "restriction_until": row["restriction_until"],
+        "reasons": [r["entry"] for r in logs],
+    }
+
+
+async def add_warning_count(guild_id, user_id, amount: int) -> int:
+    """경고 수를 amount 만큼 바꾸고 (0 미만으로는 안 내려감) 바뀐 경고 수를 돌려준다."""
+    return await pool().fetchval(
+        """
+        INSERT INTO warnings (guild_id, user_id, count) VALUES ($1, $2, GREATEST(0, $3::int))
+        ON CONFLICT (guild_id, user_id) DO UPDATE
+            SET count = GREATEST(0, warnings.count + $3::int)
+        RETURNING count
+        """,
+        int(guild_id), int(user_id), amount,
+    )
+
+
+async def add_warning_log(guild_id, user_id, entry: str) -> None:
+    await pool().execute(
+        "INSERT INTO warning_logs (guild_id, user_id, entry) VALUES ($1, $2, $3)",
+        int(guild_id), int(user_id), entry,
+    )
+
+
+async def set_restriction(guild_id, user_id, until) -> None:
+    """이용제한 해제 시각을 저장한다. None 이면 이용제한 기록을 지운다."""
+    await pool().execute(
+        "UPDATE warnings SET restriction_until = $3 WHERE guild_id = $1 AND user_id = $2",
+        int(guild_id), int(user_id), until,
+    )
+
+
+async def expired_restrictions(at: datetime.datetime) -> list[tuple[int, int]]:
+    """이용제한 시간이 끝난 [(guild_id, user_id), ...]"""
+    rows = await pool().fetch(
+        "SELECT guild_id, user_id FROM warnings WHERE restriction_until <= $1", at
+    )
+    return [(r["guild_id"], r["user_id"]) for r in rows]
+
+
+# ───────────── 건의 ─────────────
+
+async def add_suggestion(user_id, content: str, at: datetime.datetime) -> None:
+    async with transaction() as conn:
+        await conn.execute(
+            "INSERT INTO suggestions (user_id, content, created_at) VALUES ($1, $2, $3)",
+            int(user_id), content, at,
+        )
+        await update_user(user_id, conn, suggestion_last_at=at)
+
+
+async def list_suggestions() -> list[dict]:
+    """[{"id", "user_id", "content", "created_at"}, ...] 오래된 순"""
+    rows = await pool().fetch("SELECT * FROM suggestions ORDER BY id")
+    return [dict(r) for r in rows]
+
+
+async def delete_suggestion(suggestion_id: int) -> dict | None:
+    row = await pool().fetchrow("DELETE FROM suggestions WHERE id = $1 RETURNING *", suggestion_id)
+    return dict(row) if row else None
+
+
+async def is_suggestion_admin(user_id) -> bool:
+    return await pool().fetchval(
+        "SELECT EXISTS (SELECT 1 FROM suggestion_admins WHERE user_id = $1)", int(user_id)
+    )
+
+
+# ───────────── 전체 초기화 ─────────────
+
+# %초기화 로 비우는 테이블.
+# suggestion_admins(건의 관리자 목록)는 게임 데이터가 아니라 권한 설정이라 남긴다.
+RESET_TABLES = [
+    "users", "loans", "enhance_items", "inventory",
+    "stocks", "price_history", "portfolio", "delisted_notices", "market_state",
+    "warnings", "warning_logs", "suggestions",
+]
+
+
+async def reset_all() -> None:
+    """모든 게임 데이터를 지운다. 되돌릴 수 없다."""
+    await pool().execute(f"TRUNCATE {', '.join(RESET_TABLES)} RESTART IDENTITY")

@@ -143,8 +143,5 @@ cython_debug/
 .env
 *.json
 kkwords.txt
-schema.sql
-malgun.ttf
-database.py
-.gitignore
 __pycache__
+json_backup/

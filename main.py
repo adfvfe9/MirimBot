@@ -23,6 +23,7 @@ import asyncio
 import discord
 
 import database as db
+import instance
 from bot import client, get_token
 
 # import 하는 순간 각 파일의 명령어가 봇에 등록된다.
@@ -47,6 +48,11 @@ from features import (  # noqa: F401
 async def setup_hook():
     """봇이 디스코드에 접속하기 전에 한 번만 실행된다."""
     await db.connect()
+
+    # 다른 곳에서 봇이 이미 돌고 있으면 꺼질 때까지 기다린다. (중복 실행 방지, instance.py)
+    await instance.wait_until_only_one()
+    asyncio.create_task(instance.heartbeat(client))
+
     await stocks.load_market_state()
     await stocks.load_stock_prices()
 

@@ -93,6 +93,33 @@ def current_drift(symbol):
     return sum(e["drift"] for e in active_effects if e["symbol"] in (None, symbol))
 
 
+# %주식 화면에 붙는 뉴스 표시
+BADGE_GOOD = "🔥"
+BADGE_BAD = "🧊"
+BADGE_DEFAULT_RISK = "💥"
+
+
+def badge(symbol):
+    """종목 이름 옆에 붙일 이모지. 진행 중인 종목 뉴스가 없으면 빈 문자열."""
+    effects = [e for e in active_effects if e["symbol"] == symbol]
+    if not effects:
+        return ""
+    total = sum(e["drift"] for e in effects)
+    if total <= -DEFAULT_RISK_DRIFT[0]:
+        return BADGE_DEFAULT_RISK
+    return BADGE_GOOD if total > 0 else BADGE_BAD
+
+
+def market_badge():
+    """시장 전체 뉴스가 진행 중이면 한 줄 설명, 아니면 빈 문자열."""
+    total = sum(e["drift"] for e in active_effects if e["symbol"] is None)
+    if total > 0:
+        return "🌐 시장 호재 진행 중"
+    if total < 0:
+        return "🌐 시장 악재 진행 중"
+    return ""
+
+
 def tick_effects():
     """1분 지남: 효과 남은 시간을 줄이고 끝난 효과를 지운다."""
     for e in active_effects:

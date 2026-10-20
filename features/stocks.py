@@ -242,6 +242,10 @@ async def stock(ctx):
         "CRASH": "💥 주식부도"
     }.get(state, "❓ 알 수 없음")
 
+    market_news = news().market_badge()
+    if market_news:
+        state_text += f"\n{market_news}"
+
     embed.add_field(
         name="📊 현재 시장 상태",
         value=state_text,
@@ -261,8 +265,9 @@ async def stock(ctx):
             "― 변동 없음"
         )
 
+        badge = news().badge(name)  # 📰 진행 중인 뉴스: 🔥 호재 / 🧊 악재 / 💥 부도 위기
         embed.add_field(
-            name=name,
+            name=f"{name} {badge}".strip(),
             value=f"💵 {num(current)} byte\n({diff_str})",
             inline=True
         )
@@ -271,6 +276,7 @@ async def stock(ctx):
         value=f"<t:{timestamp}:R>",  # ✅ 여기에 쓰면 디스코드가 해석함
         inline=False
     )
+    embed.set_footer(text="📰 뉴스 진행 중: 🔥 호재 · 🧊 악재 · 💥 부도 위기  (%뉴스)")
 
     await ctx.send(embed=embed)
 

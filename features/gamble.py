@@ -12,7 +12,7 @@ from fmt import debt_line, num
 
 # ───────────── 도박 ─────────────
 GAMBLE_COOLDOWN = 10      # 초
-GAMBLE_MAX_BET = 50000    # 1회 최대 판돈 (%도박올인 도 이 금액까지만)
+GAMBLE_MAX_BET = 100000    # 1회 최대 판돈 (%도박올인 도 이 금액까지만)
 
 # (배율, 확률 %) — 판돈 × 배율 을 돌려받는다. 기대값 = 0.95 (평균적으로 판돈의 5% 손해)
 # 아무리 져도 판돈만 잃는다. (빚이 생기지 않음)
@@ -168,7 +168,7 @@ async def gamble_allin(ctx):
 # 지면 누적 보상을 전부 잃는다. 어디서 멈춰도 기대값은 비슷해서 "고 or 스탑" 배짱 싸움이 된다.
 RPS_BASE_REWARD = 1000
 RPS_MAX_STREAK = 10       # 10연승하면 자동으로 수령하고 끝 (누적 1,023,000)
-RPS_DAILY_LIMIT = 20      # 하루 최대 판수
+RPS_DAILY_LIMIT = 30      # 하루 최대 판수
 RPS_COOLDOWN = 60         # 판 사이 쿨타임 (초)
 
 rps_streaks = {}

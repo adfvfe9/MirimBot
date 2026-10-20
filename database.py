@@ -317,6 +317,14 @@ async def set_enhance_level(user_id, item_name: str, level: int, conn=None) -> N
     )
 
 
+async def all_enhance_items() -> list[dict]:
+    """강화 랭킹 / 순자산용: [{user_id, item_name, level}, ...] 레벨 높은 순"""
+    rows = await pool().fetch(
+        "SELECT user_id, item_name, level FROM enhance_items ORDER BY level DESC, item_name"
+    )
+    return [dict(r) for r in rows]
+
+
 async def delete_enhance_item(user_id, item_name: str, conn=None) -> int | None:
     """아이템을 지우고 지워진 아이템의 레벨을 돌려준다. 없으면 None."""
     return await (conn or pool()).fetchval(

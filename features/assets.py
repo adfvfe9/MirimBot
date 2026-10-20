@@ -1,12 +1,12 @@
 """순자산: %자산 (내 자산 내역), %자산랭킹 (순자산 TOP 10)
 
-순자산 = 현금 + 주식 평가액 + 적금(이자 포함) + 레버리지 포지션 가치 - 갚을 대출금 - 미납금
+순자산 = 현금 + 주식 평가액 + 적금(이자 포함) + 레버리지 포지션 가치 + 강화템 판매가 - 갚을 대출금 - 미납금
 """
 import discord
 
 import database as db
 from bot import client
-from features import bank, futures, stocks
+from features import bank, enhance, futures, stocks
 from fmt import num
 
 
@@ -25,13 +25,14 @@ def positions_value(positions):
     )
 
 
-def breakdown(user, holdings, positions, loans):
-    """순자산 내역 dict"""
+def breakdown(user, holdings, positions, loans, items):
+    """순자산 내역 dict. items = {아이템 이름: 레벨}"""
     parts = {
         "현금": user["money"],
         "주식": stock_value(holdings),
         "적금": bank.deposit_value(user),
         "레버리지": positions_value(positions),
+        "강화템": sum(enhance.SELL_PRICE.get(level, 0) for level in items.values()),
         "대출": -bank.get_total_loan(loans),
         "미납금": -user["unpaid_amount"],
     }
@@ -50,18 +51,19 @@ async def assets(ctx, member: discord.Member = None):
         await db.get_portfolio(member.id),
         await db.get_positions(member.id),
         await db.get_loans(member.id),
+        await db.get_enhance_items(member.id),
     )
 
     embed = discord.Embed(
         title=f"💼 {member.display_name}님의 자산",
         color=discord.Color.blue()
     )
-    icons = {"현금": "💵", "주식": "📈", "적금": "🏦", "레버리지": "🎢", "대출": "💳", "미납금": "🧾"}
+    icons = {"현금": "💵", "주식": "📈", "적금": "🏦", "레버리지": "🎢", "강화템": "🔨", "대출": "💳", "미납금": "🧾"}
     for name, icon in icons.items():
         if parts[name] != 0 or name in ("현금",):
             embed.add_field(name=f"{icon} {name}", value=f"{num(parts[name])} byte", inline=True)
     embed.add_field(name="🏆 순자산", value=f"**{num(parts['순자산'])} byte**", inline=False)
-    embed.set_footer(text="순자산 = 현금 + 주식 + 적금 + 레버리지 - 대출 - 미납금")
+    embed.set_footer(text="순자산 = 현금 + 주식 + 적금 + 레버리지 + 강화템 - 대출 - 미납금")
     await ctx.send(embed=embed)
 
 
@@ -80,6 +82,9 @@ async def asset_rank(ctx):
         positions.setdefault(p["user_id"], []).append(p)
     for loan in await db.all_open_loans():
         loans.setdefault(loan["user_id"], []).append(loan)
+    items = {}
+    for item in await db.all_enhance_items():
+        items.setdefault(item["user_id"], {})[item["item_name"]] = item["level"]
 
     ranking = sorted(
         (
@@ -90,6 +95,7 @@ async def asset_rank(ctx):
                     portfolios.get(u["user_id"], {}),
                     positions.get(u["user_id"], []),
                     loans.get(u["user_id"], []),
+                    items.get(u["user_id"], {}),
                 )["순자산"],
             )
             for u in users
@@ -100,7 +106,7 @@ async def asset_rank(ctx):
 
     embed = discord.Embed(
         title="🏆 순자산 랭킹 TOP 10",
-        description="현금 + 주식 + 적금 + 레버리지 - 대출 - 미납금 기준입니다.",
+        description="현금 + 주식 + 적금 + 레버리지 + 강화템 - 대출 - 미납금 기준입니다.",
         color=discord.Color.gold()
     )
     medals = {1: "🥇", 2: "🥈", 3: "🥉"}

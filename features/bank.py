@@ -8,7 +8,7 @@
   나중에 돈이 들어올 때마다 (기초수급, 주식 판매 등) 자동으로 징수된다. (schema.sql 트리거)
 
 적금
-- 하루 1.5% 단리, 최대 14일치까지만 이자가 붙는다. 원금은 최대 DEPOSIT_LIMIT.
+- 하루 DEPOSIT_RATE 단리, 최대 DEPOSIT_MAX_DAYS 일치까지만 이자가 붙는다. 원금은 최대 DEPOSIT_LIMIT.
 """
 import datetime
 import math
@@ -28,9 +28,9 @@ LOAN_INTEREST = 0.10          # 대출 이자 10%
 LOAN_DEADLINE_HOURS = 24      # 상환 기한
 LOAN_PENALTY = 1.5            # 연체 시 남은 상환액 × 1.5 가 미납금으로
 
-DEPOSIT_RATE = 0.015          # 적금 하루 이자 1.5% (단리)
-DEPOSIT_MAX_DAYS = 14         # 이자가 붙는 최대 일수
-DEPOSIT_LIMIT = 200000        # 적금 원금 한도
+DEPOSIT_RATE = 0.01           # 적금 하루 이자 1% (단리)
+DEPOSIT_MAX_DAYS = 30         # 이자가 붙는 최대 일수
+DEPOSIT_LIMIT = 500000        # 적금 원금 한도
 
 COLLECTION_INTERVAL_SECONDS = 60
 
@@ -45,7 +45,7 @@ def get_total_loan(loans):
 
 
 def deposit_multiplier(start, now=None):
-    """적금 원금에 곱할 값. 하루 1.5% 단리, 최대 14일."""
+    """적금 원금에 곱할 값. 하루 DEPOSIT_RATE 단리, 최대 DEPOSIT_MAX_DAYS 일."""
     if not start:
         return 1.0
     days = max(((now or db.now()) - start).days, 0)
@@ -339,7 +339,7 @@ async def bank(ctx):
 
 class LoanModal(Modal, title="💵 대출 금액 입력"):
     amount = TextInput(
-        label="대출할 금액 (이자 10%, 24시간 안에 상환)",
+        label=f"대출할 금액 (이자 {num(LOAN_INTEREST * 100)}%, {LOAN_DEADLINE_HOURS}시간 안에 상환)",
         placeholder="숫자만 입력",
         required=True
     )
@@ -466,7 +466,7 @@ class RepayModal(Modal, title="✅ 상환 금액 입력"):
 
 class DepositModal(Modal, title="💰 적금 금액 입력"):
     amount = TextInput(
-        label="적금할 금액 (하루 1.5%, 최대 14일)",
+        label=f"적금할 금액 (하루 {num(DEPOSIT_RATE * 100)}%, 최대 {DEPOSIT_MAX_DAYS}일)",
         placeholder="숫자만 입력",
         required=True
     )

@@ -23,7 +23,7 @@ CONSOLATION_MAX = 3000
 SEND_FEE_RATE = 0.1           # 송금 수수료 10%
 SEND_DAILY_LIMIT = 100000     # 하루 송금 한도 (수수료 제외 금액 기준)
 
-BANKRUPTCY_INTERVAL_DAYS = 2  # 파산은 2일에 1번
+BANKRUPTCY_INTERVAL_DAYS = 1  # 파산 간격 (일). 1 이면 하루에 1번
 
 
 # 머니 확인

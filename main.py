@@ -17,12 +17,11 @@
 데이터 저장은 database.py (테이블 구조는 schema.sql).
 """
 import asyncio
-import os
 
 import discord
 
 import database as db
-from bot import client
+from bot import client, get_token
 
 # import 하는 순간 각 파일의 명령어가 봇에 등록된다.
 from features import (  # noqa: F401
@@ -89,4 +88,4 @@ async def on_ready():
         print("✅ 주식 자동 갱신 루프 시작됨")
 
 
-client.run(os.environ["DISCORD_TOKEN"])
+client.run(get_token())

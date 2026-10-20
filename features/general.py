@@ -22,12 +22,42 @@ async def timeget(ctx):
 async def patchnote(ctx):
     await ctx.message.delete()
     embed = discord.Embed(
-        title="📜 패치노트 v1.2.0",
-        description="최근 업데이트 내역입니다.",
+        title="📜 패치노트 v1.2.3 — 경제 대개편",
+        description="재화 밸런스를 전부 다시 맞췄어요. 자세한 명령어는 `%도움말`에서!",
         color=0xf1c40f  # 노란색
     )
-    embed.add_field(name="✨ 새로운 기능", value="- 봇 24시간 구동", inline=False)
-    embed.set_footer(text="업데이트: 2025-10-20")
+    embed.add_field(
+        name="✨ 새로운 기능",
+        value=(
+            "- 🔨 **강화 개편**: 피파 인생강화 스타일, +1~+10, +8부터 파괴 위험 (`%강화확률`)\n"
+            "- 🎢 **레버리지**: `%롱` `%숏` `%포지션` `%청산` (최대 10배)\n"
+            "- 🏆 **순자산 랭킹**: `%자산` `%자산랭킹`, `%강화랭킹`\n"
+            "- 🤖 봇 24시간 구동"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="⚖️ 밸런스 변경",
+        value=(
+            "- 기초수급: 1만 + 연속일마다 2천 (최대 2만)\n"
+            "- 도박: 확률표 방식, 판돈까지만 잃음, 최대 10만\n"
+            "- 가위바위보: 이길 때마다 2배, 10연승 자동 수령, 하루 30판\n"
+            "- 은행: 대출 10만·이자 10%·24시간 / 적금 하루 1%\n"
+            "- 주식 판매 수수료 2%로 통일, 송금 하루 10만 한도"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🧾 빚(미납금) 규칙",
+        value=(
+            "- 대출을 24시간 안에 못 갚으면 1.5배가 미납금이 돼요\n"
+            "- 미납금은 돈이 들어올 때마다 자동으로 징수돼요\n"
+            "- 파산은 빚이 있을 때만, 대신 가진 걸 전부 잃어요"
+        ),
+        inline=False
+    )
+    embed.add_field(name="🗑️ 삭제", value="- 출석 체크", inline=False)
+    embed.set_footer(text="업데이트: 2026-10-21")
     await ctx.send(embed=embed)
 
 @client.command(aliases=['급식'])

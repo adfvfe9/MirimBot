@@ -26,6 +26,9 @@ from discord.ext import commands, tasks
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import time
+import discord
+from discord.ext import commands
+from datetime import timedelta
 
 # 한글 폰트 설정 (Windows 기준: 'Malgun Gothic')
 plt.rcParams['font.family'] = 'Malgun Gothic'
@@ -251,87 +254,6 @@ def save_token_data(data):
 
 token_data = load_token_data()
 
-SHOP_FILE = "shop_items.json"
-
-ALL_ITEMS = [
-    {
-        "name": "값싼 정보원",
-        "min_price": 1, "max_price": 1,
-        "desc": "이 정보원은 시장의 중요한 정보를 흘려줍니다!\n단.. 애매하게 말이죠.",
-        "effect": "상승/하락장 남은 시간 대충 알림"
-    },
-    {
-        "name": "파산신청서",
-        "min_price": 5, "max_price": 5,
-        "desc": "마이너스 통장을 0원으로!",
-        "effect": "머니 음수 → 0"
-    },
-    {
-        "name": "주가조작",
-        "min_price": 8, "max_price": 8,
-        "desc": "당신이 산 주식이 오르질 않는다고요?\n주가조작으로 당신의 주식을 올려보세요!\n(주의 : 다른 사람들의 주식도 올릴 수 있습니다..)",
-        "effect": "10분 초상승장, 이후 20분 부도"
-    },
-    {
-        "name": "하급 제물",
-        "min_price": 2, "max_price": 2,
-        "desc": "강화 확률을 2배로 늘려주는 제물입니다.",
-        "effect": "100레벨 가치 제물 제공 (판매불가)"
-    },
-    {
-        "name": "중급 제물",
-        "min_price": 5, "max_price": 8,
-        "desc": "강화 확률을 5배로 늘려주는 제물입니다.",
-        "effect": "400레벨 가치 제물 제공 (판매불가)"
-    },
-    {
-        "name": "상급 제물",
-        "min_price": 7, "max_price": 18,
-        "desc": "강화 시 확률을 10배로 늘려주는 제물입니다.",
-        "effect": "900레벨 가치 제물 제공 (판매불가)"
-    },
-    {
-        "name": "최상급 제물",
-        "min_price": 9, "max_price": 30,
-        "desc": "강화 시 확률을 50배로 늘려주는 제물입니다.",
-        "effect": "4900레벨 가치 제물 제공 (판매불가)"
-    },
-    {
-        "name": "사쿠라",
-        "min_price": 1, "max_price": 50,
-        "desc": "사쿠라네?\n사용 시 '유리한' 도박을 실시합니다.\n자동으로 올인됩니다.",
-        "effect": "도박 (-5 ~ 15)"
-    },
-]
-
-def load_shop_items():
-    if os.path.exists(SHOP_FILE):
-        with open(SHOP_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return refresh_shop_items()
-
-def save_shop_items(data):
-    with open(SHOP_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-
-def refresh_shop_items():
-    selected = random.sample(ALL_ITEMS, 3)
-    for item in selected:
-        item["price"] = random.randint(item["min_price"], item["max_price"])
-    data = {
-        "timestamp": int(time.time()),
-        "items": selected
-    }
-    save_shop_items(data)
-    return data
-
-def get_current_shop():
-    shop = load_shop_items()
-    now = int(time.time())
-    if now - shop["timestamp"] > 3600:
-        shop = refresh_shop_items()
-    return shop
-
 SUGGESTION_FILE = "suggestions.json"
 SUGGESTION_COOLDOWN = 3600  # 초 단위 (1시간)
 
@@ -458,75 +380,403 @@ f"KEY={api_key}&Type=json&ATPT_OFCDC_SC_CODE={edu_office_code}&SD_SCHUL_CODE={sc
         await ctx.send("오늘의 급식 정보를 불러오지 못했어요 🥲")
         print(f"[급식] Exception: {e}")
 
-@client.command(aliases=['강화'])
-async def enhance(ctx, item_name: str = None, sacrifice: str = None):
+
+
+class EnhanceView(discord.ui.View):
+    def __init__(self, ctx, item_name, do_enhance):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.item_name = item_name
+        self.do_enhance = do_enhance
+        self.finished = False
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user.id != self.ctx.author.id:
+            await interaction.response.send_message(
+                "❌ 명령어를 실행한 사람만 사용할 수 있습니다.",
+                ephemeral=True
+            )
+            return False
+
+        if self.finished:
+            await interaction.response.send_message(
+                "이미 강화 처리가 완료되었습니다.",
+                ephemeral=True
+            )
+            return False
+
+        return True
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(
+        label="강화하기",
+        style=discord.ButtonStyle.primary,
+        emoji="🔨"
+    )
+    async def enhance_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        self.finished = True
+        await self.do_enhance(interaction, maximum=False)
+
+    @discord.ui.button(
+        label="최대 강화",
+        style=discord.ButtonStyle.success,
+        emoji="💰"
+    )
+    async def max_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        self.finished = True
+        await self.do_enhance(interaction, maximum=True)
+
+    @discord.ui.button(
+        label="취소하기",
+        style=discord.ButtonStyle.secondary,
+        emoji="❌"
+    )
+    async def cancel_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        self.finished = True
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="❌ 강화 취소",
+                description="강화를 취소했습니다. 돈과 아이템은 변경되지 않았습니다.",
+                color=discord.Color.greyple()
+            ),
+            view=None
+        )
+
+
+@client.command(aliases=["강화"])
+async def enhance(
+    ctx,
+    item_name: str = None,
+    target_level: int = None
+):
     if item_name is None:
-        await ctx.send("아이템 이름을 입력해주세요! 예: `%강화 칼` 처럼 입력하면 돼요.")
+        await ctx.send(
+            "아이템 이름을 입력해주세요!\n"
+            "예: `%강화 칼`\n"
+            "목표 레벨 지정: `%강화 칼 10`"
+        )
+        return
+
+    if target_level is not None and target_level < 1:
+        await ctx.send("❌ 목표 레벨은 1 이상이어야 합니다.")
         return
 
     user_id = str(ctx.author.id)
-    now = datetime.datetime.now()
-
-    if user_id in cooldowns:
-        diff = (now - cooldowns[user_id]).total_seconds()
-        if diff < 10:
-            await ctx.send(f"아직 쿨타임이에요! {int(10 - diff)}초만 기다려주세요.")
-            return
-    cooldowns[user_id] = now
-
     user_items = enhance_data.get(user_id, {})
     current_level = user_items.get(item_name, 0)
+    balance = money_data.get(user_id, 0)
 
-    # 제물 적용
-    sacrifice_level = 0
-    if sacrifice:
-        if sacrifice == item_name:
-            await ctx.send("⚠️ 강화하려는 아이템을 제물로 사용할 수 없어요!")
-            return
-        sacrifice_level = user_items.get(sacrifice, 0)
-        # 제물 삭제
-        user_items.pop(sacrifice, None)
+    if (
+        target_level is not None
+        and target_level <= current_level
+    ):
+        await ctx.send(
+            f"❌ 현재 `{item_name}`의 레벨은 +{current_level}입니다.\n"
+            "현재 레벨보다 높은 목표 레벨을 입력해주세요."
+        )
+        return
 
-    levels_gained = 0
-    log_lines = []
+    cost = 100 * (2 ** current_level)
 
-    while True:
-        base_success_rate = 100 * math.exp(-0.01 * current_level)
-        base_success_rate = max(min(base_success_rate, 100), 0)
+    if balance < cost:
+        await ctx.send(
+            f"💸 돈이 부족합니다!\n"
+            f"현재 보유 금액: {balance:,} byte\n"
+            f"다음 강화 비용: {cost:,} byte"
+        )
+        return
 
-        # 곱연산 적용
-        final_success_rate = base_success_rate * (1 + (sacrifice_level / 100))
-        final_success_rate = min(final_success_rate, 100)  # 최대 100% 제한
+    # 실제 강화 확률과 동일한 공식 사용
+    next_level = current_level + 1
+    success_rate = min(
+        100.0,
+        100.0 / (next_level ** 0.5)
+    )
 
-        roll = uniform(0.0, 100.0)
-        success = roll <= final_success_rate
-        log_lines.append(f"+{current_level}: 기본 {base_success_rate:.3f}% + 제물 {base_success_rate * (sacrifice_level / 100):.3f}% = 최종 {final_success_rate:.3f}% → {'성공' if success else '실패'}")
+    failure_rate = 100.0 - success_rate
+    maintain_rate = failure_rate * 0.90
+    downgrade_rate = failure_rate * 0.09
+    destroy_rate = failure_rate * 0.01
 
-        if success:
-            current_level += 1
-            levels_gained += 1
+    embed = discord.Embed(
+        title="🔨 강화 시스템",
+        description=(
+            f"**아이템:** `{item_name}`\n"
+            f"**현재 레벨:** +{current_level}\n"
+            f"**목표 레벨:** "
+            f"{f'+{target_level}' if target_level is not None else '미지정'}\n"
+            f"**보유 금액:** {balance:,} byte\n"
+            f"**다음 강화 비용:** {cost:,} byte\n"
+            f"**현재 판매가:** {int(100 * (2.25 ** current_level)):,} byte\n\n"
+            "강화 방식을 선택해주세요."
+        ),
+        color=0x3498DB
+    )
+
+    embed.add_field(
+        name=f"📊 다음 강화 (+{next_level}) 결과 확률",
+        value=(
+            f"✅ 강화 성공: **{success_rate:.2f}%**\n"
+            f"⚪ 레벨 유지: **{maintain_rate:.2f}%**\n"
+            f"📉 레벨 하락: **{downgrade_rate:.2f}%**\n"
+            f"💥 아이템 파괴: **{destroy_rate:.2f}%**"
+        ),
+        inline=False
+    )
+
+    if target_level is not None:
+        embed.add_field(
+            name="🎯 목표 강화",
+            value=(
+                f"최대 강화 버튼을 누르면 +{target_level}에 도달하거나 "
+                "강화가 중단될 때까지 진행합니다."
+            ),
+            inline=False
+        )
+
+    embed.set_footer(
+        text="강화하기: 1회 시도 | 최대 강화: 가능한 만큼 반복"
+    )
+
+    async def do_enhance(
+        interaction: discord.Interaction,
+        maximum: bool = False
+    ):
+        await interaction.response.defer()
+
+        # 최신 잔액 및 아이템 레벨 확인
+        balance = money_data.get(user_id, 0)
+        user_items = enhance_data.setdefault(user_id, {})
+        level = user_items.get(item_name, 0)
+
+        attempts = 0
+        successes = 0
+        maintained = 0
+        downgraded = 0
+        destroyed = False
+        total_cost = 0
+        logs = []
+
+        while True:
+            # 목표 레벨 도달 시 종료
+            if (
+                target_level is not None
+                and level >= target_level
+            ):
+                break
+
+            cost = 100 * (2 ** level)
+
+            # 다음 시도 비용이 부족한 경우
+            if balance < cost:
+                if attempts == 0:
+                    result = discord.Embed(
+                        title="💸 강화 불가",
+                        description=(
+                            f"필요한 금액: {cost:,} byte\n"
+                            f"보유 금액: {balance:,} byte"
+                        ),
+                        color=discord.Color.red()
+                    )
+                    await interaction.edit_original_response(
+                        embed=result,
+                        view=None
+                    )
+                    return
+                break
+
+            # 강화 비용 차감
+            balance -= cost
+            total_cost += cost
+            attempts += 1
+
+            # 다음 레벨 기준 성공 확률
+            next_level = level + 1
+            success_rate = min(
+                100.0,
+                100.0 / (next_level ** 0.5)
+            )
+
+            if uniform(0.0, 100.0) < success_rate:
+                level += 1
+                successes += 1
+                logs.append(f"✅ +{level} 강화 성공")
+
+            else:
+                penalty = uniform(0.0, 100.0)
+
+                if penalty < 90:
+                    maintained += 1
+                    logs.append(
+                        f"⚪ 강화 실패 (레벨 유지: +{level})"
+                    )
+
+                elif penalty < 99:
+                    level = max(0, level - 1)
+                    downgraded += 1
+                    logs.append(
+                        f"📉 강화 실패 (레벨 하락: +{level})"
+                    )
+
+                else:
+                    destroyed = True
+                    logs.append("💥 강화 실패 (아이템 파괴)")
+                    break
+
+            # 일반 강화는 한 번만 시도
+            if not maximum:
+                break
+
+            # 목표가 지정되었고 도달했다면 종료
+            if (
+                target_level is not None
+                and level >= target_level
+            ):
+                break
+
+            # 다음 강화 비용을 감당할 수 없다면 종료
+            next_cost = 100 * (2 ** level)
+
+            if balance < next_cost:
+                break
+
+        # 데이터 저장
+        money_data[user_id] = balance
+
+        if destroyed:
+            user_items.pop(item_name, None)
         else:
-            break
+            user_items[item_name] = level
 
-    user_items[item_name] = current_level
-    enhance_data[user_id] = user_items
-    save_data(enhance_data)
+        enhance_data[user_id] = user_items
 
-    embed = discord.Embed(title="🔧 아이템 강화 결과 🔧", color=0x3498db)
-    embed.add_field(name="아이템", value=item_name, inline=False)
-    embed.add_field(name="최종 강화 레벨", value=f"+{current_level}", inline=False)
-    embed.add_field(name="성공 횟수", value=f"{levels_gained}번 강화 성공!", inline=False)
-    # embed.add_field(name="강화 과정 로그", value="\n".join(log_lines), inline=False)
-    if sacrifice:
-        embed.add_field(name="제물", value=f"{sacrifice} (+{sacrifice_level})", inline=False)
+        save_json(money_data_file, money_data)
+        save_data(enhance_data)
 
-    await ctx.send(embed=embed)
+        # 결과 임베드
+        result = discord.Embed(
+            title="💥 아이템 파괴!" if destroyed else "🔧 강화 결과",
+            color=(
+                discord.Color.red()
+                if destroyed
+                else discord.Color.green()
+            )
+        )
 
-    chunk_size = 20  # 한 메시지에 보낼 로그 줄 수 (적당히 조절 가능)
+        if destroyed:
+            result.description = "강화 실패로 아이템이 파괴되었습니다."
 
-    for i in range(0, len(log_lines), chunk_size):
-        chunk = log_lines[i:i+chunk_size]
-        await ctx.send("```" + "\n".join(chunk) + "```")
+        elif (
+            target_level is not None
+            and level >= target_level
+        ):
+            result.description = (
+                f"🎉 목표 레벨 +{target_level}에 도달했습니다!"
+            )
+
+        elif target_level is not None and maximum:
+            result.description = (
+                f"목표 레벨: +{target_level}\n"
+                f"중단 레벨: +{level}\n"
+                "돈이 부족하거나 강화가 중단되었습니다."
+            )
+
+        elif maximum:
+            result.description = "💰 최대 강화가 완료되었습니다."
+
+        else:
+            result.description = (
+                logs[0] if logs else "강화가 진행되지 않았습니다."
+            )
+
+        result.add_field(
+            name="아이템",
+            value=f"`{item_name}`",
+            inline=True
+        )
+        result.add_field(
+            name="최종 레벨",
+            value="파괴됨" if destroyed else f"+{level}",
+            inline=True
+        )
+        result.add_field(
+            name="시도 횟수",
+            value=f"{attempts}회",
+            inline=True
+        )
+        result.add_field(
+            name="성공 횟수",
+            value=f"{successes}회",
+            inline=True
+        )
+        result.add_field(
+            name="유지 횟수",
+            value=f"{maintained}회",
+            inline=True
+        )
+        result.add_field(
+            name="하락 횟수",
+            value=f"{downgraded}회",
+            inline=True
+        )
+        result.add_field(
+            name="총 강화 비용",
+            value=f"{total_cost:,} byte",
+            inline=True
+        )
+        result.add_field(
+            name="남은 돈",
+            value=f"{balance:,} byte",
+            inline=True
+        )
+        result.add_field(
+            name="판매가",
+            value=(
+                "0 byte"
+                if destroyed
+                else f"{int(100 * (2.25 ** level)):,} byte"
+            ),
+            inline=True
+        )
+
+        if logs:
+            result.add_field(
+                name="강화 기록 (최근 10회)",
+                value="\n".join(logs[-10:]),
+                inline=False
+            )
+
+        result.set_footer(text="강화 결과가 저장되었습니다.")
+
+        await interaction.edit_original_response(
+            embed=result,
+            view=None
+        )
+
+    view = EnhanceView(ctx, item_name, do_enhance)
+    message = await ctx.send(embed=embed, view=view)
+    view.message = message
 
 @client.command(aliases=['강화목록'])
 async def enhance_list(ctx):
@@ -574,7 +824,7 @@ async def moneyadd(ctx, member: discord.Member, amount: int):
         money_data[user_id] = money_data.get(user_id, 0) + amount
         save_money_data(money_data)
         embed = Embed(
-            description=f"✅ **{member.display_name}** 님에게 **{amount} byte**를 추가했습니다.",
+            description=f"✅ **{member.display_name}** 님에게@ **{amount} byte**를 추가했습니다.",
             color=discord.Color.green()
         )
         await interaction.response.edit_message(embed=embed, view=None)
@@ -745,26 +995,7 @@ class ShopDropdown(Select):
             ephemeral=True
         )
 
-@client.command(aliases=["상점"])
-async def shop(ctx):
-    await ctx.message.delete()
-    shop_data = get_current_shop()
-    items = shop_data["items"]
 
-    embed = discord.Embed(title="🛍️ 오늘의 상점", color=discord.Color.gold())
-    for item in items:
-        embed.add_field(
-            name=f"{item['name']} - 💰 {item['price']} 토큰",
-            value=f"```{item['desc']}```",  # 작은 글씨 효과 + 접힘 처리
-            inline=False
-        )
-    embed.set_footer(text="🕒 상점은 1시간마다 갱신됩니다.")
-
-    dropdown = ShopDropdown(ctx.author, items)
-    view = View()
-    view.add_item(dropdown)
-
-    await ctx.send(embed=embed, view=view)
 
 import math
 
@@ -780,6 +1011,7 @@ def calc_byte_log10(level):
         return 0
     return int(0.8 * level * math.log10(level)) + 1
 
+
 @client.command(aliases=['강화판매'])
 async def sell_enhance(ctx, item_name: str):
     await ctx.message.delete()
@@ -787,19 +1019,15 @@ async def sell_enhance(ctx, item_name: str):
 
     # 아이템이 없으면
     if user_id not in enhance_data or item_name not in enhance_data[user_id]:
-        await ctx.send(f"{ctx.author.mention} | ❌ `{item_name}` 아이템이 없습니다.")
+        await ctx.send(
+            f"{ctx.author.mention} | ❌ `{item_name}` 아이템이 없습니다."
+        )
         return
 
     level = enhance_data[user_id][item_name]
 
-    # 공식 분기
-    if level <= 100:
-        earned = calc_byte_log2(level)
-    else:
-        earned = calc_byte_log10(level)
-
-    # 최소 0원 보장
-    earned = max(0, earned)
+    # 판매 가격: 1000 * 3^강화 레벨
+    earned = (int)(100 * (2.25 ** level))
 
     # 머니 업데이트
     money_data[user_id] = money_data.get(user_id, 0) + earned
@@ -809,16 +1037,32 @@ async def sell_enhance(ctx, item_name: str):
     del enhance_data[user_id][item_name]
     save_data(enhance_data)
 
-    # 임베디드 출력
+    # 임베드 출력
     embed = discord.Embed(
         title="💰 강화 아이템 판매",
-        description=f"{ctx.author.mention}님이 `{item_name} +{level}`을 판매하였습니다!",
+        description=(
+            f"{ctx.author.mention}님이 "
+            f"`{item_name} +{level}`을 판매하였습니다!"
+        ),
         color=0x00ccff
     )
-    embed.add_field(name="획득 Byte", value=f"**{earned} byte**", inline=False)
+
+    embed.add_field(
+        name="💵 획득 Byte",
+        value=f"**{earned:,} byte**",
+        inline=False
+    )
+
+    embed.add_field(
+        name="💳 현재 보유 금액",
+        value=f"**{money_data[user_id]:,} byte**",
+        inline=False
+    )
+
     embed.set_footer(text="판매가 완료되었습니다.")
 
     await ctx.send(embed=embed)
+
 
 # ───────────── 주식 시장 상태 ─────────────
 market_file = "market_state.json"
@@ -875,14 +1119,16 @@ def set_override_state(state, duration_seconds):
 
 # ───────────── 주식 기본 정보 ─────────────
 stock_info = {
-    "JAVA":   {"base": 50,  "limit": 0.05},
-    "C":      {"base": 30,  "limit": 0.016},
-    "C++":    {"base": 80,  "limit": 0.033},
-    "C#":     {"base": 100, "limit": 0.025},
-    "PYTHON": {"base": 10,  "limit": 0.1},
-    "HTML":   {"base": 40,  "limit": 0.04},
-    "JS":     {"base": 300, "limit": 0.0142857},
-    "TS":     {"base": 100, "limit": 0.15}
+    "JAVA":   {"base": 500,  "limit": 0.08},
+    "C":      {"base": 300,  "limit": 0.06},
+    "C++":    {"base": 800,  "limit": 0.10},
+    "C#":     {"base": 1200, "limit": 0.09},
+    "PYTHON": {"base": 100,  "limit": 0.15},
+    "HTML":   {"base": 400,  "limit": 0.05},
+    "JS":     {"base": 2000, "limit": 0.02},
+    "TS":     {"base": 1000, "limit": 0.12},
+    "RUST":   {"base": 200,  "limit": 0.25},
+    "RUBY":   {"base": 1500, "limit": 0.04}
 }
 
 stock_file = "stock_prices.json"
@@ -948,13 +1194,13 @@ def update_stocks():
 
         # ✅ 상승장 / 하락장 / 초상승장 / 주식부도 효과 (곱연산)
         if effective_state == "BULL":
-            new_price *= (1 + random.uniform(0, 0.02))  # +0~2%
+            new_price *= (1 + random.uniform(-0.005, 0.015))  # +-0.5~1%
         elif effective_state == "BEAR":
-            new_price *= (1 - random.uniform(0, 0.015))   # -0~1.5%
+            new_price *= (1 - random.uniform(-0.005, 0.01))   # 0.5~-1.5%
         elif effective_state == "HYPER_BULL":
-            new_price *= (1 + random.uniform(0.01, 0.1))  # +1~10%
+            new_price *= (1 + random.uniform(-0.02, 0.1))  # -2~10%
         elif effective_state == "CRASH":
-            new_price *= (1 - random.uniform(0.02, 0.15))    # -2~15%
+            new_price *= (1 - random.uniform(-0.015, 0.15))    # 1.5~-15%
 
         # 상장폐지 처리
         if new_price <= 0:
@@ -1212,7 +1458,9 @@ stock_aliases = {
     "P": "PYTHON", "PYTHON": "PYTHON",
     "H": "HTML", "HTML": "HTML",
     "JS": "JS",
-    "TS": "TS"
+    "TS": "TS",
+    "RUST": "RUST", "RS" : "RUST",
+    "RUBY": "RUBY", "RB": "RUBY"
 }
 
 # ───────────── %주식구매 ─────────────
@@ -1324,7 +1572,7 @@ async def sell_stock(ctx, stock_name: str, amount: int):
 
 
     price = stock_prices[stock_key]["current"]
-    total_earned = round(price * amount * 0.8, 2)  # 수수료 20%
+    total_earned = round(price * amount * 0.98, 2)  # 수수료 20%
 
     embed = discord.Embed(
         title="📤 주식 판매 확인",
@@ -1514,6 +1762,131 @@ async def buy_all_stock(ctx, stock_name: str):
     no = Button(label="취소", style=ButtonStyle.red)
     yes.callback = confirm_callback
     no.callback = cancel_callback
+    view.add_item(yes)
+    view.add_item(no)
+
+    await ctx.send(embed=embed, view=view)
+
+@client.command(aliases=["주식절반구매"])
+async def buy_half_stock(ctx, stock_name: str):
+    await ctx.message.delete()
+    user_id = str(ctx.author.id)
+    stock_key = stock_aliases.get(stock_name.upper())
+
+    if not stock_key or stock_key not in stock_prices:
+        await ctx.send("❌ 존재하지 않는 주식입니다.")
+        return
+
+    price = stock_prices[stock_key]["current"]
+    balance = money_data.get(user_id, 0)
+
+    # 현재 잔액으로 구매 가능한 최대 수량의 절반
+    max_amount = int(balance // price)
+    buy_amount = max_amount // 2
+
+    if buy_amount <= 0:
+        await ctx.send("❌ 잔액이 부족하거나 절반 구매가 가능한 수량이 없습니다.")
+        return
+
+    total_cost = round(price * buy_amount, 2)
+
+    embed = discord.Embed(
+        title="📥 주식 절반 구매 확인",
+        description=f"{ctx.author.mention}, **{stock_key}**를 구매 가능한 최대 수량의 절반만큼 구매하시겠습니까?",
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="구매 수량", value=f"{buy_amount} 주", inline=True)
+    embed.add_field(name="1주 가격", value=f"{price:.2f} byte", inline=True)
+    embed.add_field(name="총 가격", value=f"{total_cost:.2f} byte", inline=False)
+    embed.add_field(
+        name="구매 후 예상 잔액",
+        value=f"{balance - total_cost:.2f} byte",
+        inline=False
+    )
+
+    view = View()
+
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message(
+                "이 버튼은 당신의 것이 아닙니다.",
+                ephemeral=True
+            )
+            return
+
+        # 확인 버튼을 누르기 전 잔액 및 주가가 변경되었는지 검사
+        current_price = stock_prices[stock_key]["current"]
+        current_balance = money_data.get(user_id, 0)
+
+        if current_price != price or current_balance < total_cost:
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    title="❌ 구매 실패",
+                    description="주가 또는 잔액이 변경되었습니다. 명령어를 다시 실행해주세요.",
+                    color=discord.Color.red()
+                ),
+                view=None
+            )
+            return
+
+        money_data[user_id] -= total_cost
+
+        portfolio.setdefault(user_id, {}).setdefault(
+            stock_key,
+            {"quantity": 0, "avg_price": price}
+        )
+        stock = portfolio[user_id][stock_key]
+
+        total_quantity = stock["quantity"] + buy_amount
+        total_spent = stock["quantity"] * stock["avg_price"] + total_cost
+
+        stock["quantity"] = total_quantity
+        stock["avg_price"] = total_spent / total_quantity
+
+        save_json(money_data_file, money_data)
+        save_json(portfolio_file, portfolio)
+
+        result = discord.Embed(
+            title="✅ 절반 구매 완료",
+            description=f"{stock_key} {buy_amount}주를 구매했습니다.",
+            color=discord.Color.green()
+        )
+        result.add_field(
+            name="사용 금액",
+            value=f"{total_cost:.2f} byte",
+            inline=True
+        )
+        result.add_field(
+            name="남은 잔액",
+            value=f"{money_data[user_id]:.2f} byte",
+            inline=True
+        )
+
+        await interaction.response.edit_message(embed=result, view=None)
+
+    async def cancel_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message(
+                "이 버튼은 당신의 것이 아닙니다.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="❌ 거래 취소됨",
+                description="구매가 취소되었습니다.",
+                color=discord.Color.red()
+            ),
+            view=None
+        )
+
+    yes = Button(label="확인", style=ButtonStyle.green)
+    no = Button(label="취소", style=ButtonStyle.red)
+
+    yes.callback = confirm_callback
+    no.callback = cancel_callback
+
     view.add_item(yes)
     view.add_item(no)
 
@@ -1789,9 +2162,9 @@ async def gamble(ctx, amount: int):
     last_time = gamble_cooldowns.get(user_id)
     if last_time:
         elapsed = (now - last_time).total_seconds()
-        if elapsed < 60:
-            remain = int(60 - elapsed)
-            minutes, seconds = divmod(remain, 60)
+        if elapsed < 10:
+            remain = int(10 - elapsed)
+            minutes, seconds = divmod(remain, 10)
             await ctx.send(f"⏳ 아직 도박할 수 없어요! 다시 시도하려면 **{seconds}초** 기다려주세요.")
             return
 
@@ -1957,9 +2330,9 @@ async def gamble_allin(ctx):
     last_time = gamble_cooldowns.get(user_id)
     if last_time:
         elapsed = (now - last_time).total_seconds()
-        if elapsed < 60:
-            remain = int(60 - elapsed)
-            minutes, seconds = divmod(remain, 60)
+        if elapsed < 10:
+            remain = int(10 - elapsed)
+            minutes, seconds = divmod(remain, 10)
             await ctx.send(f"⏳ 아직 도박할 수 없어요! 다시 시도하려면 **{seconds}초** 기다려주세요.")
             return
 
@@ -2002,75 +2375,6 @@ async def gamble_allin(ctx):
 
     await ctx.send(embed=embed)
 
-@client.command(aliases=["가방"])
-async def inventory(ctx,* ,target: discord.Member = None):
-    await ctx.message.delete()
-    target = target or ctx.author
-    uid = str(target.id)
-    items = user_items.get(uid, {})
-
-    embed = discord.Embed(
-        title=f"🎒 {target.display_name}님의 가방",
-        description="보유한 아이템 목록입니다.",
-        color=0x95a5a6
-    )
-
-    if not items:
-        embed.description = "아이템이 없습니다."
-    else:
-        for name, count in items.items():
-            embed.add_field(name=name, value=f"{count}개", inline=False)
-
-    await ctx.send(embed=embed)
-
-@client.command(aliases=["사용"])
-async def use_item(ctx, *, item_name: str):
-    await ctx.message.delete()
-    uid = str(ctx.author.id)
-    item_name = item_name.strip()
-
-    items = user_items.get(uid, {})
-    if item_name not in items or items[item_name] <= 0:
-        await ctx.send("❌ 해당 아이템을 보유하고 있지 않습니다.")
-        return
-
-    if item_name == "파산신청":
-        current_money = money_data.get(uid, 0)
-        if current_money >= 0:
-            await ctx.send("❌ 잔액이 0 이하일 때만 사용할 수 있는 아이템입니다.")
-            return
-
-        money_data[uid] = 0
-        save_money_data(money_data)
-        await ctx.send("✅ 파산신청 아이템을 사용하여 잔액이 0으로 초기화되었습니다.")
-
-    elif item_name == "상하차":
-        # 상승장/하락장 상태와 남은 시간 가져오기
-        state = "📈 상승장" if current_market == "BULL" else "📉 하락장"
-        minutes, seconds = divmod(market_wait_seconds, 60)
-
-        embed = discord.Embed(
-            title="📊 현재 시장 상태",
-            description=f"시장 상태: {state}\n남은 시간: {minutes}분 {seconds}초",
-            color=discord.Color.teal()
-        )
-        await ctx.author.send(embed=embed)
-        await ctx.send("📩 시장 정보를 DM으로 보냈습니다!")
-    elif item_name == "주식과열":
-        global override_state, override_end
-        set_override_state("HYPER_BULL", 10 * 60)
-        await ctx.send("🔥 '주식과열' 아이템을 사용했습니다! 10분간 초상승장이 시작됩니다.")
-    else:
-        await ctx.send("⚠️ 이 아이템은 아직 사용할 수 없습니다.")
-        return
-
-    # 아이템 차감
-    items[item_name] -= 1
-    if items[item_name] <= 0:
-        del items[item_name]
-    user_items[uid] = items
-    save_items(user_items)
-
 @client.command(aliases=["위로금"])
 async def consolation(ctx):
     await ctx.message.delete()
@@ -2081,14 +2385,14 @@ async def consolation(ctx):
         await ctx.send("❌ 이미 오늘 위로금을 받으셨습니다. 내일 다시 시도해주세요.")
         return
 
-    base_amount = random.randint(1, 100)
+    base_amount = random.randint(1, 1000)
     bonus_amount = 0
 
     # ✅ 머니가 마이너스일 경우 추가 위로금 지급
     money_balance = money_data.get(user_id, 0)
     if money_balance < 0:
         debt = abs(money_balance)
-        bonus_amount = int(50 * math.sqrt(debt))
+        bonus_amount = int(500 * math.sqrt(debt))
 
     total_amount = base_amount + bonus_amount
     money_data[user_id] = money_balance + total_amount
@@ -2120,91 +2424,418 @@ from discord import ButtonStyle
 BANK_SYSTEM_FILE = "bank_system.json"
 money_data_file = "money_data.json"
 
+LOAN_DEADLINE_HOURS = 24
+COLLECTION_INTERVAL_SECONDS = 60
+
+
+# =========================
+# JSON 데이터 관리
+# =========================
+
 def load_json(path, default):
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                result = json.load(f)
+                return result if isinstance(result, dict) else default
+        except (json.JSONDecodeError, OSError):
+            return default
     return default
+
 
 def save_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
+
 bank_system = load_json(BANK_SYSTEM_FILE, {})
 money_data = load_json(money_data_file, {})
 
+
 def ensure_bank_user(user_id):
+    user_id = str(user_id)
+
     if user_id not in bank_system:
         bank_system[user_id] = {
-            "credit_score": 1000.0,
-            "loan_amount": 0.0,
-            "loan_date": None,
+            "loans": [],
             "deposit_amount": 0.0,
-            "deposit_start": None
+            "deposit_start": None,
+            "unpaid_amount": 0.0
         }
+
+    data = bank_system[user_id]
+
+    data.setdefault("loans", [])
+    data.setdefault("deposit_amount", 0.0)
+    data.setdefault("deposit_start", None)
+    data.setdefault("unpaid_amount", 0.0)
+
+    # 구버전의 단일 대출 데이터를 새 대출 목록으로 변환
+    old_amount = float(data.get("loan_amount", 0) or 0)
+
+    if not data["loans"] and old_amount > 0:
+        data["loans"].append({
+            "amount": old_amount,
+            "date": (
+                data.get("loan_date")
+                or datetime.datetime.now().isoformat()
+            ),
+            "collected": False
+        })
+
+    # 구버전 신용점수 시스템 제거
+    data.pop("credit_score", None)
+
+    save_json(BANK_SYSTEM_FILE, bank_system)
+    return data
+
+
+def get_total_loan(data):
+    return sum(
+        max(0.0, float(loan.get("amount", 0)))
+        for loan in data["loans"]
+    )
+
+
+def parse_amount(value):
+    try:
+        amount = float(value.replace(",", "").strip())
+
+        if not math.isfinite(amount):
+            return None
+
+        return amount
+
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def get_server_average_balance():
+    """
+    잔액이 양수인 유저만 평균에 포함한다.
+    """
+    balances = []
+
+    for balance in money_data.values():
+        try:
+            balance = float(balance)
+
+            if math.isfinite(balance) and balance > 0:
+                balances.append(balance)
+
+        except (ValueError, TypeError):
+            continue
+
+    if not balances:
+        return 0.0
+
+    return sum(balances) / len(balances)
+
+
+# =========================
+# 강제징수 처리
+# =========================
+
+def collect_overdue(user_id):
+    """
+    대출별 24시간 경과 여부를 확인한다.
+
+    강제징수액 = 대출 원금의 제곱
+    잔액이 부족하면 보유 잔액을 징수하고 부족분을 미납금에 누적한다.
+    이미 처리한 대출은 다시 징수하지 않는다.
+    """
+    user_id = str(user_id)
+    data = ensure_bank_user(user_id)
+    now = datetime.datetime.now()
+
+    try:
+        balance = float(money_data.get(user_id, 0))
+    except (ValueError, TypeError):
+        balance = 0.0
+
+    messages = []
+    changed = False
+
+    for loan in data["loans"]:
+        if loan.get("collected", False):
+            continue
+
+        try:
+            loan_date = datetime.datetime.fromisoformat(loan["date"])
+            principal = float(loan["amount"])
+        except (ValueError, TypeError, KeyError):
+            continue
+
+        deadline = loan_date + datetime.timedelta(
+            hours=LOAN_DEADLINE_HOURS
+        )
+
+        if now < deadline:
+            continue
+
+        if principal <= 0:
+            loan["collected"] = True
+            changed = True
+            continue
+
+        collection_amount = principal ** 2
+
+        # 징수 가능한 금액은 현재 보유 잔액까지
+        collected_now = min(max(balance, 0.0), collection_amount)
+        balance -= collected_now
+
+        unpaid = max(0.0, collection_amount - collected_now)
+
+        data["unpaid_amount"] = (
+            float(data.get("unpaid_amount", 0)) + unpaid
+        )
+
+        # 중복 징수 방지
+        loan["collected"] = True
+        loan["collection_amount"] = collection_amount
+        loan["collected_amount"] = collected_now
+        loan["unpaid_from_loan"] = unpaid
+        loan["collected_at"] = now.isoformat()
+
+        changed = True
+
+        message = (
+            f"대출 원금 {principal:.2f} Byte: "
+            f"징수 {collected_now:.2f} Byte"
+        )
+
+        if unpaid > 0:
+            message += f", 미납 {unpaid:.2f} Byte"
+
+        messages.append(message)
+
+    if changed:
+        money_data[user_id] = round(balance, 2)
+        save_json(money_data_file, money_data)
         save_json(BANK_SYSTEM_FILE, bank_system)
-    return bank_system[user_id]
+
+    return messages
+
+
+def collect_all_overdue():
+    """
+    저장된 모든 유저의 대출을 검사한다.
+    은행 명령어를 사용하지 않은 유저의 연체도 처리한다.
+    """
+    all_messages = []
+
+    for user_id in list(bank_system.keys()):
+        messages = collect_overdue(user_id)
+
+        if messages:
+            all_messages.append((user_id, messages))
+
+    return all_messages
+
+
+# =========================
+# 자동 강제징수 작업
+# =========================
+
+@tasks.loop(seconds=COLLECTION_INTERVAL_SECONDS)
+async def bank_collection_loop():
+    try:
+        results = await asyncio.to_thread(collect_all_overdue)
+
+        for user_id, messages in results:
+            print(
+                f"[은행 강제징수] 유저 {user_id}: "
+                + " / ".join(messages)
+            )
+
+    except Exception as e:
+        print(f"[은행 강제징수 오류] {e}")
+
+
+@bank_collection_loop.before_loop
+async def before_bank_collection_loop():
+    await client.wait_until_ready()
+
+
+# on_ready 이벤트를 이미 사용 중이라면 기존 on_ready에
+# 아래의 시작 코드를 합쳐서 사용해야 한다.
+@client.listen("on_ready")
+async def start_bank_collection_loop():
+    if not bank_collection_loop.is_running():
+        bank_collection_loop.start()
+
+    # 봇이 꺼져 있던 동안 발생한 연체도 시작 시 검사
+    try:
+        results = await asyncio.to_thread(collect_all_overdue)
+
+        for user_id, messages in results:
+            print(
+                f"[은행 재시작 강제징수] 유저 {user_id}: "
+                + " / ".join(messages)
+            )
+
+    except Exception as e:
+        print(f"[은행 시작 시 강제징수 오류] {e}")
+
+
+# =========================
+# 은행 명령어
+# =========================
 
 @client.command(aliases=["은행"])
 async def bank(ctx):
     await ctx.message.delete()
+
     user_id = str(ctx.author.id)
-    now = datetime.datetime.now()
     data = ensure_bank_user(user_id)
 
-    deadline_str = "없음"
-    if data["loan_date"]:
-        loan_date = datetime.datetime.fromisoformat(data["loan_date"])
-        deadline = loan_date + datetime.timedelta(days=7)
-        remain = deadline - now
-        deadline_str = f"{remain.days}일 {remain.seconds // 3600}시간 남음" if remain.total_seconds() > 0 else "기한 초과"
+    # 명령어 실행 시에도 즉시 연체 확인
+    collection_messages = await asyncio.to_thread(
+        collect_overdue,
+        user_id
+    )
 
-    max_total_loan = data["credit_score"] * 50
-    remaining_loan = max_total_loan - data["loan_amount"]
-    remaining_loan = max(0, remaining_loan)  # 음수가 안 되도록 보정
+    data = ensure_bank_user(user_id)
+
+    total_loan = get_total_loan(data)
+    average_balance = get_server_average_balance()
+    max_loan = average_balance
+
+    deadline_lines = []
+
+    for index, loan in enumerate(data["loans"], start=1):
+        if loan.get("collected", False):
+            continue
+
+        try:
+            loan_date = datetime.datetime.fromisoformat(loan["date"])
+        except (ValueError, TypeError, KeyError):
+            continue
+
+        deadline = loan_date + datetime.timedelta(
+            hours=LOAN_DEADLINE_HOURS
+        )
+
+        remain = deadline - datetime.datetime.now()
+
+        if remain.total_seconds() > 0:
+            total_seconds = int(remain.total_seconds())
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            deadline_text = f"{hours}시간 {minutes}분 남음"
+        else:
+            deadline_text = "강제징수 대기"
+
+        deadline_lines.append(
+            f"대출 {index}: {float(loan['amount']):.2f} Byte "
+            f"({deadline_text})"
+        )
 
     embed = discord.Embed(
         title="🏦 은행 시스템",
         description="버튼을 눌러 기능을 선택하세요.",
         color=discord.Color.teal()
     )
-    embed.add_field(name="⚡️ 신용점수", value=f"{data['credit_score']:.2f}", inline=True)
-    embed.add_field(name="💳 대출금", value=f"{data['loan_amount']:.2f} byte", inline=True)
-    embed.add_field(name="📆 상환 기한", value=deadline_str, inline=True)
-    embed.add_field(name="💸 적금액", value=f"{data['deposit_amount']:.2f} byte", inline=True)
-    embed.add_field(name="💰 대출 가능", value=f"{remaining_loan:.2f} byte", inline=True)
+
+    embed.add_field(
+        name="💳 총 대출금",
+        value=f"{total_loan:.2f} Byte",
+        inline=True
+    )
+
+    embed.add_field(
+        name="💰 적금 원금",
+        value=f"{float(data['deposit_amount']):.2f} Byte",
+        inline=True
+    )
+
+    embed.add_field(
+        name="⚠️ 미납 강제징수액",
+        value=f"{float(data['unpaid_amount']):.2f} Byte",
+        inline=True
+    )
+
+    embed.add_field(
+        name="🏦 최대 총대출 한도",
+        value=f"{max_loan:.2f} Byte",
+        inline=True
+    )
+
+    embed.add_field(
+        name="📆 대출별 강제징수 기한",
+        value=(
+            "\n".join(deadline_lines)
+            if deadline_lines
+            else "진행 중인 대출 없음"
+        ),
+        inline=False
+    )
+
     embed.set_footer(
         text=f"요청자: {ctx.author}",
         icon_url=ctx.author.avatar.url if ctx.author.avatar else None
     )
 
+    if collection_messages:
+        embed.add_field(
+            name="🚨 강제징수 결과",
+            value="\n".join(collection_messages),
+            inline=False
+        )
 
-    view = View()
+    view = View(timeout=300)
 
-    # 버튼 정의 및 콜백
-    loan_button = Button(label="💵 대출", style=ButtonStyle.green)
-    repay_button = Button(label="✅ 상환", style=ButtonStyle.primary)
-    deposit_button = Button(label="💰 적금", style=ButtonStyle.secondary)
-    withdraw_button = Button(label="💳 출금", style=ButtonStyle.red)
+    loan_button = Button(
+        label="💵 대출",
+        style=ButtonStyle.green
+    )
+    repay_button = Button(
+        label="✅ 상환",
+        style=ButtonStyle.primary
+    )
+    deposit_button = Button(
+        label="💰 적금",
+        style=ButtonStyle.secondary
+    )
+    withdraw_button = Button(
+        label="💳 출금",
+        style=ButtonStyle.red
+    )
 
     async def loan_callback(interaction):
         if str(interaction.user.id) != user_id:
-            return await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
+            return await interaction.response.send_message(
+                "이 버튼은 당신의 것이 아닙니다.",
+                ephemeral=True
+            )
+
         await interaction.response.send_modal(LoanModal(user_id))
 
     async def repay_callback(interaction):
         if str(interaction.user.id) != user_id:
-            return await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
+            return await interaction.response.send_message(
+                "이 버튼은 당신의 것이 아닙니다.",
+                ephemeral=True
+            )
+
         await interaction.response.send_modal(RepayModal(user_id))
 
     async def deposit_callback(interaction):
         if str(interaction.user.id) != user_id:
-            return await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
+            return await interaction.response.send_message(
+                "이 버튼은 당신의 것이 아닙니다.",
+                ephemeral=True
+            )
+
         await interaction.response.send_modal(DepositModal(user_id))
 
     async def withdraw_callback(interaction):
         if str(interaction.user.id) != user_id:
-            return await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
+            return await interaction.response.send_message(
+                "이 버튼은 당신의 것이 아닙니다.",
+                ephemeral=True
+            )
+
         await interaction.response.send_modal(WithdrawModal(user_id))
 
     loan_button.callback = loan_callback
@@ -2219,111 +2850,304 @@ async def bank(ctx):
 
     await ctx.send(embed=embed, view=view)
 
-# ✅ Modal 정의
+
+# =========================
+# 대출
+# =========================
+
 class LoanModal(Modal, title="💵 대출 금액 입력"):
-    amount = TextInput(label="대출할 금액", placeholder="숫자만 입력", required=True)
+    amount = TextInput(
+        label="대출할 금액",
+        placeholder="숫자만 입력",
+        required=True
+    )
 
     def __init__(self, user_id):
         super().__init__()
-        self.user_id = user_id
+        self.user_id = str(user_id)
 
     async def on_submit(self, interaction):
-        amount = float(self.amount.value)
+        amount = parse_amount(self.amount.value)
+
+        if amount is None or amount <= 0:
+            return await interaction.response.send_message(
+                "❌ 올바른 대출 금액을 입력하세요.",
+                ephemeral=True
+            )
+
+        # 신청자 본인의 연체 대출부터 처리
+        await asyncio.to_thread(collect_overdue, self.user_id)
+
         data = ensure_bank_user(self.user_id)
-        max_loan = data["credit_score"] * 50
 
-        if data["loan_amount"] > 0:
-            return await interaction.response.send_message("❌ 기존 대출이 있습니다.", ephemeral=True)
-        if amount > max_loan:
-            return await interaction.response.send_message("❌ 대출 한도를 초과했습니다.", ephemeral=True)
+        # 총대출금 기준으로 한도 검사
+        average_balance = get_server_average_balance()
+        max_total_loan = average_balance
+        current_total_loan = get_total_loan(data)
+        remaining_limit = max(
+            0.0,
+            max_total_loan - current_total_loan
+        )
 
-        data["loan_amount"] = amount
-        data["loan_date"] = datetime.datetime.now().isoformat()
-        money_data[self.user_id] = money_data.get(self.user_id, 0) + amount
+        if amount > remaining_limit:
+            return await interaction.response.send_message(
+                f"❌ 대출 한도를 초과했습니다.\n"
+                f"서버 평균 잔액: {average_balance:.2f} Byte\n"
+                f"현재 총대출금: {current_total_loan:.2f} Byte\n"
+                f"최대 총대출 한도: {max_total_loan:.2f} Byte\n"
+                f"추가 대출 가능 금액: {remaining_limit:.2f} Byte",
+                ephemeral=True
+            )
+
+        data["loans"].append({
+            "amount": amount,
+            "date": datetime.datetime.now().isoformat(),
+            "collected": False
+        })
+
+        money_data[self.user_id] = (
+            float(money_data.get(self.user_id, 0)) + amount
+        )
 
         save_json(money_data_file, money_data)
         save_json(BANK_SYSTEM_FILE, bank_system)
 
-        await interaction.response.send_message(f"✅ {amount:.2f} byte 대출 완료!", ephemeral=True)
+        await interaction.response.send_message(
+            f"✅ {amount:.2f} Byte 대출 완료!\n"
+            f"현재 총대출금: {get_total_loan(data):.2f} Byte\n"
+            f"최대 총대출 한도: {max_total_loan:.2f} Byte\n"
+            f"대출일로부터 24시간 후 강제징수됩니다.",
+            ephemeral=True
+        )
+
+
+# =========================
+# 상환
+# =========================
 
 class RepayModal(Modal, title="✅ 상환 금액 입력"):
-    amount = TextInput(label="상환할 금액", placeholder="숫자만 입력", required=True)
+    amount = TextInput(
+        label="상환할 금액",
+        placeholder="숫자만 입력",
+        required=True
+    )
 
-    def __init__(self, user_id): super().__init__(); self.user_id = user_id
+    def __init__(self, user_id):
+        super().__init__()
+        self.user_id = str(user_id)
 
     async def on_submit(self, interaction):
-        amount = float(self.amount.value)
-        now = datetime.datetime.now()
+        amount = parse_amount(self.amount.value)
+
+        if amount is None or amount <= 0:
+            return await interaction.response.send_message(
+                "❌ 올바른 상환 금액을 입력하세요.",
+                ephemeral=True
+            )
+
         data = ensure_bank_user(self.user_id)
+        balance = float(money_data.get(self.user_id, 0))
+        total_loan = get_total_loan(data)
 
-        if amount <= 0 or amount > data["loan_amount"]:
-            return await interaction.response.send_message("❌ 상환 금액 오류", ephemeral=True)
-        if money_data.get(self.user_id, 0) < amount:
-            return await interaction.response.send_message("❌ 잔액 부족", ephemeral=True)
+        if total_loan <= 0:
+            return await interaction.response.send_message(
+                "❌ 상환할 대출이 없습니다.",
+                ephemeral=True
+            )
 
-        money_data[self.user_id] -= amount
-        data["loan_amount"] -= amount
+        if amount > total_loan:
+            return await interaction.response.send_message(
+                f"❌ 총 대출금은 {total_loan:.2f} Byte입니다.",
+                ephemeral=True
+            )
 
-        if data["loan_amount"] <= 0:
-            if data["loan_date"]:
-                loan_date = datetime.datetime.fromisoformat(data["loan_date"])
-                if now <= loan_date + datetime.timedelta(days=7):
-                    min(data["credit_score"] * 1.025, 1000.0)
-                else:
-                    data["credit_score"] *= 0.9
-            data["loan_date"] = None
+        if amount > balance:
+            return await interaction.response.send_message(
+                "❌ 잔액이 부족합니다.",
+                ephemeral=True
+            )
+
+        remaining = amount
+
+        # 오래된 대출부터 상환
+        for loan in data["loans"]:
+            if remaining <= 0:
+                break
+
+            loan_amount = float(loan["amount"])
+            paid = min(loan_amount, remaining)
+
+            loan["amount"] = round(loan_amount - paid, 2)
+            remaining = round(remaining - paid, 2)
+
+        data["loans"] = [
+            loan for loan in data["loans"]
+            if float(loan["amount"]) > 0.001
+        ]
+
+        money_data[self.user_id] = round(balance - amount, 2)
 
         save_json(money_data_file, money_data)
         save_json(BANK_SYSTEM_FILE, bank_system)
 
-        await interaction.response.send_message(f"✅ {amount:.2f} byte 상환 완료!", ephemeral=True)
+        await interaction.response.send_message(
+            f"✅ {amount:.2f} Byte 상환 완료!\n"
+            f"남은 대출금: {get_total_loan(data):.2f} Byte",
+            ephemeral=True
+        )
+
+
+# =========================
+# 적금
+# =========================
 
 class DepositModal(Modal, title="💰 적금 금액 입력"):
-    amount = TextInput(label="적금할 금액", placeholder="숫자만 입력", required=True)
+    amount = TextInput(
+        label="적금할 금액",
+        placeholder="숫자만 입력",
+        required=True
+    )
 
-    def __init__(self, user_id): super().__init__(); self.user_id = user_id
-
-    async def on_submit(self, interaction):
-        amount = float(self.amount.value)
-        data = ensure_bank_user(self.user_id)
-
-        if money_data.get(self.user_id, 0) < amount:
-            return await interaction.response.send_message("❌ 잔액 부족", ephemeral=True)
-
-        money_data[self.user_id] -= amount
-        data["deposit_amount"] += amount
-        data["deposit_start"] = datetime.datetime.now().isoformat()
-        data["credit_score"] = min(data["credit_score"] * 1.025, 1000.0)
-
-        save_json(money_data_file, money_data)
-        save_json(BANK_SYSTEM_FILE, bank_system)
-
-        await interaction.response.send_message(f"✅ {amount:.2f} byte 적금 완료!", ephemeral=True)
-
-class WithdrawModal(Modal, title="💳 출금"):
-    dummy = TextInput(label="(입력 필요 없음)", required=False)
-
-    def __init__(self, user_id): super().__init__(); self.user_id = user_id
+    def __init__(self, user_id):
+        super().__init__()
+        self.user_id = str(user_id)
 
     async def on_submit(self, interaction):
-        data = ensure_bank_user(self.user_id)
+        amount = parse_amount(self.amount.value)
 
-        if data["deposit_amount"] <= 0:
-            return await interaction.response.send_message("❌ 적금 없음", ephemeral=True)
+        if amount is None or amount <= 0:
+            return await interaction.response.send_message(
+                "❌ 올바른 적금 금액을 입력하세요.",
+                ephemeral=True
+            )
+
+        data = ensure_bank_user(self.user_id)
+        balance = float(money_data.get(self.user_id, 0))
+
+        if balance < amount:
+            return await interaction.response.send_message(
+                "❌ 잔액이 부족합니다.",
+                ephemeral=True
+            )
 
         now = datetime.datetime.now()
-        start = datetime.datetime.fromisoformat(data["deposit_start"])
-        days = max((now - start).days, 0)
-        total = data["deposit_amount"] * ((1.1) ** days)
 
-        money_data[self.user_id] = money_data.get(self.user_id, 0) + round(total, 2)
-        data["deposit_amount"] = 0.0
-        data["deposit_start"] = None
+        if float(data["deposit_amount"]) <= 0:
+            data["deposit_start"] = now.isoformat()
+
+        data["deposit_amount"] = round(
+            float(data["deposit_amount"]) + amount,
+            2
+        )
+
+        money_data[self.user_id] = round(balance - amount, 2)
 
         save_json(money_data_file, money_data)
         save_json(BANK_SYSTEM_FILE, bank_system)
 
-        await interaction.response.send_message(f"✅ 출금 완료! {round(total, 2)} byte 반환됨", ephemeral=True)
+        await interaction.response.send_message(
+            f"✅ {amount:.2f} Byte 적금 완료!\n"
+            f"현재 적금 원금: {data['deposit_amount']:.2f} Byte",
+            ephemeral=True
+        )
+
+
+# =========================
+# 적금 부분 출금 / 전액 출금
+# =========================
+
+class WithdrawModal(Modal, title="💳 적금 출금"):
+    amount = TextInput(
+        label="출금할 금액 (전액은 '전액')",
+        placeholder="예: 1000 또는 전액",
+        required=True
+    )
+
+    def __init__(self, user_id):
+        super().__init__()
+        self.user_id = str(user_id)
+
+    async def on_submit(self, interaction):
+        data = ensure_bank_user(self.user_id)
+
+        principal = float(data["deposit_amount"])
+
+        if principal <= 0:
+            return await interaction.response.send_message(
+                "❌ 적금이 없습니다.",
+                ephemeral=True
+            )
+
+        now = datetime.datetime.now()
+        start_str = data.get("deposit_start")
+
+        if start_str:
+            start = datetime.datetime.fromisoformat(start_str)
+            days = max((now - start).days, 0)
+        else:
+            days = 0
+
+        # 기존 일복리 10% 유지
+        multiplier = 1.1 ** days
+        total_value = principal * multiplier
+
+        raw_amount = self.amount.value.strip()
+
+        if raw_amount.lower() in ("전액", "전체", "all", "max"):
+            withdraw_amount = total_value
+        else:
+            withdraw_amount = parse_amount(raw_amount)
+
+            if withdraw_amount is None or withdraw_amount <= 0:
+                return await interaction.response.send_message(
+                    "❌ 올바른 출금 금액을 입력하세요.",
+                    ephemeral=True
+                )
+
+            if withdraw_amount > total_value:
+                return await interaction.response.send_message(
+                    f"❌ 출금 가능 금액은 {total_value:.2f} Byte입니다.",
+                    ephemeral=True
+                )
+
+        withdraw_amount = round(withdraw_amount, 2)
+
+        # 출금액에 비례해 적금 원금 차감
+        principal_to_remove = min(
+            principal,
+            withdraw_amount / multiplier
+        )
+
+        remaining_principal = max(
+            0.0,
+            principal - principal_to_remove
+        )
+
+        money_data[self.user_id] = round(
+            float(money_data.get(self.user_id, 0)) + withdraw_amount,
+            2
+        )
+
+        if remaining_principal < 0.01:
+            data["deposit_amount"] = 0.0
+            data["deposit_start"] = None
+        else:
+            data["deposit_amount"] = round(
+                remaining_principal,
+                2
+            )
+
+            # 잔여 적금의 이자는 출금 시점부터 다시 계산
+            data["deposit_start"] = now.isoformat()
+
+        save_json(money_data_file, money_data)
+        save_json(BANK_SYSTEM_FILE, bank_system)
+
+        await interaction.response.send_message(
+            f"✅ {withdraw_amount:.2f} Byte 출금 완료!\n"
+            f"남은 적금 원금: {data['deposit_amount']:.2f} Byte",
+            ephemeral=True
+        )
 
 WELFARE_FILE = "welfare_data.json"
 
@@ -2361,7 +3185,7 @@ async def welfare(ctx):
         user["streak"] = 0
 
     bonus_times = min(user["streak"], 20)
-    amount = 10 * (2 ** bonus_times)
+    amount = 10000 * (4 ** bonus_times)
 
     # 지급
     money_data[user_id] = money_data.get(user_id, 0) + amount
@@ -2382,6 +3206,147 @@ async def welfare(ctx):
     embed.set_author(name=str(ctx.author), icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
 
     await ctx.send(embed=embed)
+
+bankruptcy_data_file = "bankruptcy_data.json"
+
+def load_bankruptcy():
+    try:
+        with open(bankruptcy_data_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_bankruptcy(data):
+    with open(bankruptcy_data_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+@client.command()
+async def 파산(ctx):
+    await ctx.message.delete()
+
+    user_id = str(ctx.author.id)
+    money = money_data.get(user_id, 0)
+    today = datetime.datetime.now().date().isoformat()
+
+    bankruptcy_data = load_bankruptcy()
+    last_bankruptcy = bankruptcy_data.get(user_id)
+
+    if last_bankruptcy == today:
+        embed = discord.Embed(
+            title="📛 파산 불가",
+            description="오늘은 이미 파산했습니다.",
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="내일 다시 이용해주세요.")
+        return await ctx.send(embed=embed)
+
+    embed = discord.Embed(
+        title="⚠️ 파산 확인",
+        description=(
+            f"현재 보유한 돈이 **{money:,} byte** 있습니다.\n\n"
+            "정말 파산하시겠습니까?\n"
+            "파산하면 보유한 돈이 전부 **0 byte**로 초기화됩니다."
+        ),
+        color=discord.Color.orange()
+    )
+
+    class BankruptcyView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=30)
+
+        async def interaction_check(self, interaction: discord.Interaction):
+            if interaction.user.id != ctx.author.id:
+                await interaction.response.send_message(
+                    "❌ 명령어를 실행한 사람만 선택할 수 있습니다.",
+                    ephemeral=True
+                )
+                return False
+            return True
+
+        @discord.ui.button(
+            label="파산하기",
+            style=discord.ButtonStyle.danger,
+            emoji="💸"
+        )
+        async def confirm(
+            self,
+            interaction: discord.Interaction,
+            button: discord.ui.Button
+        ):
+            try:
+                money_data[user_id] = 0
+                save_json(money_data_file, money_data)
+
+                bankruptcy_data = load_bankruptcy()
+                bankruptcy_data[user_id] = datetime.datetime.now().date().isoformat()
+                save_bankruptcy(bankruptcy_data)
+
+                for item in self.children:
+                    item.disabled = True
+
+                result_embed = discord.Embed(
+                    title="💸 파산 완료",
+                    description=(
+                        f"기존 보유 금액: **{money:,} byte**\n"
+                        "현재 보유 금액: **0 byte**\n\n"
+                        "모든 돈을 잃었습니다. 다시 열심히 모아보세요!"
+                    ),
+                    color=discord.Color.red()
+                )
+
+                await interaction.response.edit_message(
+                    embed=result_embed,
+                    view=self
+                )
+
+            except Exception as e:
+                print(f"[파산 버튼 오류] {type(e).__name__}: {e}")
+
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        "❌ 파산 처리 중 오류가 발생했습니다. 관리자에게 문의해주세요.",
+                        ephemeral=True
+                    )
+
+        @discord.ui.button(
+            label="취소",
+            style=discord.ButtonStyle.secondary,
+            emoji="❌"
+        )
+        async def cancel(
+            self,
+            interaction: discord.Interaction,
+            button: discord.ui.Button
+        ):
+            for item in self.children:
+                item.disabled = True
+
+            cancel_embed = discord.Embed(
+                title="✅ 파산 취소",
+                description="파산을 취소했습니다. 기존 자산은 그대로 유지됩니다.",
+                color=discord.Color.green()
+            )
+
+            await interaction.response.edit_message(
+                embed=cancel_embed,
+                view=self
+            )
+
+        async def on_timeout(self):
+            for item in self.children:
+                item.disabled = True
+
+            # 메시지가 이미 삭제되었거나 수정할 수 없으면 무시
+            try:
+                if self.message:
+                    await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    view = BankruptcyView()
+    message = await ctx.send(embed=embed, view=view)
+    view.message = message
+
 
 # 유저 찾기 함수
 async def find_member(ctx, name_or_mention):
@@ -2623,7 +3588,6 @@ async def set_attendance_channel_error(ctx, error):
 
 @client.command(aliases=["토큰구매", "토큰교환"])
 async def buy_token(ctx, amount: int = 1):
-    await ctx.message.delete()
     await ctx.message.delete()
     user_id = str(ctx.author.id)
     user_name = ctx.author.display_name
@@ -3091,5 +4055,454 @@ async def remove_suggestion(ctx, number: int = None):
 
     await ctx.send(embed=embed)
 
+@client.command(aliases=["청소"])
+@commands.has_permissions(administrator=True)
+async def clean(ctx, amount: int):
+    for i in range(amount):
+        await ctx.message.delete()
+
+@client.command(aliases=["박준현", "ㅄ", "영포티"])
+async def fourty(ctx, member: discord.Member = None):
+    embed = discord.Embed(
+        title='영포티'
+    )
+    await ctx.send(embed = embed)
+
+@client.command(aliases=["홍성재"])
+async def goa(ctx, member: discord.Member = None):
+    embed = discord.Embed(
+            title='고아',
+            description=(
+                        "김미영\n"
+                        "홍창균\n"
+                        "펑"
+            ),
+            color=discord.Color.gold()
+        )
+    await ctx.send(embed = embed)
+
+rps_streaks = {}
+rps_cooldowns = {}
+
+
+class RPSView(discord.ui.View):
+    def __init__(self, player_id: int):
+        super().__init__(timeout=600)
+
+        self.player_id = player_id
+        self.streak = 0
+        self.pending_reward = 0
+        self.finished = False
+        self.played = False
+        self.waiting_for_choice = True
+
+        # 처음에는 가위바위보 버튼만 사용 가능
+        self.continue_game.disabled = True
+        self.cash_out.disabled = True
+
+    async def interaction_check(
+        self,
+        interaction: discord.Interaction
+    ) -> bool:
+        # 다른 유저의 버튼 클릭 차단
+        if interaction.user.id != self.player_id:
+            await interaction.response.send_message(
+                "❌ 다른 사람의 가위바위보 게임입니다! "
+                "본인이 시작한 게임의 버튼만 누를 수 있습니다.",
+                ephemeral=True
+            )
+            return False
+
+        # 종료된 게임의 버튼 클릭 차단
+        if self.finished:
+            await interaction.response.send_message(
+                "이미 종료된 게임입니다.",
+                ephemeral=True
+            )
+            return False
+
+        return True
+
+    def make_embed(
+        self,
+        title: str,
+        description: str,
+        color=discord.Color.blurple()
+    ):
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=color
+        )
+
+        embed.add_field(
+            name="🔥 현재 연승",
+            value=f"**{self.streak}연승**",
+            inline=True
+        )
+
+        embed.add_field(
+            name="💰 누적 보상",
+            value=f"**{self.pending_reward:,} Byte**",
+            inline=True
+        )
+
+        next_reward = 1000 * math.factorial(self.streak + 1)
+
+        embed.add_field(
+            name="🎁 다음 승리 보상",
+            value=f"**+{next_reward:,} Byte**",
+            inline=False
+        )
+
+        embed.set_footer(
+            text="그만하고 수령을 누르면 누적 보상을 받을 수 있습니다."
+        )
+
+        return embed
+
+    async def play(
+        self,
+        interaction: discord.Interaction,
+        choice: str
+    ):
+        if not self.waiting_for_choice:
+            await interaction.response.send_message(
+                "먼저 계속하기 버튼을 눌러 다음 판을 시작해 주세요.",
+                ephemeral=True
+            )
+            return
+
+        user_id = str(self.player_id)
+        now = time.time()
+
+        # 첫 판 시작 시에만 쿨타임 검사
+        if not self.played:
+            last_play = rps_cooldowns.get(user_id, 0)
+            remaining = 60 - (now - last_play)
+
+            if remaining > 0:
+                await interaction.response.send_message(
+                    f"⏳ 쿨타임이 **{math.ceil(remaining)}초** 남았습니다.",
+                    ephemeral=True
+                )
+                return
+
+            rps_cooldowns[user_id] = now
+            self.played = True
+
+        # 선택 중복 방지
+        self.waiting_for_choice = False
+
+        # 이번 판의 선택 버튼 비활성화
+        self.scissors.disabled = True
+        self.rock.disabled = True
+        self.paper.disabled = True
+
+        bot_choice = random.choice(["가위", "바위", "보"])
+
+        embed = discord.Embed(
+            title="✊ 가위바위보 결과",
+            description=(
+                f"👤 **내 선택:** {choice}\n"
+                f"🤖 **봇 선택:** {bot_choice}"
+            ),
+            color=discord.Color.blurple()
+        )
+
+        # 무승부: 연승과 누적 보상 유지
+        if choice == bot_choice:
+            embed.color = discord.Color.gold()
+
+            embed.add_field(
+                name="🤝 무승부!",
+                value="연승과 누적 보상이 유지됩니다.",
+                inline=False
+            )
+
+        # 승리
+        elif (
+            (choice == "가위" and bot_choice == "보")
+            or (choice == "바위" and bot_choice == "가위")
+            or (choice == "보" and bot_choice == "바위")
+        ):
+            self.streak += 1
+
+            reward = 1000 * math.factorial(self.streak)
+            self.pending_reward += reward
+
+            embed.color = discord.Color.green()
+
+            embed.add_field(
+                name="🎉 승리!",
+                value=(
+                    f"이번 승리 보상: **{reward:,} Byte**\n"
+                    f"누적 보상: **{self.pending_reward:,} Byte**"
+                ),
+                inline=False
+            )
+
+        # 패배: 연승과 누적 보상 초기화
+        else:
+            self.streak = 0
+            self.pending_reward = 0
+            self.finished = True
+
+            rps_streaks[user_id] = 0
+
+            for button in self.children:
+                button.disabled = True
+
+            embed.color = discord.Color.red()
+
+            embed.add_field(
+                name="💀 패배!",
+                value="연승이 초기화되었고 누적 보상을 잃었습니다.",
+                inline=False
+            )
+
+            embed.set_footer(text="게임 종료")
+
+            await interaction.response.edit_message(
+                embed=embed,
+                view=self
+            )
+            return
+
+        rps_streaks[user_id] = self.streak
+
+        # 결과가 나온 뒤에만 계속하기/수령 버튼 활성화
+        self.continue_game.disabled = False
+        self.cash_out.disabled = self.pending_reward <= 0
+
+        embed.add_field(
+            name="❓ 계속하시겠습니까?\n",
+            value=(
+                "🎲 **계속하기:** 다음 판에 도전합니다.\n"
+                "💰 **그만하고 수령:** 누적 보상을 받습니다."
+            ),
+            inline=False
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=self
+        )
+
+    # ==============================
+    # 가위바위보 선택 버튼
+    # ==============================
+
+    @discord.ui.button(
+        label="가위",
+        emoji="✌️",
+        style=discord.ButtonStyle.primary,
+        row=0
+    )
+    async def scissors(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        await self.play(interaction, "가위")
+
+    @discord.ui.button(
+        label="바위",
+        emoji="✊",
+        style=discord.ButtonStyle.primary,
+        row=0
+    )
+    async def rock(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        await self.play(interaction, "바위")
+
+    @discord.ui.button(
+        label="보",
+        emoji="✋",
+        style=discord.ButtonStyle.primary,
+        row=0
+    )
+    async def paper(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        await self.play(interaction, "보")
+
+    # ==============================
+    # 다음 판 진행 버튼
+    # ==============================
+
+    @discord.ui.button(
+        label="계속하기",
+        emoji="🎲",
+        style=discord.ButtonStyle.success,
+        row=1
+    )
+    async def continue_game(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        if not self.played:
+            await interaction.response.send_message(
+                "먼저 가위바위보를 진행해 주세요.",
+                ephemeral=True
+            )
+            return
+
+        if self.waiting_for_choice:
+            await interaction.response.send_message(
+                "이미 다음 판을 진행할 수 있는 상태입니다.",
+                ephemeral=True
+            )
+            return
+
+        self.waiting_for_choice = True
+
+        # 다음 판을 위해 선택 버튼 활성화
+        self.scissors.disabled = False
+        self.rock.disabled = False
+        self.paper.disabled = False
+
+        self.continue_game.disabled = True
+        self.cash_out.disabled = True
+
+        embed = self.make_embed(
+            "✊ 다음 판!",
+            "가위·바위·보 중 하나를 선택하세요."
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=self
+        )
+
+    # ==============================
+    # 누적 보상 수령 버튼
+    # ==============================
+
+    @discord.ui.button(
+        label="그만하고 수령",
+        emoji="💰",
+        style=discord.ButtonStyle.danger,
+        row=1
+    )
+    async def cash_out(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        user_id = str(self.player_id)
+
+        if self.pending_reward <= 0:
+            await interaction.response.send_message(
+                "수령할 보상이 없습니다.",
+                ephemeral=True
+            )
+            return
+
+        reward = self.pending_reward
+
+        # 보상 지급 및 저장
+        money_data[user_id] = money_data.get(user_id, 0) + reward
+        save_money_data(money_data)
+
+        self.finished = True
+
+        for button in self.children:
+            button.disabled = True
+
+        embed = discord.Embed(
+            title="💰 보상 수령 완료!",
+            description=(
+                f"수령 보상: **+{reward:,} Byte**\n"
+                f"현재 잔액: **{money_data[user_id]:,} Byte**\n"
+                f"최종 연승: **{self.streak}연승**"
+            ),
+            color=discord.Color.green()
+        )
+
+        embed.set_footer(text="가위바위보 게임 종료")
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=self
+        )
+
+    # ==============================
+    # 시간 초과 처리
+    # ==============================
+
+    async def on_timeout(self):
+        if self.finished:
+            return
+
+        self.finished = True
+
+        for button in self.children:
+            button.disabled = True
+
+        # 시간 초과 시 미수령 보상은 지급하지 않음
+        try:
+            if hasattr(self, "message") and self.message:
+                await self.message.edit(view=self)
+        except discord.HTTPException:
+            pass
+
+
+# ==============================
+# 가위바위보 명령어
+# ==============================
+
+@client.command(aliases=["가위바위보", "가위바위보게임", "ㄱㅇㅂㅇㅂ", "짱깨뽀"])
+async def rps(ctx):
+    user_id = str(ctx.author.id)
+
+    # 새 게임 시작 쿨타임 확인
+    remaining = 60 - (
+        time.time() - rps_cooldowns.get(user_id, 0)
+    )
+
+    if remaining > 0:
+        await ctx.send(
+            f"⏳ 가위바위보 쿨타임이 **{math.ceil(remaining)}초** 남았습니다."
+        )
+        return
+
+    view = RPSView(ctx.author.id)
+
+    embed = discord.Embed(
+        title="✊ 가위바위보",
+        description=(
+            "아래 버튼을 눌러 봇과 대결하세요!\n\n"
+            "✌️ **가위** · ✊ **바위** · ✋ **보**\n\n"
+        ),
+        color=discord.Color.blurple()
+    )
+
+    embed.add_field(
+        name="🔥 현재 연승",
+        value="**0연승**",
+        inline=True
+    )
+
+    embed.add_field(
+        name="💰 누적 보상",
+        value="**0 Byte**",
+        inline=True
+    )
+
+    embed.set_footer(
+        text=f"{ctx.author.display_name}의 가위바위보"
+    )
+
+    view.message = await ctx.send(
+        embed=embed,
+        view=view
+    )
 
 client.run(os.getenv("DISCORD_TOKEN"))

@@ -29,10 +29,19 @@ import time
 import discord
 from discord.ext import commands
 from datetime import timedelta
+import os
+from matplotlib import font_manager
 
-# 한글 폰트 설정 (Windows 기준: 'Malgun Gothic')
-plt.rcParams['font.family'] = 'Malgun Gothic'
-plt.rcParams['axes.unicode_minus'] = False  # 마이너스 기호 깨짐 방지
+font_path = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    'malgun.ttf'
+)
+
+font_manager.fontManager.addfont(font_path)
+plt.rcParams['font.family'] = font_manager.FontProperties(
+    fname=font_path
+).get_name()
+plt.rcParams['axes.unicode_minus'] = False
 
 # Bot 선언
 intents = discord.Intents.default()
@@ -311,13 +320,12 @@ async def timeget(ctx):
 async def patchnote(ctx):
     await ctx.message.delete()
     embed = discord.Embed(
-        title="📜 패치노트 v1.1.10",
+        title="📜 패치노트 v1.2.0",
         description="최신 버전 업데이트입니다.",
         color=0xf1c40f  # 노란색
     )
-    embed.add_field(name="✨ 새로운 기능", value="- 출석체크 버튼 추가", inline=False)
-    embed.add_field(name="🔮 예정 사항", value="- 봇 24시간 가동", inline=False)
-    embed.set_footer(text="업데이트: 2025-06-24")
+    embed.add_field(name="✨ 새로운 기능", value="- 봇 24시간 구동", inline=False)
+    embed.set_footer(text="업데이트: 2025-10-20")
     await ctx.send(embed=embed)
 
 @client.command(aliases=['급식'])

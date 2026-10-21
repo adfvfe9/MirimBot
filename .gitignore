@@ -144,3 +144,4 @@ cython_debug/
 *.json
 __pycache__
 json_backup/
+docs/notion_commands.csv

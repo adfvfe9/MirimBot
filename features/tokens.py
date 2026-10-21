@@ -7,6 +7,7 @@ from discord.ext import commands
 from discord.ui import Button, Select, View
 
 import database as db
+import respond
 from bot import client
 from fmt import num
 
@@ -26,8 +27,9 @@ class ShopDropdown(Select):
         super().__init__(placeholder="구매할 아이템을 선택하세요", options=options, min_values=1, max_values=1)
 
     async def callback(self, interaction: discord.Interaction):
+        await respond.defer(interaction)
         if interaction.user != self.user:
-            await interaction.response.send_message("이 상점은 당신의 것이 아닙니다!", ephemeral=True)
+            await respond.reply(interaction, "이 상점은 당신의 것이 아닙니다!", ephemeral=True)
             return
 
         selected_name = self.values[0]
@@ -44,13 +46,13 @@ class ShopDropdown(Select):
                 await db.add_inventory_item(user_id, selected_name, 1, conn)
 
         if user_token < price:
-            await interaction.response.send_message(
+            await respond.reply(interaction,
                 f"❌ `{selected_name}` 구매에 필요한 **{price - user_token} 토큰**이 부족합니다!",
                 ephemeral=True
             )
             return
 
-        await interaction.response.send_message(
+        await respond.reply(interaction,
             f"✅ `{selected_name}` 아이템을 **{price} 토큰**에 구매했습니다!",
             ephemeral=True
         )
@@ -109,14 +111,15 @@ async def buy_token(ctx, amount: int = 1):
     view = View()
 
     async def confirm_callback(interaction):
+        await respond.defer(interaction)
         if interaction.user != ctx.author:
-            await interaction.response.send_message("이 버튼은 당신의 것이 아니에요!", ephemeral=True)
+            await respond.reply(interaction, "이 버튼은 당신의 것이 아니에요!", ephemeral=True)
             return
 
         # 결제 및 토큰 증가
         user_tokens = await purchase_tokens(user_id, amount, price, total_cost)
         if user_tokens is None:
-            await interaction.response.edit_message(
+            await respond.edit(interaction,
                 embed=discord.Embed(
                     title="❌ 구매 실패",
                     description="잔액 또는 토큰 가격이 변경되었습니다. 명령어를 다시 실행해주세요.",
@@ -135,10 +138,11 @@ async def buy_token(ctx, amount: int = 1):
         result.add_field(name="소모한 금액", value=f"{num(total_cost)} byte", inline=True)
         result.add_field(name="다음 구매 가격", value=f"{num(user_tokens['price'])} byte", inline=True)
 
-        await interaction.response.edit_message(embed=result, view=None)
+        await respond.edit(interaction, embed=result, view=None)
 
     async def cancel_callback(interaction):
-        await interaction.response.edit_message(
+        await respond.defer(interaction)
+        await respond.edit(interaction,
             embed=discord.Embed(title="❌ 구매 취소", description="구매가 취소되었습니다.", color=discord.Color.red()),
             view=None
         )
@@ -204,14 +208,15 @@ async def buy_token_max(ctx):
     view = View()
 
     async def confirm_callback(interaction):
+        await respond.defer(interaction)
         if interaction.user != ctx.author:
-            await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다!", ephemeral=True)
+            await respond.reply(interaction, "이 버튼은 당신의 것이 아닙니다!", ephemeral=True)
             return
 
         # 교환 처리
         user_tokens = await purchase_tokens(user_id, max_tokens, start_price, total_cost)
         if user_tokens is None:
-            await interaction.response.edit_message(
+            await respond.edit(interaction,
                 embed=discord.Embed(
                     title="❌ 교환 실패",
                     description="잔액 또는 토큰 가격이 변경되었습니다. 명령어를 다시 실행해주세요.",
@@ -231,10 +236,11 @@ async def buy_token_max(ctx):
         result.add_field(name="소모한 금액", value=f"{num(total_cost)} byte", inline=True)
         result.add_field(name="다음 가격", value=f"{num(user_tokens['price'])} byte", inline=True)
 
-        await interaction.response.edit_message(embed=result, view=None)
+        await respond.edit(interaction, embed=result, view=None)
 
     async def cancel_callback(interaction):
-        await interaction.response.edit_message(
+        await respond.defer(interaction)
+        await respond.edit(interaction,
             embed=discord.Embed(
                 title="❌ 교환 취소",
                 description="최대 교환이 취소되었습니다.",
@@ -274,8 +280,9 @@ async def add_token(ctx, member: discord.Member, amount: int):
     view = View()
 
     async def confirm_callback(interaction):
+        await respond.defer(interaction)
         if interaction.user != ctx.author:
-            await interaction.response.send_message("이 버튼은 당신의 명령이 아닙니다!", ephemeral=True)
+            await respond.reply(interaction, "이 버튼은 당신의 명령이 아닙니다!", ephemeral=True)
             return
 
         tokens = await db.add_tokens(user_id, amount)
@@ -286,10 +293,11 @@ async def add_token(ctx, member: discord.Member, amount: int):
             color=discord.Color.green()
         )
         result.add_field(name="총 보유 토큰", value=f"{tokens} 개", inline=False)
-        await interaction.response.edit_message(embed=result, view=None)
+        await respond.edit(interaction, embed=result, view=None)
 
     async def cancel_callback(interaction):
-        await interaction.response.edit_message(
+        await respond.defer(interaction)
+        await respond.edit(interaction,
             embed=discord.Embed(title="❌ 작업 취소", description="토큰 추가가 취소되었습니다.", color=discord.Color.red()),
             view=None
         )
@@ -329,13 +337,14 @@ async def remove_token(ctx, member: discord.Member, amount: int):
     view = View()
 
     async def confirm_callback(interaction):
+        await respond.defer(interaction)
         if interaction.user != ctx.author:
-            await interaction.response.send_message("이 버튼은 당신의 명령이 아닙니다!", ephemeral=True)
+            await respond.reply(interaction, "이 버튼은 당신의 명령이 아닙니다!", ephemeral=True)
             return
 
         tokens = await db.add_tokens(user_id, -amount)
         if tokens is None:
-            await interaction.response.edit_message(
+            await respond.edit(interaction,
                 embed=discord.Embed(
                     title="❌ 토큰 제거 실패",
                     description="해당 유저의 토큰 수가 부족합니다.",
@@ -351,10 +360,11 @@ async def remove_token(ctx, member: discord.Member, amount: int):
             color=discord.Color.red()
         )
         result.add_field(name="남은 토큰", value=f"{tokens} 개", inline=False)
-        await interaction.response.edit_message(embed=result, view=None)
+        await respond.edit(interaction, embed=result, view=None)
 
     async def cancel_callback(interaction):
-        await interaction.response.edit_message(
+        await respond.defer(interaction)
+        await respond.edit(interaction,
             embed=discord.Embed(title="❌ 작업 취소", description="토큰 제거가 취소되었습니다.", color=discord.Color.red()),
             view=None
         )
@@ -392,8 +402,9 @@ async def set_token_price(ctx, member: discord.Member, new_price: int = 100):
     view = View()
 
     async def confirm_callback(interaction):
+        await respond.defer(interaction)
         if interaction.user != ctx.author:
-            await interaction.response.send_message("이 버튼은 당신의 명령이 아닙니다!", ephemeral=True)
+            await respond.reply(interaction, "이 버튼은 당신의 명령이 아닙니다!", ephemeral=True)
             return
 
         await db.update_user(user_id, token_price=new_price)
@@ -405,10 +416,11 @@ async def set_token_price(ctx, member: discord.Member, new_price: int = 100):
             ),
             color=discord.Color.green()
         )
-        await interaction.response.edit_message(embed=result, view=None)
+        await respond.edit(interaction, embed=result, view=None)
 
     async def cancel_callback(interaction):
-        await interaction.response.edit_message(
+        await respond.defer(interaction)
+        await respond.edit(interaction,
             embed=discord.Embed(title="❌ 작업 취소", description="구매가 설정이 취소되었습니다.", color=discord.Color.red()),
             view=None
         )

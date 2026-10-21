@@ -19,6 +19,7 @@ from discord.ext import tasks
 from discord.ui import Button, Modal, TextInput, View
 
 import database as db
+import respond
 from bot import client
 from fmt import debt_line, num
 
@@ -286,7 +287,7 @@ async def bank(ctx):
 
     async def loan_callback(interaction):
         if interaction.user.id != user_id:
-            return await interaction.response.send_message(
+            return await respond.reply(interaction,
                 "이 버튼은 당신의 것이 아닙니다.",
                 ephemeral=True
             )
@@ -295,7 +296,7 @@ async def bank(ctx):
 
     async def repay_callback(interaction):
         if interaction.user.id != user_id:
-            return await interaction.response.send_message(
+            return await respond.reply(interaction,
                 "이 버튼은 당신의 것이 아닙니다.",
                 ephemeral=True
             )
@@ -304,7 +305,7 @@ async def bank(ctx):
 
     async def deposit_callback(interaction):
         if interaction.user.id != user_id:
-            return await interaction.response.send_message(
+            return await respond.reply(interaction,
                 "이 버튼은 당신의 것이 아닙니다.",
                 ephemeral=True
             )
@@ -313,7 +314,7 @@ async def bank(ctx):
 
     async def withdraw_callback(interaction):
         if interaction.user.id != user_id:
-            return await interaction.response.send_message(
+            return await respond.reply(interaction,
                 "이 버튼은 당신의 것이 아닙니다.",
                 ephemeral=True
             )
@@ -349,10 +350,11 @@ class LoanModal(Modal, title="💵 대출 금액 입력"):
         self.user_id = user_id
 
     async def on_submit(self, interaction):
+        await respond.defer(interaction)
         amount = parse_amount(self.amount.value)
 
         if amount is None or amount <= 0:
-            return await interaction.response.send_message(
+            return await respond.reply(interaction,
                 "❌ 올바른 대출 금액을 입력하세요.",
                 ephemeral=True
             )
@@ -381,9 +383,9 @@ class LoanModal(Modal, title="💵 대출 금액 입력"):
                 await db.receive(self.user_id, amount, conn)
 
         if error:
-            return await interaction.response.send_message(error, ephemeral=True)
+            return await respond.reply(interaction, error, ephemeral=True)
 
-        await interaction.response.send_message(
+        await respond.reply(interaction,
             f"✅ {num(amount)} Byte 대출 완료!\n"
             f"갚아야 할 돈: **{num(owed)} Byte** (이자 {int(LOAN_INTEREST * 100)}%)\n"
             f"⏰ {LOAN_DEADLINE_HOURS}시간 안에 갚지 않으면 "
@@ -408,6 +410,7 @@ class RepayModal(Modal, title="✅ 상환 금액 입력"):
         self.user_id = user_id
 
     async def on_submit(self, interaction):
+        await respond.defer(interaction)
         raw = self.amount.value.strip()
         error = None
 
@@ -451,9 +454,9 @@ class RepayModal(Modal, title="✅ 상환 금액 입력"):
                 remaining_loan = get_total_loan([l for l in loans if l["amount"] > 0.001])
 
         if error:
-            return await interaction.response.send_message(error, ephemeral=True)
+            return await respond.reply(interaction, error, ephemeral=True)
 
-        await interaction.response.send_message(
+        await respond.reply(interaction,
             f"✅ {num(amount)} Byte 상환 완료!\n"
             f"남은 대출금: {num(remaining_loan)} Byte",
             ephemeral=True
@@ -476,10 +479,11 @@ class DepositModal(Modal, title="💰 적금 금액 입력"):
         self.user_id = user_id
 
     async def on_submit(self, interaction):
+        await respond.defer(interaction)
         amount = parse_amount(self.amount.value)
 
         if amount is None or amount <= 0:
-            return await interaction.response.send_message(
+            return await respond.reply(interaction,
                 "❌ 올바른 적금 금액을 입력하세요.",
                 ephemeral=True
             )
@@ -506,9 +510,9 @@ class DepositModal(Modal, title="💰 적금 금액 입력"):
                 )
 
         if error:
-            return await interaction.response.send_message(error, ephemeral=True)
+            return await respond.reply(interaction, error, ephemeral=True)
 
-        await interaction.response.send_message(
+        await respond.reply(interaction,
             f"✅ {num(amount)} Byte 적금 완료!\n"
             f"현재 적금 원금: {num(new_principal)} Byte\n"
             f"(그동안 붙은 이자는 원금에 합쳐지고, 오늘부터 다시 하루 {num(DEPOSIT_RATE * 100)}%씩 붙어요)",
@@ -532,6 +536,7 @@ class WithdrawModal(Modal, title="💳 적금 출금"):
         self.user_id = user_id
 
     async def on_submit(self, interaction):
+        await respond.defer(interaction)
         error = None
 
         async with db.user_tx(self.user_id) as conn:
@@ -566,9 +571,9 @@ class WithdrawModal(Modal, title="💳 적금 출금"):
                 result = await db.receive(self.user_id, withdraw_amount, conn)
 
         if error:
-            return await interaction.response.send_message(error, ephemeral=True)
+            return await respond.reply(interaction, error, ephemeral=True)
 
-        await interaction.response.send_message(
+        await respond.reply(interaction,
             f"✅ {num(withdraw_amount)} Byte 출금 완료!\n"
             f"남은 적금: {num(remaining)} Byte"
             + debt_line(result["collected"]),

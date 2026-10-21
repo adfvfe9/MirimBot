@@ -14,12 +14,13 @@ import discord
 from discord.ui import Button, View
 
 import database as db
+import respond
 from bot import client
 from features import stocks
 from fmt import debt_line, num
 
 # ───────────── 밸런스 설정 ─────────────
-MAX_LEVERAGE = 10             # 최대 배율
+MAX_LEVERAGE = 5              # 최대 배율
 MARGIN_LIMIT = 100000         # 한 사람이 동시에 걸 수 있는 증거금 합계
 CLOSE_FEE = 0.005             # 청산 수수료 (포지션 규모 기준 0.5%)
 
@@ -162,8 +163,9 @@ async def open_position(ctx, side, stock_name, margin, leverage):
     view = View()
 
     async def confirm_callback(interaction: discord.Interaction):
+        await respond.defer(interaction)
         if interaction.user != ctx.author:
-            await interaction.response.send_message("이 버튼은 당신의 것이 아니에요!", ephemeral=True)
+            await respond.reply(interaction, "이 버튼은 당신의 것이 아니에요!", ephemeral=True)
             return
 
         entry = current_price(symbol)
@@ -180,14 +182,14 @@ async def open_position(ctx, side, stock_name, margin, leverage):
                 position_id = await db.add_position(user_id, symbol, side, margin, leverage, entry, conn)
 
         if error:
-            await interaction.response.edit_message(
+            await respond.edit(interaction,
                 embed=discord.Embed(title="❌ 진입 실패", description=error, color=discord.Color.red()),
                 view=None
             )
             return
 
         pos = {"side": side, "margin": margin, "leverage": leverage, "entry_price": entry}
-        await interaction.response.edit_message(
+        await respond.edit(interaction,
             embed=discord.Embed(
                 title=f"✅ {SIDE_TEXT[side]} 진입 완료 (#{position_id})",
                 description=(
@@ -201,7 +203,8 @@ async def open_position(ctx, side, stock_name, margin, leverage):
         )
 
     async def cancel_callback(interaction: discord.Interaction):
-        await interaction.response.edit_message(
+        await respond.defer(interaction)
+        await respond.edit(interaction,
             embed=discord.Embed(title="❌ 진입 취소", description="거래가 취소되었습니다.", color=discord.Color.red()),
             view=None
         )

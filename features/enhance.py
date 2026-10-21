@@ -16,6 +16,7 @@ import discord
 from discord.ui import Button, View
 
 import database as db
+import respond
 from bot import client
 from fmt import debt_line, num
 
@@ -186,7 +187,7 @@ class EnhanceView(View):
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ 명령어를 실행한 사람만 사용할 수 있습니다.", ephemeral=True)
+            await respond.reply(interaction, "❌ 명령어를 실행한 사람만 사용할 수 있습니다.", ephemeral=True)
             return False
         return True
 
@@ -261,6 +262,7 @@ class EnhanceView(View):
         add("닫기", discord.ButtonStyle.secondary, self.on_close, "❌")
 
     async def refresh(self, interaction):
+        await respond.defer(interaction)
         self.build_buttons()
         embed = await self.make_embed()
         await interaction.edit_original_response(embed=embed, view=self)
@@ -268,6 +270,7 @@ class EnhanceView(View):
     # ── 버튼 ──
 
     async def on_craft(self, interaction):
+        await respond.defer(interaction)
         await interaction.response.defer()
         error = await craft(self.user_id, self.item_name)
         if error:
@@ -278,6 +281,7 @@ class EnhanceView(View):
         await self.refresh(interaction)
 
     async def on_enhance(self, interaction):
+        await respond.defer(interaction)
         await interaction.response.defer()
         self.sell_armed = False
         r = await try_enhance(self.user_id, self.item_name)
@@ -293,6 +297,7 @@ class EnhanceView(View):
         await announce(interaction.channel, interaction.user, self.item_name, r["result"], r["old"], r["new"])
 
     async def on_auto(self, interaction):
+        await respond.defer(interaction)
         await interaction.response.defer()
         self.sell_armed = False
         logs, total_cost, tries, stop = [], 0, 0, ""
@@ -327,6 +332,7 @@ class EnhanceView(View):
         await self.refresh(interaction)
 
     async def on_sell(self, interaction):
+        await respond.defer(interaction)
         await interaction.response.defer()
         if not self.sell_armed:
             self.sell_armed = True
@@ -351,7 +357,7 @@ class EnhanceView(View):
         self.stop()
 
     async def on_close(self, interaction):
-        await interaction.response.edit_message(view=None)
+        await respond.edit(interaction, view=None)
         self.stop()
 
     def apply(self, r):

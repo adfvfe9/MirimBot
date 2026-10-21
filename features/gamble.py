@@ -6,6 +6,7 @@ import time
 import discord
 
 import database as db
+import respond
 from bot import client
 from fmt import debt_line, num
 
@@ -219,7 +220,7 @@ class RPSView(discord.ui.View):
     ) -> bool:
         # 다른 유저의 버튼 클릭 차단
         if interaction.user.id != self.player_id:
-            await interaction.response.send_message(
+            await respond.reply(interaction,
                 "❌ 다른 사람의 가위바위보 게임입니다! "
                 "본인이 시작한 게임의 버튼만 누를 수 있습니다.",
                 ephemeral=True
@@ -228,7 +229,7 @@ class RPSView(discord.ui.View):
 
         # 종료된 게임의 버튼 클릭 차단
         if self.finished:
-            await interaction.response.send_message(
+            await respond.reply(interaction,
                 "이미 종료된 게임입니다.",
                 ephemeral=True
             )
@@ -279,8 +280,9 @@ class RPSView(discord.ui.View):
         interaction: discord.Interaction,
         choice: str
     ):
+        await respond.defer(interaction)
         if not self.waiting_for_choice:
-            await interaction.response.send_message(
+            await respond.reply(interaction,
                 "먼저 계속하기 버튼을 눌러 다음 판을 시작해 주세요.",
                 ephemeral=True
             )
@@ -295,14 +297,14 @@ class RPSView(discord.ui.View):
             remaining = RPS_COOLDOWN - (now - last_play)
 
             if remaining > 0:
-                await interaction.response.send_message(
+                await respond.reply(interaction,
                     f"⏳ 쿨타임이 **{math.ceil(remaining)}초** 남았습니다.",
                     ephemeral=True
                 )
                 return
 
             if not await start_rps_game(self.player_id):
-                await interaction.response.send_message(
+                await respond.reply(interaction,
                     f"❌ 오늘은 가위바위보를 {RPS_DAILY_LIMIT}판 모두 했어요. 내일 다시 도전하세요!",
                     ephemeral=True
                 )
@@ -388,7 +390,7 @@ class RPSView(discord.ui.View):
 
             embed.set_footer(text="게임 종료")
 
-            await interaction.response.edit_message(
+            await respond.edit(interaction,
                 embed=embed,
                 view=self
             )
@@ -409,7 +411,7 @@ class RPSView(discord.ui.View):
             inline=False
         )
 
-        await interaction.response.edit_message(
+        await respond.edit(interaction,
             embed=embed,
             view=self
         )
@@ -429,6 +431,7 @@ class RPSView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
+        await respond.defer(interaction)
         await self.play(interaction, "가위")
 
     @discord.ui.button(
@@ -442,6 +445,7 @@ class RPSView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
+        await respond.defer(interaction)
         await self.play(interaction, "바위")
 
     @discord.ui.button(
@@ -455,6 +459,7 @@ class RPSView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
+        await respond.defer(interaction)
         await self.play(interaction, "보")
 
     # ==============================
@@ -472,15 +477,16 @@ class RPSView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
+        await respond.defer(interaction)
         if not self.played:
-            await interaction.response.send_message(
+            await respond.reply(interaction,
                 "먼저 가위바위보를 진행해 주세요.",
                 ephemeral=True
             )
             return
 
         if self.waiting_for_choice:
-            await interaction.response.send_message(
+            await respond.reply(interaction,
                 "이미 다음 판을 진행할 수 있는 상태입니다.",
                 ephemeral=True
             )
@@ -501,7 +507,7 @@ class RPSView(discord.ui.View):
             "가위·바위·보 중 하나를 선택하세요."
         )
 
-        await interaction.response.edit_message(
+        await respond.edit(interaction,
             embed=embed,
             view=self
         )
@@ -521,8 +527,9 @@ class RPSView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
+        await respond.defer(interaction)
         if self.pending_reward <= 0:
-            await interaction.response.send_message(
+            await respond.reply(interaction,
                 "수령할 보상이 없습니다.",
                 ephemeral=True
             )
@@ -531,6 +538,7 @@ class RPSView(discord.ui.View):
         await self.pay_out(interaction)
 
     async def pay_out(self, interaction, title="💰 보상 수령 완료!"):
+        await respond.defer(interaction)
         reward = self.pending_reward
         self.finished = True
 
@@ -553,7 +561,7 @@ class RPSView(discord.ui.View):
 
         embed.set_footer(text="가위바위보 게임 종료")
 
-        await interaction.response.edit_message(
+        await respond.edit(interaction,
             embed=embed,
             view=self
         )

@@ -11,6 +11,7 @@ import discord
 from discord.ext import tasks
 
 import database as db
+import respond
 from bot import client
 
 REMIND_AFTER = datetime.timedelta(days=3)     # 호스팅은 4일마다 연장 → 하루 전에 알림
@@ -46,13 +47,14 @@ class RenewView(discord.ui.View):
 
     @discord.ui.button(label="연장 완료", style=discord.ButtonStyle.green, emoji="✅", custom_id="renewal_done")
     async def done(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await respond.defer(interaction)
         if interaction.user.id != (await get_owner()).id:
-            await interaction.response.send_message("❌ 봇 주인만 누를 수 있어요.", ephemeral=True)
+            await respond.reply(interaction, "❌ 봇 주인만 누를 수 있어요.", ephemeral=True)
             return
 
         await mark_renewed()
         next_at = db.now() + REMIND_AFTER
-        await interaction.response.edit_message(
+        await respond.edit(interaction,
             embed=discord.Embed(
                 title="✅ 연장 완료 기록됨",
                 description=f"다음 알림: **{kst(next_at)}**",

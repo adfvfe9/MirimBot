@@ -13,6 +13,7 @@ from discord.ui import Button, View
 from matplotlib import font_manager
 
 import database as db
+import respond
 from bot import client
 from fmt import num
 
@@ -172,9 +173,9 @@ async def update_stocks():
         elif effective_state == "BEAR":
             new_price *= (1 - random.uniform(-0.004, 0.008))   # 평균 -0.2%
         elif effective_state == "HYPER_BULL":
-            new_price *= (1 + random.uniform(-0.02, 0.1))  # -2~10%
+            new_price *= (1 + random.uniform(-0.01, 0.03))     # 평균 +1% (뉴스 '초대형 호재')
         elif effective_state == "CRASH":
-            new_price *= (1 - random.uniform(-0.015, 0.15))    # 1.5~-15%
+            new_price *= (1 - random.uniform(-0.01, 0.03))     # 평균 -1% (거품 붕괴)
 
         # 상장폐지 처리: 모든 유저의 해당 주식 삭제 + 다음 %주식확인 때 알림
         if new_price <= 0:
@@ -229,29 +230,18 @@ async def stock(ctx):
     next_update = last_update_time + datetime.timedelta(seconds=60)
     timestamp = int(next_update.timestamp())
 
-    embed = discord.Embed(
-        title="📈 실시간 주식 시세",
-        description="1분마다 자동 갱신됩니다.",
-        color=discord.Color.green()
-    )
-    state = await get_effective_market_state()
-    state_text = {
-        "BULL": "📈 상승장",
-        "BEAR": "📉 하락장",
-        "HYPER_BULL": "🚀 초상승장",
-        "CRASH": "💥 주식부도"
-    }.get(state, "❓ 알 수 없음")
-
+    # 시장 상태(상승장/하락장)는 일부러 보여주지 않는다. (보이면 롱/숏이 너무 쉬워짐)
+    # 대신 진행 중인 시장 뉴스가 있으면 알려준다.
+    description = "1분마다 자동 갱신됩니다. 시장 분위기는 뉴스와 그래프로 추측해보세요!"
     market_news = news().market_badge()
     if market_news:
-        state_text += f"\n{market_news}"
+        description += f"\n{market_news}"
 
-    embed.add_field(
-        name="📊 현재 시장 상태",
-        value=state_text,
-        inline=False
+    embed = discord.Embed(
+        title="📈 실시간 주식 시세",
+        description=description,
+        color=discord.Color.green()
     )
-
 
     for name, price_data in stock_prices.items():
         current = price_data["current"]
@@ -383,12 +373,13 @@ async def buy_stock(ctx, stock_name: str, amount: int):
     view = View()
 
     async def confirm_callback(interaction: discord.Interaction):
+        await respond.defer(interaction)
         if interaction.user != ctx.author:
-            await interaction.response.send_message("이 버튼은 당신의 것이 아니에요!", ephemeral=True)
+            await respond.reply(interaction, "이 버튼은 당신의 것이 아니에요!", ephemeral=True)
             return
 
         if await buy_shares(user_id, stock_key, amount, price, total_cost) is None:
-            await interaction.response.edit_message(
+            await respond.edit(interaction,
                 embed=discord.Embed(
                     title="❌ 구매 실패",
                     description="잔액이 부족합니다.",
@@ -398,7 +389,7 @@ async def buy_stock(ctx, stock_name: str, amount: int):
             )
             return
 
-        await interaction.response.edit_message(
+        await respond.edit(interaction,
             embed=discord.Embed(
                 title="✅ 구매 완료",
                 description=f"{stock_key} {amount}주 구매 완료!",
@@ -408,7 +399,8 @@ async def buy_stock(ctx, stock_name: str, amount: int):
         )
 
     async def cancel_callback(interaction: discord.Interaction):
-        await interaction.response.edit_message(
+        await respond.defer(interaction)
+        await respond.edit(interaction,
             embed=discord.Embed(
                 title="❌ 구매 취소",
                 description="거래가 취소되었습니다.",
@@ -468,12 +460,13 @@ async def sell_stock(ctx, stock_name: str, amount: int):
     view = View()
 
     async def confirm_callback(interaction: discord.Interaction):
+        await respond.defer(interaction)
         if interaction.user != ctx.author:
-            await interaction.response.send_message("이 버튼은 당신의 것이 아니에요!", ephemeral=True)
+            await respond.reply(interaction, "이 버튼은 당신의 것이 아니에요!", ephemeral=True)
             return
 
         if await sell_shares(user_id, {stock_key: amount}, total_earned) is None:
-            await interaction.response.edit_message(
+            await respond.edit(interaction,
                 embed=discord.Embed(
                     title="❌ 판매 실패",
                     description="보유 수량이 부족합니다.",
@@ -483,7 +476,7 @@ async def sell_stock(ctx, stock_name: str, amount: int):
             )
             return
 
-        await interaction.response.edit_message(
+        await respond.edit(interaction,
             embed=discord.Embed(
                 title="✅ 판매 완료",
                 description=f"{stock_key} {amount}주 판매 완료!",
@@ -493,7 +486,8 @@ async def sell_stock(ctx, stock_name: str, amount: int):
         )
 
     async def cancel_callback(interaction: discord.Interaction):
-        await interaction.response.edit_message(
+        await respond.defer(interaction)
+        await respond.edit(interaction,
             embed=discord.Embed(
                 title="❌ 판매 취소",
                 description="거래가 취소되었습니다.",
@@ -609,12 +603,13 @@ async def buy_all_stock(ctx, stock_name: str):
     view = View()
 
     async def confirm_callback(interaction):
+        await respond.defer(interaction)
         if interaction.user != ctx.author:
-            await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
+            await respond.reply(interaction, "이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
             return
 
         if await buy_shares(user_id, stock_key, max_amount, price, total_cost) is None:
-            await interaction.response.edit_message(
+            await respond.edit(interaction,
                 embed=discord.Embed(
                     title="❌ 구매 실패",
                     description="잔액이 부족합니다.",
@@ -629,10 +624,11 @@ async def buy_all_stock(ctx, stock_name: str):
             description=f"{stock_key} {max_amount}주를 구매했습니다.",
             color=discord.Color.green()
         )
-        await interaction.response.edit_message(embed=result, view=None)
+        await respond.edit(interaction, embed=result, view=None)
 
     async def cancel_callback(interaction):
-        await interaction.response.edit_message(
+        await respond.defer(interaction)
+        await respond.edit(interaction,
             embed=discord.Embed(
                 title="❌ 거래 취소됨",
                 description="구매가 취소되었습니다.",
@@ -690,8 +686,9 @@ async def buy_half_stock(ctx, stock_name: str):
     view = View()
 
     async def confirm_callback(interaction):
+        await respond.defer(interaction)
         if interaction.user != ctx.author:
-            await interaction.response.send_message(
+            await respond.reply(interaction,
                 "이 버튼은 당신의 것이 아닙니다.",
                 ephemeral=True
             )
@@ -705,7 +702,7 @@ async def buy_half_stock(ctx, stock_name: str):
             new_balance = await buy_shares(user_id, stock_key, buy_amount, price, total_cost)
 
         if new_balance is None:
-            await interaction.response.edit_message(
+            await respond.edit(interaction,
                 embed=discord.Embed(
                     title="❌ 구매 실패",
                     description="주가 또는 잔액이 변경되었습니다. 명령어를 다시 실행해주세요.",
@@ -731,17 +728,18 @@ async def buy_half_stock(ctx, stock_name: str):
             inline=True
         )
 
-        await interaction.response.edit_message(embed=result, view=None)
+        await respond.edit(interaction, embed=result, view=None)
 
     async def cancel_callback(interaction):
+        await respond.defer(interaction)
         if interaction.user != ctx.author:
-            await interaction.response.send_message(
+            await respond.reply(interaction,
                 "이 버튼은 당신의 것이 아닙니다.",
                 ephemeral=True
             )
             return
 
-        await interaction.response.edit_message(
+        await respond.edit(interaction,
             embed=discord.Embed(
                 title="❌ 거래 취소됨",
                 description="구매가 취소되었습니다.",
@@ -795,12 +793,13 @@ async def sell_all_stock(ctx, stock_name: str = None):
         view = View()
 
         async def confirm_callback(interaction):
+            await respond.defer(interaction)
             if interaction.user != ctx.author:
-                await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
+                await respond.reply(interaction, "이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
                 return
 
             if await sell_shares(user_id, {stock_key: quantity}, net) is None:
-                await interaction.response.edit_message(
+                await respond.edit(interaction,
                     embed=discord.Embed(
                         title="❌ 판매 실패",
                         description="보유 수량이 변경되었습니다. 명령어를 다시 실행해주세요.",
@@ -815,10 +814,11 @@ async def sell_all_stock(ctx, stock_name: str = None):
                 description=f"{stock_key} {quantity}주를 판매했습니다.",
                 color=discord.Color.green()
             )
-            await interaction.response.edit_message(embed=result, view=None)
+            await respond.edit(interaction, embed=result, view=None)
 
         async def cancel_callback(interaction):
-            await interaction.response.edit_message(
+            await respond.defer(interaction)
+            await respond.edit(interaction,
                 embed=discord.Embed(
                     title="❌ 거래 취소됨",
                     description="판매가 취소되었습니다.",
@@ -878,13 +878,14 @@ async def sell_all_stock(ctx, stock_name: str = None):
     view = View()
 
     async def confirm_callback(interaction):
+        await respond.defer(interaction)
         if interaction.user != ctx.author:
-            await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
+            await respond.reply(interaction, "이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
             return
 
         sales = {name: stock["quantity"] for name, stock in user_stocks.items()}
         if await sell_shares(user_id, sales, total_net) is None:
-            await interaction.response.edit_message(
+            await respond.edit(interaction,
                 embed=discord.Embed(
                     title="❌ 판매 실패",
                     description="보유 수량이 변경되었습니다. 명령어를 다시 실행해주세요.",
@@ -899,10 +900,11 @@ async def sell_all_stock(ctx, stock_name: str = None):
             description=f"{num(total_net)} byte를 획득했습니다.",
             color=discord.Color.green()
         )
-        await interaction.response.edit_message(embed=result, view=None)
+        await respond.edit(interaction, embed=result, view=None)
 
     async def cancel_callback(interaction):
-        await interaction.response.edit_message(
+        await respond.defer(interaction)
+        await respond.edit(interaction,
             embed=discord.Embed(
                 title="❌ 거래 취소됨",
                 description="전체 판매가 취소되었습니다.",

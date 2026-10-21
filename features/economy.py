@@ -8,6 +8,7 @@ from discord.ext import commands
 from discord.ui import Button, View
 
 import database as db
+import respond
 from bot import client
 from fmt import debt_line, num
 
@@ -56,8 +57,9 @@ async def moneyadd(ctx, member: discord.Member, amount: int):
     view = View()
 
     async def confirm_callback(interaction: Interaction):
+        await respond.defer(interaction)
         if interaction.user != ctx.author:
-            await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다!", ephemeral=True)
+            await respond.reply(interaction, "이 버튼은 당신의 것이 아닙니다!", ephemeral=True)
             return
 
         result = await db.receive(user_id, amount)
@@ -68,14 +70,15 @@ async def moneyadd(ctx, member: discord.Member, amount: int):
             ),
             color=discord.Color.green()
         )
-        await interaction.response.edit_message(embed=embed, view=None)
+        await respond.edit(interaction, embed=embed, view=None)
 
     async def cancel_callback(interaction: Interaction):
+        await respond.defer(interaction)
         embed = Embed(
             description="❌ 작업이 취소되었습니다.",
             color=discord.Color.red()
         )
-        await interaction.response.edit_message(embed=embed, view=None)
+        await respond.edit(interaction, embed=embed, view=None)
 
     button_yes = Button(label="확인", style=discord.ButtonStyle.green)
     button_no = Button(label="취소", style=discord.ButtonStyle.red)
@@ -99,8 +102,9 @@ async def moneydel(ctx, member: discord.Member, amount: int):
     view = View()
 
     async def confirm_callback(interaction: Interaction):
+        await respond.defer(interaction)
         if interaction.user != ctx.author:
-            await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다!", ephemeral=True)
+            await respond.reply(interaction, "이 버튼은 당신의 것이 아닙니다!", ephemeral=True)
             return
 
         # 잔액보다 많이 빼면 모자란 만큼은 미납금(빚)이 된다.
@@ -109,14 +113,15 @@ async def moneydel(ctx, member: discord.Member, amount: int):
             description=f"✅ **{member.display_name}** 님에게서 **{num(amount)} byte**를 제거했습니다.",
             color=discord.Color.green()
         )
-        await interaction.response.edit_message(embed=embed, view=None)
+        await respond.edit(interaction, embed=embed, view=None)
 
     async def cancel_callback(interaction: Interaction):
+        await respond.defer(interaction)
         embed = Embed(
             description="❌ 작업이 취소되었습니다.",
             color=discord.Color.red()
         )
-        await interaction.response.edit_message(embed=embed, view=None)
+        await respond.edit(interaction, embed=embed, view=None)
 
     button_yes = Button(label="확인", style=discord.ButtonStyle.green)
     button_no = Button(label="취소", style=discord.ButtonStyle.red)
@@ -174,8 +179,9 @@ async def send(ctx, member: discord.Member, amount: int):
     view = View()
 
     async def confirm_callback(interaction: Interaction):
+        await respond.defer(interaction)
         if interaction.user != ctx.author:
-            await interaction.response.send_message("이 버튼은 당신의 것이 아닙니다!", ephemeral=True)
+            await respond.reply(interaction, "이 버튼은 당신의 것이 아닙니다!", ephemeral=True)
             return
 
         # 확인 버튼을 누른 시점의 잔액/한도로 다시 검사하고, 두 사람의 돈을 한 번에 바꾼다.
@@ -199,7 +205,7 @@ async def send(ctx, member: discord.Member, amount: int):
                 result = await db.receive(receiver_id, amount, conn)
 
         if error:
-            await interaction.response.edit_message(
+            await respond.edit(interaction,
                 embed=Embed(description=error, color=discord.Color.red()), view=None
             )
             return
@@ -210,16 +216,17 @@ async def send(ctx, member: discord.Member, amount: int):
         )
         if result["collected"] > 0:
             description += f"\n🧾 받는 사람의 미납금 **{num(result['collected'])} byte**가 징수되었습니다."
-        await interaction.response.edit_message(
+        await respond.edit(interaction,
             embed=Embed(description=description, color=discord.Color.green()), view=None
         )
 
     async def cancel_callback(interaction: Interaction):
+        await respond.defer(interaction)
         embed = Embed(
             description="❌ 송금이 취소되었습니다.",
             color=discord.Color.red()
         )
-        await interaction.response.edit_message(embed=embed, view=None)
+        await respond.edit(interaction, embed=embed, view=None)
 
     button_yes = Button(label="확인", style=discord.ButtonStyle.green)
     button_no = Button(label="취소", style=discord.ButtonStyle.red)
@@ -394,7 +401,7 @@ async def 파산(ctx):
 
         async def interaction_check(self, interaction: discord.Interaction):
             if interaction.user.id != ctx.author.id:
-                await interaction.response.send_message(
+                await respond.reply(interaction,
                     "❌ 명령어를 실행한 사람만 선택할 수 있습니다.",
                     ephemeral=True
                 )
@@ -411,6 +418,7 @@ async def 파산(ctx):
             interaction: discord.Interaction,
             button: discord.ui.Button
         ):
+            await respond.defer(interaction)
             for item in self.children:
                 item.disabled = True
 
@@ -426,7 +434,7 @@ async def 파산(ctx):
                     await db.bankrupt(user_id, day, conn)
 
             if not allowed:
-                await interaction.response.edit_message(
+                await respond.edit(interaction,
                     embed=discord.Embed(
                         title="📛 파산 불가",
                         description="파산 조건이 바뀌었습니다. 다시 확인해주세요.",
@@ -445,7 +453,7 @@ async def 파산(ctx):
                 color=discord.Color.red()
             )
 
-            await interaction.response.edit_message(
+            await respond.edit(interaction,
                 embed=result_embed,
                 view=self
             )
@@ -460,6 +468,7 @@ async def 파산(ctx):
             interaction: discord.Interaction,
             button: discord.ui.Button
         ):
+            await respond.defer(interaction)
             for item in self.children:
                 item.disabled = True
 
@@ -469,7 +478,7 @@ async def 파산(ctx):
                 color=discord.Color.green()
             )
 
-            await interaction.response.edit_message(
+            await respond.edit(interaction,
                 embed=cancel_embed,
                 view=self
             )

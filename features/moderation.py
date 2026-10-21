@@ -7,6 +7,7 @@ from discord.ext import commands
 from discord.ui import Button, View
 
 import database as db
+import respond
 from bot import client
 
 
@@ -58,8 +59,9 @@ async def warn(ctx, name: str, amount: int = 1, *, reason: str = None):
     view = View()
 
     async def confirm_callback(interaction):
+        await respond.defer(interaction)
         if interaction.user != ctx.author:
-            await interaction.response.send_message("❌ 당신의 명령이 아닙니다.", ephemeral=True)
+            await respond.reply(interaction, "❌ 당신의 명령이 아닙니다.", ephemeral=True)
             return
 
         # 경고 수 갱신 (0 미만으로는 내려가지 않음)
@@ -108,11 +110,12 @@ async def warn(ctx, name: str, amount: int = 1, *, reason: str = None):
             description=f"{member.mention}님에게 경고 {amount}회를 적용했습니다.\n현재 총 경고 수: {count}회\n처벌: {punishment}",
             color=discord.Color.red()
         )
-        await interaction.response.edit_message(embed=embed, view=None)
+        await respond.edit(interaction, embed=embed, view=None)
 
     async def cancel_callback(interaction):
+        await respond.defer(interaction)
         embed = discord.Embed(title="❌ 작업 취소됨", color=discord.Color.light_grey())
-        await interaction.response.edit_message(embed=embed, view=None)
+        await respond.edit(interaction, embed=embed, view=None)
 
     yes = Button(label="확인", style=discord.ButtonStyle.red)
     no = Button(label="취소", style=discord.ButtonStyle.grey)

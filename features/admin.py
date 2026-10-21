@@ -3,6 +3,7 @@ import discord
 from discord.ext import commands
 
 import database as db
+import respond
 from bot import client
 from features import stocks
 
@@ -32,7 +33,7 @@ async def reset_all_data(ctx):
 
         async def interaction_check(self, interaction: discord.Interaction):
             if interaction.user.id != ctx.author.id:
-                await interaction.response.send_message(
+                await respond.reply(interaction,
                     "❌ 명령어를 실행한 사람만 선택할 수 있습니다.",
                     ephemeral=True
                 )
@@ -41,6 +42,7 @@ async def reset_all_data(ctx):
 
         @discord.ui.button(label="전부 초기화", style=discord.ButtonStyle.danger, emoji="🗑️")
         async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await respond.defer(interaction)
             self.stop()
             await db.reset_all()
 
@@ -48,7 +50,7 @@ async def reset_all_data(ctx):
             await stocks.load_stock_prices()
             await stocks.load_market_state()
 
-            await interaction.response.edit_message(
+            await respond.edit(interaction,
                 embed=discord.Embed(
                     title="🗑️ 전체 초기화 완료",
                     description="모든 데이터가 삭제되었습니다.",
@@ -59,8 +61,9 @@ async def reset_all_data(ctx):
 
         @discord.ui.button(label="취소", style=discord.ButtonStyle.secondary, emoji="❌")
         async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await respond.defer(interaction)
             self.stop()
-            await interaction.response.edit_message(
+            await respond.edit(interaction,
                 embed=discord.Embed(
                     title="✅ 초기화 취소",
                     description="아무것도 삭제되지 않았습니다.",

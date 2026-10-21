@@ -90,11 +90,11 @@ CREATE INDEX IF NOT EXISTS loans_user_idx ON loans (user_id, id);
 CREATE TABLE IF NOT EXISTS enhance_items (            -- enhance_data.json
     user_id   BIGINT NOT NULL,
     item_name TEXT   NOT NULL,
-    level     INT    NOT NULL,                        -- +1 ~ +10
+    level     INT    NOT NULL,                        -- +1 ~ +13
     PRIMARY KEY (user_id, item_name)
 );
--- 예전 규칙(+0 ~ +300)으로 만든 아이템은 새 범위(+1 ~ +10)에 맞춘다.
-UPDATE enhance_items SET level = LEAST(GREATEST(level, 1), 10) WHERE level < 1 OR level > 10;
+-- 예전 규칙(+0 ~ +300)으로 만든 아이템은 새 범위(+1 ~ +13)에 맞춘다.
+UPDATE enhance_items SET level = LEAST(GREATEST(level, 1), 13) WHERE level < 1 OR level > 13;
 
 CREATE TABLE IF NOT EXISTS inventory (                -- items.json (상점에서 산 아이템)
     user_id   BIGINT NOT NULL,

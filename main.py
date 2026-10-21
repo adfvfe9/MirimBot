@@ -12,7 +12,7 @@
   features/assets.py       순자산, 자산랭킹
   features/gamble.py       도박, 가위바위보
   features/wordchain.py    끝말잇기 (1대1 / 다같이, 스레드에서. 단어 목록: kkwords.txt)
-  features/quiz.py         선착순 퀴즈 (1~2시간마다 퀴즈 채널에)
+  features/quiz.py         선착순 퀴즈 (1~2시간마다 퀴즈 채널에, 문제: quiz_math.py / quiz_gen.py / quiz_bank.py)
   features/bank.py         은행 (대출/상환/적금/출금)
   features/tokens.py       토큰, 상점
   features/moderation.py   경고

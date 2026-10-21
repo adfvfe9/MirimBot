@@ -1,21 +1,30 @@
 """선착순 퀴즈: 1~2시간마다 퀴즈 채널에 문제가 나오고, 가장 먼저 맞힌 사람이 돈을 받는다.
 
-    %퀴즈채널 <채널ID>   (관리자) 퀴즈를 올릴 채널 설정
-    %퀴즈출제 [종류]     (관리자) 지금 바로 퀴즈 하나 내기 (계산 / 초성 / 뜻풀이)
+    %퀴즈채널 <채널ID>          (관리자) 퀴즈를 올릴 채널 설정
+    %퀴즈출제 [과목] [난이도]   (관리자) 지금 바로 퀴즈 하나 내기. 예) %퀴즈출제 수학 상
 
-문제 종류
-- 🧮 계산: 봇이 만든 계산 문제. 숫자로 답한다.
-- 🔤 초성: 초성에 맞는 단어를 아무거나 하나. (끝말잇기 단어 목록에 있는 단어면 정답)
-- 📖 뜻풀이: 국립국어원 한국어기초사전 오픈 API 에서 단어 뜻을 가져와서, 뜻(+초성 힌트)을 보고 단어를 맞힌다.
-  무료지만 인증키가 필요하다: https://krdict.korean.go.kr/openApi/openApiInfo 에서 발급받아
-  .env 에 KRDICT_API_KEY=발급받은키 를 적는다. (하루 5만 번까지)
-  키가 없거나 불러오기에 실패하면 다른 문제로 대신 낸다.
+과목: 수학 / 국어 / 영어 / 사회 / 한국사 / 과학 / 상식
+난이도: 하(1분) / 중(5분) / 상(10분) — 어려울수록 보상이 크다.
+
+- 🧮 수학: quiz_math.py 가 고2 2학기 범위(대수, 미적분 I)에서 매번 새 문제를 만든다. 그래프 그림이 나오는 문제도 있다.
+- 국어: 문제 은행(quiz_bank.py) + 초성 퀴즈(끝말잇기 단어 목록) + 뜻풀이 퀴즈(한국어기초사전 API)
+  뜻풀이는 국립국어원 한국어기초사전 오픈 API 키가 필요하다. (.env 의 KRDICT_API_KEY, 하루 5만 번까지)
+  키가 없거나 불러오기에 실패하면 문제 은행에서 낸다.
+- 나머지 과목: 대부분(GENERATED_SHARE)은 quiz_gen.py 가 사실 표로 매번 새로 만들고,
+  나머지는 직접 쓴 문제 은행(quiz_bank.py)에서 낸다. 문제를 늘리려면 두 파일의 표/목록에 줄을 추가하면 된다.
+
+답하는 법
+- 객관식: 번호만 입력. 한 사람당 한 번.
+- 숫자 답: 숫자만 입력. 한 사람당 3번.
+- 글자 답: 그냥 입력. (띄어쓰기/대소문자 무시, 횟수 제한 없음)
 """
 import asyncio
-import random
+import io
 import os
+import random
 import re
 import xml.etree.ElementTree as ET
+from collections import deque
 
 import discord
 import requests
@@ -23,59 +32,123 @@ from discord.ext import commands, tasks
 
 import database as db
 from bot import client
-from features import wordchain
+from features import quiz_bank, quiz_gen, quiz_math, wordchain
 from fmt import debt_line, num
 
 # ───────────── 밸런스 설정 ─────────────
 QUIZ_INTERVAL_MINUTES = (60, 120)   # 다음 퀴즈까지 랜덤 간격
 QUIZ_HOURS = range(8, 24)           # 퀴즈가 나오는 시간 (한국 시간 8시 ~ 23시대)
-ANSWER_SECONDS = 60                 # 답할 수 있는 시간
-REWARD = (2000, 4000)               # 정답 보상 (랜덤)
-TRIES_PER_USER = 3                  # 한 사람이 한 문제에 낼 수 있는 답 수 (4지선다는 1번)
+NUMBER_TRIES = 3                    # 숫자 답: 한 사람이 한 문제에 낼 수 있는 답 수 (객관식은 1번)
 
-KIND_WEIGHTS = {"math": 3, "chosung": 3, "meaning": 4}
-KIND_NAMES = {"계산": "math", "초성": "chosung", "뜻풀이": "meaning", "뜻": "meaning"}
+LEVELS = {   # 제한 시간(초), 보상 범위, 나올 확률(가중치)
+    "하": {"seconds": 60,  "reward": (1500, 2500),  "weight": 45},
+    "중": {"seconds": 300, "reward": (3000, 5000),  "weight": 35},
+    "상": {"seconds": 600, "reward": (6000, 10000), "weight": 20},
+}
+SUBJECTS = {  # 이모지, 나올 확률(가중치)
+    "수학": ("🧮", 30), "국어": ("📚", 15), "영어": ("🔠", 15), "사회": ("🏛️", 10),
+    "한국사": ("📜", 10), "과학": ("🔬", 10), "상식": ("💡", 10),
+}
+RECENT_SIZE = 40                    # 최근에 낸 문제 은행 문제는 이만큼 다시 안 낸다
+GENERATED_SHARE = 0.75              # 수학 말고 다른 과목에서 자동 출제(quiz_gen) 문제가 나올 확률
 
 KRDICT_URL = "https://krdict.korean.go.kr/api/search"
 # 뜻풀이 문제의 단어는 이 글자로 시작하는 초급·중급 명사 중에서 고른다.
 MEANING_STARTS = "가나다마바사아자차카타파하고노도모보소오조초코토포호구누두무부수우주추후기미비시이지치피히"
+CHOICE_MARKS = "①②③④⑤"
 
 minutes_until_next = random.randint(*QUIZ_INTERVAL_MINUTES)
 running_channels: set[int] = set()   # 지금 퀴즈가 진행 중인 채널
+recent_bank: deque[int] = deque(maxlen=RECENT_SIZE)
+
+
+# ───────────── 답 확인 ─────────────
+# check(메시지) → True(정답) / False(오답) / None(답이 아님: 그냥 채팅)
+
+def normalize(text: str) -> str:
+    return re.sub(r"[\s.!?~'\"]", "", text).lower()
+
+
+def number_check(answer: int):
+    def check(msg):
+        text = msg.replace(",", "").replace("−", "-")
+        if not re.fullmatch(r"-?\d+", text):
+            return None
+        return int(text) == answer
+    return check
+
+
+def choice_check(count: int, answer: int):
+    def check(msg):
+        text = msg.strip()
+        if text in CHOICE_MARKS[:count]:
+            text = str(CHOICE_MARKS.index(text) + 1)
+        if text not in {str(i) for i in range(1, count + 1)}:
+            return None
+        return int(text) == answer
+    return check
+
+
+def text_check(accepts):
+    targets = {normalize(a) for a in accepts}
+
+    def check(msg):
+        return normalize(msg) in targets
+    return check
 
 
 # ───────────── 문제 만들기 ─────────────
-# 문제는 dict: title, question, hint, answer(정답 공개용 문자열), check(답 문자열 → True/False/None), tries
-# check 가 None 을 돌려주면 답으로 치지 않는다 (그냥 채팅).
+# 퀴즈 = dict: subject, unit, level, question, hint, answer(정답 공개용), check, tries(None = 무제한), image, explain
 
-def make_math():
-    form = random.randint(1, 3)
-    if form == 1:
-        a, b = random.randint(12, 99), random.randint(3, 19)
-        text, answer = f"{a} × {b}", a * b
-    elif form == 2:
-        a, b, c = random.randint(100, 999), random.randint(100, 999), random.randint(10, 99)
-        text, answer = f"{a} + {b} - {c}", a + b - c
-    else:
-        a, b, c = random.randint(11, 49), random.randint(3, 9), random.randint(10, 99)
-        text, answer = f"{a} × {b} + {c}", a * b + c
-
-    def check(msg):
-        if not re.fullmatch(r"-?\d+", msg.replace(",", "")):
-            return None
-        return int(msg.replace(",", "")) == answer
-
+def from_math(level):
+    m = quiz_math.make(level)
     return {
-        "title": "🧮 계산 퀴즈",
-        "question": f"**{text} = ?**",
-        "hint": "숫자로 답하세요.",
-        "answer": num(answer),
-        "check": check,
-        "tries": TRIES_PER_USER,
+        "subject": "수학", "unit": m["unit"], "level": level,
+        "question": m["question"], "hint": "정답을 숫자로 입력하세요.",
+        "answer": str(m["answer"]), "check": number_check(m["answer"]), "tries": NUMBER_TRIES,
+        "image": m["image"], "explain": m["explain"],
     }
 
 
-def make_chosung():
+def to_quiz(subject, level, b):
+    """문제 은행 / 자동 출제 모양의 dict 를 퀴즈로 바꾼다."""
+    quiz = {
+        "subject": subject, "unit": b.get("unit"), "level": level, "question": f"**{b['q']}**",
+        "image": None, "explain": b.get("explain"),
+    }
+    if b.get("choices"):
+        quiz["question"] += "\n\n" + "\n".join(f"{CHOICE_MARKS[i]} {c}" for i, c in enumerate(b["choices"]))
+        quiz.update(hint="정답 번호를 입력하세요. (한 사람당 한 번!)",
+                    answer=f"{CHOICE_MARKS[b['answer'] - 1]} {b['choices'][b['answer'] - 1]}",
+                    check=choice_check(len(b["choices"]), b["answer"]), tries=1)
+    elif all(re.fullmatch(r"-?\d+", a) for a in b["answer"]):
+        quiz.update(hint="정답을 숫자로 입력하세요.", answer=b["answer"][0],
+                    check=number_check(int(b["answer"][0])), tries=NUMBER_TRIES)
+    else:
+        quiz.update(hint="정답을 입력하세요.", answer=b["answer"][0], check=text_check(b["answer"]), tries=None)
+    return quiz
+
+
+def from_bank(subject, level):
+    pool = [i for i, b in enumerate(quiz_bank.BANK) if b["subject"] == subject]
+    same_level = [i for i in pool if quiz_bank.BANK[i]["level"] == level]
+    fresh = [i for i in same_level if i not in recent_bank] or [i for i in pool if i not in recent_bank] or pool
+    index = random.choice(fresh)
+    recent_bank.append(index)
+    b = quiz_bank.BANK[index]
+    # 같은 난이도 문제가 다 나왔으면 다른 난이도 문제가 나올 수 있다
+    return to_quiz(subject, b["level"], b)
+
+
+def from_generated_or_bank(subject, level):
+    if random.random() < GENERATED_SHARE:
+        generated = quiz_gen.make(subject, level)
+        if generated:
+            return to_quiz(subject, level, generated)
+    return from_bank(subject, level)
+
+
+def make_chosung(level):
     word = wordchain.random_word(lengths=(3, 4))
     initials = wordchain.chosung(word)
 
@@ -85,16 +158,14 @@ def make_chosung():
         return len(msg) == len(word) and wordchain.chosung(msg) == initials and wordchain.is_word(msg)
 
     return {
-        "title": "🔤 초성 퀴즈",
+        "subject": "국어", "unit": "초성 퀴즈", "level": level,
         "question": f"**{' '.join(initials)}**",
-        "hint": "이 초성으로 된 단어를 아무거나 입력하세요. (사전에 있는 단어만 정답)",
-        "answer": f"{word} 등",
-        "check": check,
-        "tries": TRIES_PER_USER,
+        "hint": "이 초성으로 된 단어를 아무거나 입력하세요. (사전에 있는 단어면 정답)",
+        "answer": f"{word} 등", "check": check, "tries": None, "image": None, "explain": None,
     }
 
 
-def fetch_meaning(key):
+def fetch_meaning(key, level):
     """한국어기초사전에서 단어 하나와 뜻을 가져온다."""
     params = {
         "key": key, "q": random.choice(MEANING_STARTS), "part": "word", "sort": "popular",
@@ -122,59 +193,87 @@ def fetch_meaning(key):
         return msg == word
 
     return {
-        "title": "📖 뜻풀이 퀴즈",
+        "subject": "국어", "unit": "뜻풀이", "level": level,
         "question": f"**{definition}**\n\n힌트: **{' '.join(wordchain.chosung(word))}** ({len(word)}글자)",
         "hint": "이 뜻을 가진 단어를 입력하세요.",
-        "answer": word,
-        "check": check,
-        "tries": TRIES_PER_USER,
+        "answer": word, "check": check, "tries": NUMBER_TRIES, "image": None,
+        "explain": "국립국어원 한국어기초사전",
     }
 
 
-async def make_quiz(kind=None):
-    kind = kind or random.choices(list(KIND_WEIGHTS), weights=KIND_WEIGHTS.values())[0]
-    if kind == "chosung" and not await wordchain.load_words():
-        kind = "math"
-    if kind == "meaning":
+async def make_korean(level):
+    """국어: 하는 초성 퀴즈도, 중은 뜻풀이도 섞어서 낸다."""
+    roll = random.random()
+    if level == "하" and roll < 0.4 and await wordchain.load_words():
+        return make_chosung(level)
+    if level == "중" and roll < 0.5:
         key = os.getenv("KRDICT_API_KEY")
         try:
             if not key:
                 raise RuntimeError(".env 에 KRDICT_API_KEY 가 없음")
-            return await asyncio.to_thread(fetch_meaning, key)
+            return await asyncio.to_thread(fetch_meaning, key, level)
         except Exception as e:
             print(f"[퀴즈] 뜻풀이 문제 불러오기 실패, 다른 문제로 대신: {type(e).__name__}: {e}")
-            kind = random.choice(["math", "chosung"])
-            if kind == "chosung" and not await wordchain.load_words():
-                kind = "math"
-    return make_chosung() if kind == "chosung" else make_math()
+    return from_generated_or_bank("국어", level)
+
+
+async def make_quiz(subject=None, level=None):
+    subject = subject or random.choices(list(SUBJECTS), weights=[w for _, w in SUBJECTS.values()])[0]
+    level = level or random.choices(list(LEVELS), weights=[v["weight"] for v in LEVELS.values()])[0]
+    if subject == "수학":
+        return await asyncio.to_thread(from_math, level)   # 그래프 그리기는 조금 걸려서 따로
+    if subject == "국어":
+        return await make_korean(level)
+    return from_generated_or_bank(subject, level)
 
 
 # ───────────── 진행 ─────────────
+
+def time_text(seconds):
+    return f"{seconds // 60}분" if seconds >= 60 else f"{seconds}초"
+
 
 async def run_quiz(channel, quiz):
     """한 채널에서 퀴즈 하나를 진행한다."""
     if channel.id in running_channels:
         return
     running_channels.add(channel.id)
+    reminder = None
     try:
-        reward = random.randint(*REWARD)
+        level = LEVELS[quiz["level"]]
+        seconds = level["seconds"]
+        reward = random.randint(*level["reward"])
+        emoji = SUBJECTS[quiz["subject"]][0]
+        unit = f" · {quiz['unit']}" if quiz["unit"] else ""
+
         embed = discord.Embed(
-            title=f"{quiz['title']} — 선착순!",
+            title=f"{emoji} {quiz['subject']}{unit} — 난이도 {quiz['level']}",
             description=f"{quiz['question']}\n\n{quiz['hint']}",
-            color=discord.Color.gold(),
+            color={"하": discord.Color.green(), "중": discord.Color.gold(), "상": discord.Color.red()}[quiz["level"]],
         )
-        embed.set_footer(text=f"가장 먼저 맞힌 사람에게 {num(reward)} byte! ({ANSWER_SECONDS}초)")
-        await channel.send(embed=embed)
+        embed.set_footer(text=f"⏱️ 제한 시간 {time_text(seconds)} · 가장 먼저 맞힌 사람에게 {num(reward)} byte!")
+        if quiz["image"]:
+            embed.set_image(url="attachment://quiz.png")
+            await channel.send(embed=embed, file=discord.File(io.BytesIO(quiz["image"]), filename="quiz.png"))
+        else:
+            await channel.send(embed=embed)
+
+        if seconds > 60:
+            async def remind():
+                await asyncio.sleep(seconds - 60)
+                await channel.send(f"⏰ {emoji} {quiz['subject']} 퀴즈 **1분** 남았어요!")
+            reminder = asyncio.create_task(remind())
 
         tries: dict[int, int] = {}
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + ANSWER_SECONDS
+        deadline = loop.time() + seconds
         winner = None
 
         def is_attempt(m: discord.Message):
             return (
                 m.channel.id == channel.id
                 and not m.author.bot
+                and not m.content.startswith(client.command_prefix)
                 and quiz["check"](m.content.strip()) is not None
             )
 
@@ -183,22 +282,24 @@ async def run_quiz(channel, quiz):
                 msg = await client.wait_for("message", check=is_attempt, timeout=deadline - loop.time())
             except asyncio.TimeoutError:
                 break
-            used = tries.get(msg.author.id, 0)
-            if used >= quiz["tries"]:
-                continue
-            tries[msg.author.id] = used + 1
+            if quiz["tries"] is not None:
+                used = tries.get(msg.author.id, 0)
+                if used >= quiz["tries"]:
+                    continue
+                tries[msg.author.id] = used + 1
             if quiz["check"](msg.content.strip()):
                 winner = msg
-            else:
+            elif quiz["tries"] is not None:   # 글자 답은 채팅과 구분이 안 돼서 ❌ 를 달지 않는다
                 try:
                     await msg.add_reaction("❌")
                 except discord.HTTPException:
                     pass
 
+        explain = f"\n💬 {quiz['explain']}" if quiz["explain"] else ""
         if winner is None:
             embed = discord.Embed(
                 title="⏰ 퀴즈 종료",
-                description=f"아무도 못 맞혔어요. 정답: **{quiz['answer']}**",
+                description=f"아무도 못 맞혔어요. 정답: **{quiz['answer']}**{explain}",
                 color=discord.Color.light_grey(),
             )
             await channel.send(embed=embed)
@@ -209,19 +310,20 @@ async def run_quiz(channel, quiz):
             title="🎉 정답!",
             description=(
                 f"{winner.author.mention}님이 가장 먼저 맞혔어요! **+{num(reward)} byte**\n"
-                f"정답: **{winner.content.strip()}**"
-                + (f" (예시 답: {quiz['answer']})" if quiz["title"].startswith("🔤") else "")
+                f"정답: **{quiz['answer']}**{explain}"
                 + debt_line(result["collected"])
             ),
             color=discord.Color.green(),
         )
         await winner.reply(embed=embed, mention_author=False)
     finally:
+        if reminder:
+            reminder.cancel()
         running_channels.discard(channel.id)
 
 
-async def publish(channel_ids, kind=None):
-    quiz = await make_quiz(kind)
+async def publish(channel_ids, subject=None, level=None):
+    quiz = await make_quiz(subject, level)
     channels = [c for c in map(client.get_channel, channel_ids) if c is not None]
     await asyncio.gather(*(run_quiz(c, quiz) for c in channels), return_exceptions=True)
 
@@ -264,9 +366,18 @@ async def set_quiz_channel(ctx, channel_id: int):
 
 @client.command(aliases=["퀴즈출제"])
 @commands.has_permissions(administrator=True)
-async def publish_quiz(ctx, kind: str = None):
-    """%퀴즈출제 [계산|초성|뜻풀이]"""
+async def publish_quiz(ctx, *args):
+    """%퀴즈출제 [과목] [난이도] (순서 상관없음, 생략하면 랜덤)"""
     await ctx.message.delete()
-    kind = KIND_NAMES.get(kind)
+    subject = next((a for a in args if a in SUBJECTS), None)
+    level = next((a for a in args if a in LEVELS), None)
+    unknown = [a for a in args if a not in SUBJECTS and a not in LEVELS]
+    if unknown:
+        await ctx.send(
+            f"❌ 모르는 값: {', '.join(unknown)}\n"
+            f"과목: {' / '.join(SUBJECTS)} · 난이도: {' / '.join(LEVELS)}",
+            delete_after=10,
+        )
+        return
     channel_ids = await db.get_quiz_channels() or [ctx.channel.id]
-    await publish(channel_ids, kind)
+    await publish(channel_ids, subject, level)

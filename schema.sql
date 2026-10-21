@@ -186,6 +186,20 @@ CREATE TABLE IF NOT EXISTS market_state (             -- market_state.json
 );
 
 
+-- ───────────── 끝말잇기 랭킹 ─────────────
+-- 봇과 1대1 (어려움 / 지옥) 한 판 최고 점수. 연습 모드는 기록하지 않는다.
+CREATE TABLE IF NOT EXISTS wordchain_records (
+    user_id     BIGINT      NOT NULL,
+    difficulty  TEXT        NOT NULL,                  -- hard / hell
+    best_score  INT         NOT NULL,                  -- 한 판 최고 점수
+    best_words  INT         NOT NULL,                  -- 최고 점수를 낸 판에서 이은 단어 수
+    games       INT         NOT NULL DEFAULT 1,        -- 기록된 판 수
+    achieved_at TIMESTAMPTZ NOT NULL DEFAULT now(),    -- 최고 점수를 낸 시각
+    PRIMARY KEY (user_id, difficulty)
+);
+CREATE INDEX IF NOT EXISTS wordchain_records_rank_idx ON wordchain_records (difficulty, best_score DESC);
+
+
 -- ───────────── 경고 ─────────────
 CREATE TABLE IF NOT EXISTS warnings (                 -- warnings.json
     guild_id          BIGINT NOT NULL,

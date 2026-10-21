@@ -3,6 +3,7 @@
     %끝말잇기         봇과 1대1 (난이도 버튼: 쉬움 / 보통 / 어려움 / 지옥, 연습 모드 켜기)
     %끝말잇기 연습    봇과 1대1 연습 (보상 없음, 하루 한도와 상관없이)
     %끝말잇기 같이    친구들과 다같이 (대기방에서 모여서 시작, 마지막까지 남으면 우승)
+    %끝말잇기랭킹 [어려움|지옥]   봇과 1대1 한 판 최고 점수 랭킹 (어려움 / 지옥만)
     게임 중 "그만"     1대1: 번 돈을 받고 끝내기 / 다같이: 기권
 
 - 게임은 명령어 메시지에 새 스레드를 만들어서 그 안에서 한다. 끝나면 스레드를 잠근다.
@@ -11,6 +12,10 @@
 - 두음법칙을 쓸 수 있다. (예: 기술력 → 역사, 고려 → 여름)
 - 시간 안에 못 내면 끝나지만, 그때까지 번 돈은 그대로 받는다. (잃는 건 없음)
 - 보상 = 기본 보상(단어를 이을수록 커짐) × 글자 수 보너스 × 난이도 배율 + 미션 글자 보너스
+  하루 보상 한도를 채우면 계속할지 물어본다. 계속하면 보상 없이 점수만 쌓인다.
+- 점수(랭킹용, 돈과 별개) = 턴 점수(오래 이을수록 커짐) × 글자 수 보너스 × 속도 보너스 + 미션 점수
+  어려움 / 지옥에서 연습이 아닐 때만 한 판 최고 점수가 랭킹에 기록된다.
+- 미션 글자는 한 단어에 들어간 횟수만큼 전부 보너스. (예: 미션 '가'에 가가가가 → 4번)
 - 봇은 어려울수록 "다음 사람이 이을 단어가 적은" 단어를 낸다.
   다만 어떤 난이도든 한방단어(이을 단어가 하나도 없는 단어)는 그것밖에 없을 때만 낸다.
   유저는 한방단어를 내도 된다. (봇이 못 이으면 유저 승리 + 승리 보너스)
@@ -42,6 +47,15 @@ MISSION_BONUS = 300           # 미션 글자 하나당 보너스 (× 난이도 
 MISSION_CHARS = "가나다라마바사아자차카타파하고기리이지시도수주우무부미비소오조정상전대"
 WIN_BONUS = 2000              # 봇이 이을 단어를 못 찾으면 (× 난이도 배율)
 DAILY_MAX = 15000             # 하루에 끝말잇기로 벌 수 있는 최대 금액
+CONTINUE_SECONDS = 30         # 보상 한도를 채웠을 때 "계속할까요?" 버튼을 기다리는 시간
+
+# 점수 (랭킹용, 돈과 별개)
+SCORE_TURN_BASE = 10          # 첫 단어 턴 점수
+SCORE_TURN_STEP = 2           # 단어를 이을 때마다 늘어나는 턴 점수 (상한 없음)
+SCORE_SPEED_MAX = 1.0         # 바로 내면 ×2, 시간이 끝날 때쯤 내면 ×1 (남은 시간 비율만큼)
+SCORE_MISSION = 30            # 미션 글자 하나당 점수
+SCORE_WIN = 100               # 봇이 이을 단어를 못 찾으면
+RANKED = ("hard", "hell")     # 랭킹에 기록되는 난이도
 STOP_WORDS = {"그만", "포기", "ㅈㅈ", "gg"}
 PRACTICE_WORDS = {"연습"}     # %끝말잇기 연습 → 연습 모드가 켜진 채로 시작
 
@@ -68,11 +82,27 @@ LOBBY_SECONDS = 120           # 대기방이 열려 있는 시간
 WORDS_PATH = Path(__file__).resolve().parent.parent / "kkwords.txt"
 
 
+def length_factor(length):
+    """글자 수 보너스: 2글자 ×1, 한 글자 길 때마다 +LENGTH_BONUS (최대 LENGTH_BONUS_MAX_LETTERS 글자까지)"""
+    return 1 + LENGTH_BONUS * (min(length, LENGTH_BONUS_MAX_LETTERS) - 2)
+
+
+def mission_hits(word, mission):
+    """단어에 미션 글자가 몇 번 들어갔는지 (들어간 만큼 전부 센다. 가가가가 → 4)"""
+    return word.count(mission)
+
+
+def word_score(count, word, elapsed, hits):
+    """count 번째로 이은 단어의 점수. elapsed: 그 턴에서 단어를 내기까지 걸린 초"""
+    turn = SCORE_TURN_BASE + SCORE_TURN_STEP * (count - 1)
+    speed = 1 + SCORE_SPEED_MAX * max(0.0, TURN_SECONDS - elapsed) / TURN_SECONDS
+    return round(turn * length_factor(len(word)) * speed) + SCORE_MISSION * hits
+
+
 def word_reward(count, length=2, mult=1.0):
     """count 번째로 이은 length 글자 단어의 보상"""
     base = min(WORD_REWARD_BASE + WORD_REWARD_STEP * (count - 1), WORD_REWARD_MAX)
-    letters = min(length, LENGTH_BONUS_MAX_LETTERS)
-    return round(base * (1 + LENGTH_BONUS * (letters - 2)) * mult)
+    return round(base * length_factor(length) * mult)
 
 
 # ───────────── 단어 사전 ─────────────
@@ -271,8 +301,8 @@ async def close_thread(thread, created: bool):
 
 
 async def take_turn(channel, player, word, used):
-    """player 가 word 에 이을 단어를 낼 때까지 기다린다.
-    ("ok", 단어, 메시지) / ("timeout", None, None) / ("stop", None, 메시지)"""
+    """player 가 word 에 이을 단어를 낼 때까지 기다린다. (결과, 단어, 메시지, 걸린 초)
+    ("ok", 단어, 메시지, 초) / ("timeout", None, None, None) / ("stop", None, 메시지, None)"""
 
     def check(m: discord.Message):
         return (
@@ -281,16 +311,17 @@ async def take_turn(channel, player, word, used):
             and not m.content.startswith(client.command_prefix)
         )
 
-    deadline = time.monotonic() + TURN_SECONDS
+    started = time.monotonic()
+    deadline = started + TURN_SECONDS
     while True:
         try:
             msg = await client.wait_for("message", check=check, timeout=deadline - time.monotonic())
         except asyncio.TimeoutError:
-            return "timeout", None, None
+            return "timeout", None, None, None
 
         text = msg.content.strip()
         if text.lower() in STOP_WORDS:
-            return "stop", None, msg
+            return "stop", None, msg, None
 
         if not re.fullmatch(r"[가-힣]{2,}", text):
             error = "한글 2글자 이상만 낼 수 있어요."
@@ -301,7 +332,7 @@ async def take_turn(channel, player, word, used):
         elif not is_word(text):
             error = "사전에 없는 단어예요."
         else:
-            return "ok", text, msg
+            return "ok", text, msg, time.monotonic() - started
         left = max(0, int(deadline - time.monotonic()))
         await msg.reply(f"❌ {error} (남은 시간 {left}초)", mention_author=False)
 
@@ -359,9 +390,13 @@ class DifficultyView(discord.ui.View):
                 "어려울수록 봇이 **이을 단어가 적은 단어**를 내요. 대신 보상도 커요!\n"
                 f"📏 긴 단어일수록 보상 UP (한 글자당 +{LENGTH_BONUS:.0%})\n"
                 f"🎯 **미션 글자**가 들어간 단어를 내면 추가 보너스\n"
-                f"🏆 봇이 못 이으면 승리 보너스 ({num(WIN_BONUS)} × 배율)\n\n"
-                + ("🧪 **연습 모드**: 보상이 없고, 하루 한도와 상관없이 할 수 있어요."
-                   if self.practice else f"💰 오늘 더 벌 수 있는 돈: **{num(self.remaining)} byte**")
+                f"🏆 봇이 못 이으면 승리 보너스 ({num(WIN_BONUS)} × 배율)\n"
+                "⭐ 🟠어려움 · 🔴지옥은 **점수**가 랭킹에 기록돼요 (`%끝말잇기랭킹`)\n"
+                "　 오래 이을수록 · 긴 단어일수록 · 빨리 낼수록 · 미션 글자를 넣을수록 점수 UP\n\n"
+                + ("🧪 **연습 모드**: 보상이 없고 랭킹에도 기록되지 않아요."
+                   if self.practice else
+                   f"💰 오늘 더 벌 수 있는 돈: **{num(self.remaining)} byte**" if self.remaining > 0 else
+                   "💰 오늘 보상은 다 받았어요. 해도 **점수만** 쌓여요.")
             ),
             color=discord.Color.blurple(),
         )
@@ -376,13 +411,6 @@ class DifficultyView(discord.ui.View):
 
     def make_callback(self, key):
         async def callback(interaction: discord.Interaction):
-            if not self.practice and self.remaining <= 0:
-                await respond.reply(
-                    interaction,
-                    f"❌ 오늘은 끝말잇기로 **{num(DAILY_MAX)} byte**를 모두 벌었어요. 연습 모드를 켜고 해 보세요!",
-                    ephemeral=True,
-                )
-                return
             self.choice = key
             d = DIFFICULTIES[key]
             for item in self.children:
@@ -436,13 +464,78 @@ def new_mission(old=None) -> str:
     return random.choice([c for c in MISSION_CHARS if c != old])
 
 
+class ContinueView(discord.ui.View):
+    """하루 보상 한도를 채웠을 때: 점수만 쌓으며 계속할지"""
+
+    def __init__(self, user):
+        super().__init__(timeout=CONTINUE_SECONDS)
+        self.user = user
+        self.keep_going = False
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user.id:
+            await respond.reply(interaction, "❌ 다른 사람의 끝말잇기예요.", ephemeral=True)
+            return False
+        return True
+
+    async def finish(self, interaction, keep_going):
+        self.keep_going = keep_going
+        for item in self.children:
+            item.disabled = True
+        await respond.edit(interaction, view=self)
+        self.stop()
+
+    @discord.ui.button(label="계속하기 (점수만)", emoji="▶️", style=discord.ButtonStyle.success)
+    async def go(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.finish(interaction, True)
+
+    @discord.ui.button(label="그만하기", emoji="🛑", style=discord.ButtonStyle.danger)
+    async def quit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.finish(interaction, False)
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
+def turn_embed(count, word, elapsed, points, score, money_text, mission, hits, mission_money):
+    """유저가 단어를 이었을 때 보여 줄 결과"""
+    embed = discord.Embed(title=f"✅ {count}단어째 — {word}", color=discord.Color.green())
+    embed.add_field(name="⭐ 점수", value=f"+{points:,} (총 **{score:,}**)", inline=True)
+    embed.add_field(name="⚡ 입력 시간", value=f"{elapsed:.1f}초", inline=True)
+    embed.add_field(name="💰 보상", value=money_text, inline=True)
+    if hits:
+        embed.add_field(
+            name="🎯 미션 성공!",
+            value=f"**{mission}** ×{hits} → +{SCORE_MISSION * hits}점"
+                  + (f", +{num(mission_money)} byte" if mission_money else ""),
+            inline=False,
+        )
+    return embed
+
+
+def add_bot_word(embed, word, mission):
+    embed.add_field(name="🤖 봇의 단어", value=f"**{word}**  →  {start_hint(word)}(으)로 시작", inline=False)
+    embed.set_footer(text=f"🎯 미션 글자: {mission}  ·  ⏱️ {TURN_SECONDS}초 안에 입력")
+    return embed
+
+
 async def play_solo(channel, user, remaining, difficulty="normal", practice=False):
     d = DIFFICULTIES[difficulty]
     mult = d["mult"]
+    ranked = difficulty in RANKED and not practice
     used: set[str] = set()
     count = 0
     earned = 0
+    score = 0
     mission = new_mission()
+    capped = not practice and remaining <= 0   # 오늘 보상 한도를 다 채웠는지
 
     def gain(amount):
         """한도 안에서 번 돈에 더하고, 실제로 더한 금액을 돌려준다. (연습이면 0)"""
@@ -456,23 +549,30 @@ async def play_solo(channel, user, remaining, difficulty="normal", practice=Fals
     word = first_word(difficulty)
     used.add(word)
 
+    if practice:
+        money_line = "🧪 연습 모드라 보상이 없고 랭킹에도 기록되지 않아요."
+    elif capped:
+        money_line = "💰 오늘 보상은 다 받았어요. **점수만** 쌓여요."
+    else:
+        money_line = "💰 단어가 길수록, 오래 이을수록 보상이 커져요."
     embed = discord.Embed(
         title=f"🔤 끝말잇기 시작! {d['emoji']} {d['name']}" + (" (🧪 연습)" if practice else ""),
         description=(
             f"🤖 **{word}**\n\n"
             f"{start_hint(word)}(으)로 시작하는 단어를 입력하세요. (턴당 {TURN_SECONDS}초)\n"
             f"🎯 미션 글자: **{mission}** — 들어간 단어를 내면 보너스!\n"
-            + ("연습 모드라 보상은 없어요. " if practice else "단어가 길수록, 오래 이을수록 보상이 커져요. ")
+            f"{money_line}\n"
+            + ("⭐ 이 판의 점수는 **랭킹**에 기록돼요. 빨리 낼수록 점수 UP!\n" if ranked else "")
             + "`그만`을 입력하면 끝나요."
         ),
         color=discord.Color.blurple(),
     )
-    if not practice:
+    if not practice and not capped:
         embed.set_footer(text=f"오늘 끝말잇기로 더 벌 수 있는 돈: {num(remaining)} byte")
     await channel.send(user.mention, embed=embed)
 
     while True:
-        status, text, msg = await take_turn(channel, user, word, used)
+        status, text, msg, elapsed = await take_turn(channel, user, word, used)
         if status == "timeout":
             end_reason = f"⏰ 시간 초과! 봇의 단어는 **{word}** 였어요."
             break
@@ -482,33 +582,61 @@ async def play_solo(channel, user, remaining, difficulty="normal", practice=Fals
 
         used.add(text)
         count += 1
+        hits = mission_hits(text, mission)
+        points = word_score(count, text, elapsed, hits)
+        score += points
         reward = gain(word_reward(count, len(text), mult))
-        lines = [f"✅ {count}단어째" + (f" +{num(reward)} byte" if reward else "")]
-        hits = text.count(mission)
+        mission_money = gain(MISSION_BONUS * hits * mult) if hits else 0
+        if practice:
+            money_text = "연습 (없음)"
+        elif capped:
+            money_text = "한도 도달 (점수만)"
+        else:
+            money_text = f"+{num(reward + mission_money)} byte\n(누적 {num(earned)})"
+        turn = turn_embed(count, text, elapsed, points, score, money_text, mission, hits, mission_money)
         if hits:
-            bonus = gain(MISSION_BONUS * hits * mult)
-            lines.append(f"🎯 미션 성공! **{mission}** ×{hits}" + (f" +{num(bonus)} byte" if bonus else ""))
             mission = new_mission(mission)
-        if not practice:
-            lines[0] += f" (누적 **{num(earned)}**)"
-            if earned >= remaining:
-                end_reason = f"🎯 오늘 끝말잇기 한도(**{num(DAILY_MAX)} byte**)를 다 채웠어요!"
+
+        # 이번 단어로 오늘 보상 한도를 다 채웠으면 계속할지 물어본다
+        if not practice and not capped and earned >= remaining:
+            capped = True
+            turn.add_field(
+                name="🎉 오늘 보상 한도 달성!",
+                value=(
+                    f"오늘 끝말잇기로 받을 수 있는 **{num(DAILY_MAX)} byte**를 다 채웠어요.\n"
+                    "계속하면 **보상 없이 점수만** 쌓여요." + (" (랭킹 기록 O)" if ranked else "")
+                ),
+                inline=False,
+            )
+            view = ContinueView(user)
+            view.message = await msg.reply(embed=turn, view=view, mention_author=False)
+            await view.wait()
+            if not view.keep_going:
+                end_reason = "🎉 오늘 보상 한도를 다 채우고 끝냈어요."
                 break
+            turn = None   # 결과는 이미 보냈으니 봇의 단어만 따로 보낸다
 
         word = bot_pick(text, used, difficulty)
         if word is None:
+            score += SCORE_WIN
             bonus = gain(WIN_BONUS * mult)
+            if turn:
+                await msg.reply(embed=turn, mention_author=False)
             end_reason = (
-                f"🏆 봇이 **{text}**에 이을 단어를 못 찾았어요. 당신의 승리!"
-                + (f" (승리 보너스 +{num(bonus)} byte)" if bonus else "")
+                f"🏆 봇이 **{text}**에 이을 단어를 못 찾았어요. 당신의 승리! (+{SCORE_WIN}점"
+                + (f", +{num(bonus)} byte)" if bonus else ")")
             )
             break
         used.add(word)
 
-        lines.append(f"🤖 **{word}** → {start_hint(word)}   🎯 미션: **{mission}**")
-        await msg.reply("\n".join(lines), mention_author=False)
+        if turn:
+            await msg.reply(embed=add_bot_word(turn, word, mission), mention_author=False)
+        else:
+            resume = discord.Embed(title="▶️ 계속! (점수만)", color=discord.Color.blurple())
+            await channel.send(embed=add_bot_word(resume, word, mission))
 
     paid, result = (0, {"collected": 0}) if practice else await pay(user.id, earned)
+    record = await db.record_wordchain(user.id, difficulty, score, count) if ranked and score > 0 else None
 
     embed = discord.Embed(
         title=f"🔤 끝말잇기 끝! {d['emoji']} {d['name']}" + (" (🧪 연습)" if practice else ""),
@@ -516,9 +644,55 @@ async def play_solo(channel, user, remaining, difficulty="normal", practice=Fals
         color=discord.Color.green() if paid > 0 else discord.Color.light_grey(),
     )
     embed.add_field(name="📝 이은 단어", value=f"{count}개", inline=True)
+    embed.add_field(name="⭐ 점수", value=f"{score:,}점", inline=True)
     embed.add_field(name="💰 받은 돈", value="연습 (없음)" if practice else f"{num(paid)} byte", inline=True)
+    if record:
+        embed.add_field(
+            name=f"🏆 {d['name']} 랭킹",
+            value=(f"**최고 기록 갱신!** 현재 **{record['rank']}위**" if record["new_best"] else
+                   f"최고 기록 {record['best']:,}점 · 현재 {record['rank']}위"),
+            inline=False,
+        )
+    elif practice:
+        embed.set_footer(text="연습 모드는 랭킹에 기록되지 않아요.")
+    elif difficulty not in RANKED:
+        embed.set_footer(text="🟠어려움 · 🔴지옥에서 하면 점수가 랭킹에 기록돼요. (%끝말잇기랭킹)")
     embed.set_author(name=str(user), icon_url=user.avatar.url if user.avatar else None)
     await channel.send(embed=embed)
+
+
+# ───────────── 랭킹 ─────────────
+MEDALS = ["🥇", "🥈", "🥉"]
+
+
+@client.command(aliases=["끝말잇기랭킹", "끝말랭킹"])
+async def wordchain_rank(ctx, level: str = None):
+    """%끝말잇기랭킹 [어려움|지옥] — 생략하면 둘 다"""
+    await ctx.message.delete()
+    keys = [k for k in RANKED if level in (None, DIFFICULTIES[k]["name"])]
+    if not keys:
+        names = " / ".join(DIFFICULTIES[k]["name"] for k in RANKED)
+        await ctx.send(f"❌ 랭킹은 {names}만 있어요. 예) `%끝말잇기랭킹 지옥`", delete_after=10)
+        return
+
+    embed = discord.Embed(
+        title="🏆 끝말잇기 랭킹",
+        description=(
+            "봇과 1대1 **한 판 최고 점수** 기준이에요. (어려움 · 지옥만, 연습 제외)\n"
+            "오래 이을수록 · 긴 단어일수록 · 빨리 낼수록 · 미션 글자를 넣을수록 점수 UP"
+        ),
+        color=discord.Color.gold(),
+    )
+    for key in keys:
+        d = DIFFICULTIES[key]
+        lines = []
+        for i, row in enumerate(await db.top_wordchain(key, 10), start=1):
+            member = ctx.guild.get_member(row["user_id"]) if ctx.guild else None
+            name = member.display_name if member else f"알 수 없음 ({row['user_id']})"
+            medal = MEDALS[i - 1] if i <= len(MEDALS) else f"{i}위"
+            lines.append(f"{medal} {name} — **{row['best_score']:,}점** ({row['best_words']}단어)")
+        embed.add_field(name=f"{d['emoji']} {d['name']}", value="\n".join(lines) or "아직 기록이 없어요.", inline=False)
+    await ctx.send(embed=embed)
 
 
 # ───────────── 친구들과 다같이 ─────────────
@@ -665,7 +839,7 @@ async def play_multi(channel, players):
     while len(alive) > 1:
         player = alive[turn]
         await channel.send(f"👉 {player.mention} 차례! **{word}** → {start_hint(word)}")
-        status, text, msg = await take_turn(channel, player, word, used)
+        status, text, msg, _ = await take_turn(channel, player, word, used)
 
         if status != "ok":
             alive.remove(player)

@@ -735,6 +735,55 @@ async def set_news_channel(guild_id, channel_id) -> None:
     await set_state(f"news_channel:{int(guild_id)}", str(int(channel_id)))
 
 
+# ───────────── 끝말잇기 랭킹 ─────────────
+
+async def record_wordchain(user_id, difficulty: str, score: int, words: int) -> dict:
+    """한 판 점수를 기록한다. {"best": 최고 점수, "new_best": 이번에 갱신했는지, "rank": 최고 점수 기준 순위}"""
+    uid = int(user_id)
+    async with transaction() as conn:
+        prev = await conn.fetchval(
+            "SELECT best_score FROM wordchain_records WHERE user_id = $1 AND difficulty = $2 FOR UPDATE",
+            uid, difficulty,
+        )
+        new_best = prev is None or score > prev
+        if prev is None:
+            await conn.execute(
+                "INSERT INTO wordchain_records (user_id, difficulty, best_score, best_words) VALUES ($1, $2, $3, $4)",
+                uid, difficulty, score, words,
+            )
+        elif new_best:
+            await conn.execute(
+                """
+                UPDATE wordchain_records SET best_score = $3, best_words = $4, achieved_at = now(), games = games + 1
+                WHERE user_id = $1 AND difficulty = $2
+                """,
+                uid, difficulty, score, words,
+            )
+        else:
+            await conn.execute(
+                "UPDATE wordchain_records SET games = games + 1 WHERE user_id = $1 AND difficulty = $2",
+                uid, difficulty,
+            )
+        best = score if new_best else prev
+        rank = await conn.fetchval(
+            "SELECT count(*) + 1 FROM wordchain_records WHERE difficulty = $1 AND best_score > $2",
+            difficulty, best,
+        )
+    return {"best": best, "new_best": new_best, "rank": rank}
+
+
+async def top_wordchain(difficulty: str, limit: int = 10) -> list[dict]:
+    """[{user_id, best_score, best_words, games, achieved_at}, ...] 점수 높은 순 (같으면 먼저 낸 사람)"""
+    rows = await pool().fetch(
+        """
+        SELECT user_id, best_score, best_words, games, achieved_at FROM wordchain_records
+        WHERE difficulty = $1 ORDER BY best_score DESC, achieved_at LIMIT $2
+        """,
+        difficulty, limit,
+    )
+    return [dict(r) for r in rows]
+
+
 # ───────────── 선착순 퀴즈 ─────────────
 
 async def get_quiz_channels() -> list[int]:
@@ -753,7 +802,7 @@ async def set_quiz_channel(guild_id, channel_id) -> None:
 RESET_TABLES = [
     "users", "loans", "enhance_items", "inventory",
     "stocks", "price_history", "portfolio", "stock_positions", "stock_notices", "market_state",
-    "warnings", "warning_logs", "suggestions", "news",
+    "warnings", "warning_logs", "suggestions", "news", "wordchain_records",
 ]
 
 

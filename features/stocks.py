@@ -922,61 +922,83 @@ async def sell_all_stock(ctx, stock_name: str = None):
 
     await ctx.send(embed=embed, view=view)
 
+CHART_FREE_MINUTES = 60      # %주가그래프 기본 (무료)
+CHART_MAX_MINUTES = 1440     # 가격 기록은 종목당 24시간(1440분)까지만 남는다
+CHART_HOUR_PRICE = 2000      # 60분 더 볼 때마다 내는 돈
+
+
+def chart_cost(minutes):
+    """기본 60분은 무료, 넘는 부분은 60분(시작 단위)마다 2000"""
+    extra = max(0, minutes - CHART_FREE_MINUTES)
+    return -(-extra // 60) * CHART_HOUR_PRICE
+
+
+def draw_chart(series, minutes, title):
+    """series: {종목: [가격...]} → 최근 minutes 분 그래프 PNG"""
+    plt.figure(figsize=(10, 4) if len(series) == 1 else (12, 6))
+    for name, prices in series.items():
+        prices = prices[-minutes:]
+        plt.plot(range(-len(prices) + 1, 1), prices, label=name)
+    plt.title(title)
+    plt.xlabel("분 전")
+    plt.ylabel("가격")
+    plt.grid(True)
+    plt.legend()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    plt.close()
+    return buf
+
+
 @client.command(aliases=["주가그래프"])
-async def stock_chart(ctx, stock_name: str = None):
+async def stock_chart(ctx, *args):
+    """%주가그래프 [주식이름] [분]  — 기본 60분 무료, 60분 더 볼 때마다 2000 byte"""
     await ctx.message.delete()
+    stock_key, minutes = None, CHART_FREE_MINUTES
+    for arg in args:
+        if arg.isdigit():
+            minutes = int(arg)
+        else:
+            stock_key = stock_aliases.get(arg.upper())
+            if not stock_key:
+                await ctx.send(f"❌ `{arg}` 은(는) 없는 주식입니다. (사용법: `%주가그래프 [주식이름] [분]`)")
+                return
+    if minutes < 1:
+        await ctx.send("❌ 1분 이상으로 입력해주세요.")
+        return
+    if minutes > CHART_MAX_MINUTES:
+        await ctx.send(f"❌ 최대 {CHART_MAX_MINUTES}분(24시간)까지만 볼 수 있어요.")
+        return
+
     price_history = await db.load_price_history()
-    if not price_history:
+    if stock_key:
+        if stock_key not in price_history:
+            await ctx.send("❌ 해당 주식의 가격 데이터가 없습니다.")
+            return
+        series = {stock_key: price_history[stock_key]}
+    else:
+        series = price_history
+    if not series:
         await ctx.send("❌ 아직 기록된 가격 데이터가 없습니다.")
         return
 
-    if stock_name:
-        stock_key = stock_aliases.get(stock_name.upper())
-        if not stock_key or stock_key not in price_history:
-            await ctx.send("❌ 해당 주식의 가격 데이터가 없습니다.")
-            return
+    # 기록이 요청보다 짧으면 있는 만큼만 보여주고 그만큼만 받는다
+    minutes = min(minutes, max(len(prices) for prices in series.values()))
+    cost = chart_cost(minutes)
+    if cost:
+        async with db.user_tx(ctx.author.id) as conn:
+            money = await db.get_money(ctx.author.id, conn)
+            if money < cost:
+                await ctx.send(f"💸 돈이 부족합니다. {minutes}분 그래프는 {num(cost)} byte예요. (보유: {num(money)} byte)")
+                return
+            await db.update_user(ctx.author.id, conn, money=money - cost)
 
-        prices = price_history[stock_key]
-        plt.figure(figsize=(10, 4))
-        plt.plot(prices, label=stock_key)
-        plt.title(f"{stock_key} 24시간 주가")
-        plt.xlabel("시간 (1분 단위)")
-        plt.ylabel("가격")
-        plt.grid(True)
-        plt.legend()
-
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        plt.close()
-
-        await ctx.send(file=File(buf, filename=f"{stock_key}_chart.png"))
-    else:
-        plt.figure(figsize=(12, 6))
-        for name, prices in price_history.items():
-            plt.plot(prices, label=name)
-
-        plt.title("모든 주식 24시간 주가")
-        plt.xlabel("시간 (1분 단위)")
-        plt.ylabel("가격")
-        plt.legend()
-        plt.grid(True)
-
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        plt.close()
-
-        await ctx.send(file=File(buf, filename="all_stock_chart.png"))
-
-    # 링크 임베드 추가
-    link_embed = discord.Embed(
-        title="📊 실시간 주식 그래프 웹사이트",
-        description="[👉 그래프 웹에서 보기](https://mirimbot.netlify.app/)",
-        color=discord.Color.blue()
-    )
-    link_embed.set_footer(text="웹사이트는 실시간 가격 데이터를 반영합니다.")
-    await ctx.send(embed=link_embed)
+    title = f"{stock_key or '모든 주식'} 최근 {minutes}분 주가"
+    buf = draw_chart(series, minutes, title)
+    filename = f"{stock_key or 'all_stock'}_chart.png".replace("#", "sharp").replace("+", "plus")
+    paid = f" · {num(cost)} byte 지불" if cost else ""
+    await ctx.send(content=f"📈 {title}{paid}", file=File(buf, filename=filename))
 
 
 @client.command(aliases=["주식랭킹"])

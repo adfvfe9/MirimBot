@@ -11,6 +11,7 @@ import database as db
 import respond
 from bot import client
 from fmt import debt_line, num
+from features.bank import get_total_loan
 
 # ───────────── 밸런스 설정 ─────────────
 WELFARE_BASE = 10000          # 기초수급 첫날 금액
@@ -354,6 +355,12 @@ async def welfare(ctx):
 
     await ctx.send(embed=embed)
 
+async def total_debt(user_id, user, conn=None):
+    """파산 대상 빚: 미납금 + 아직 안 갚은 은행 대출(이자 포함)"""
+    loans = await db.get_loans(user_id, conn)
+    return user["unpaid_amount"] + get_total_loan(loans)
+
+
 @client.command()
 async def 파산(ctx):
     await ctx.message.delete()
@@ -362,11 +369,12 @@ async def 파산(ctx):
     user = await db.get_user(user_id)
     today = db.today()
     last = user["bankruptcy_date"]
+    debt = await total_debt(user_id, user)
 
-    if user["unpaid_amount"] <= 0:
+    if debt <= 0:
         embed = discord.Embed(
             title="📛 파산 불가",
-            description="파산은 **미납금(빚)이 있을 때만** 할 수 있어요.",
+            description="파산은 **빚(은행 대출 또는 미납금)이 있을 때만** 할 수 있어요.",
             color=discord.Color.red()
         )
         return await ctx.send(embed=embed)
@@ -384,7 +392,7 @@ async def 파산(ctx):
     embed = discord.Embed(
         title="⚠️ 파산 확인",
         description=(
-            f"미납금 **{num(user['unpaid_amount'])} byte**가 사라지는 대신,\n"
+            f"빚 **{num(debt)} byte**(대출 + 미납금)가 사라지는 대신,\n"
             "**가진 것을 전부 잃습니다.**\n\n"
             "• 현금 → 0\n"
             "• 대출, 적금 → 정리\n"
@@ -427,7 +435,8 @@ async def 파산(ctx):
                 current = await db.get_user(user_id, conn)
                 day = db.today()
                 last_now = current["bankruptcy_date"]
-                allowed = current["unpaid_amount"] > 0 and not (
+                debt_now = await total_debt(user_id, current, conn)
+                allowed = debt_now > 0 and not (
                     last_now and (day - last_now).days < BANKRUPTCY_INTERVAL_DAYS
                 )
                 if allowed:
@@ -447,7 +456,7 @@ async def 파산(ctx):
             result_embed = discord.Embed(
                 title="💸 파산 완료",
                 description=(
-                    f"미납금 **{num(current['unpaid_amount'])} byte**가 사라졌습니다.\n"
+                    f"빚 **{num(debt_now)} byte**가 사라졌습니다.\n"
                     "가진 것도 모두 정리되었습니다. 처음부터 다시 시작해보세요!"
                 ),
                 color=discord.Color.red()

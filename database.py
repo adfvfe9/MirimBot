@@ -141,8 +141,10 @@ USER_DEFAULTS = {
     "rps_count": 0,
     "send_date": None,
     "send_total": 0.0,
+    "wordchain_date": None,
+    "wordchain_earned": 0.0,
 }
-_MONEY_FIELDS = {"money", "gamble_net", "deposit_amount", "unpaid_amount", "send_total"}
+_MONEY_FIELDS = {"money", "gamble_net", "deposit_amount", "unpaid_amount", "send_total", "wordchain_earned"}
 _INT_NUMERIC_FIELDS = {"token_price"}
 
 
@@ -731,6 +733,17 @@ async def get_news_channels() -> list[int]:
 
 async def set_news_channel(guild_id, channel_id) -> None:
     await set_state(f"news_channel:{int(guild_id)}", str(int(channel_id)))
+
+
+# ───────────── 선착순 퀴즈 ─────────────
+
+async def get_quiz_channels() -> list[int]:
+    rows = await pool().fetch("SELECT value FROM bot_state WHERE key LIKE 'quiz_channel:%'")
+    return [int(r["value"]) for r in rows]
+
+
+async def set_quiz_channel(guild_id, channel_id) -> None:
+    await set_state(f"quiz_channel:{int(guild_id)}", str(int(channel_id)))
 
 
 # ───────────── 전체 초기화 ─────────────

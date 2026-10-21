@@ -34,7 +34,9 @@ CREATE TABLE IF NOT EXISTS users (
     rps_date             DATE,                            -- 가위바위보 하루 판수 제한
     rps_count            INT     NOT NULL DEFAULT 0,
     send_date            DATE,                            -- 송금 하루 한도
-    send_total           NUMERIC NOT NULL DEFAULT 0
+    send_total           NUMERIC NOT NULL DEFAULT 0,
+    wordchain_date       DATE,                            -- 끝말잇기 하루 보상 한도
+    wordchain_earned     NUMERIC NOT NULL DEFAULT 0
 );
 
 -- 예전에 만들어진 users 테이블에 새 컬럼 추가 (이미 있으면 아무 일도 안 한다)
@@ -42,6 +44,8 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS rps_date   DATE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS rps_count  INT     NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS send_date  DATE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS send_total NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS wordchain_date   DATE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS wordchain_earned NUMERIC NOT NULL DEFAULT 0;
 
 -- 미납금 자동 징수
 -- users 행이 UPDATE 될 때마다 자동으로 실행된다. (database.py 는 돈을 항상 UPDATE 로 바꾼다)

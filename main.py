@@ -11,6 +11,8 @@
   features/news.py         주식 뉴스 (30~90분마다 랜덤 뉴스)
   features/assets.py       순자산, 자산랭킹
   features/gamble.py       도박, 가위바위보
+  features/wordchain.py    끝말잇기 (단어 목록: kkwords.txt)
+  features/quiz.py         선착순 퀴즈 (1~2시간마다 퀴즈 채널에)
   features/bank.py         은행 (대출/상환/적금/출금)
   features/tokens.py       토큰, 상점
   features/moderation.py   경고
@@ -38,11 +40,13 @@ from features import (  # noqa: F401
     general,
     moderation,
     news,
+    quiz,
     renewal,
     stocks,
     futures,
     suggestions,
     tokens,
+    wordchain,
 )
 
 

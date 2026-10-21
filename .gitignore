@@ -142,6 +142,5 @@ cython_debug/
 # 추가: 민감정보 파일 무시
 .env
 *.json
-kkwords.txt
 __pycache__
 json_backup/

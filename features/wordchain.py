@@ -1,11 +1,19 @@
 """끝말잇기: 봇과 끝말잇기를 해서 단어를 이을 때마다 돈을 번다.
 
-    %끝말잇기       게임 시작 (봇이 먼저 단어를 낸다)
-    게임 중 "그만"   여기까지 번 돈을 받고 끝내기
+    %끝말잇기         봇과 1대1 (난이도 버튼: 쉬움 / 보통 / 어려움 / 지옥, 연습 모드 켜기)
+    %끝말잇기 연습    봇과 1대1 연습 (보상 없음, 하루 한도와 상관없이)
+    %끝말잇기 같이    친구들과 다같이 (대기방에서 모여서 시작, 마지막까지 남으면 우승)
+    게임 중 "그만"     1대1: 번 돈을 받고 끝내기 / 다같이: 기권
+
+- 게임은 명령어 메시지에 새 스레드를 만들어서 그 안에서 한다. 끝나면 스레드를 잠근다.
 
 - 단어는 kkwords.txt (한 줄에 한 단어) 에 있는 한글 2글자 이상만 인정한다.
 - 두음법칙을 쓸 수 있다. (예: 기술력 → 역사, 고려 → 여름)
 - 시간 안에 못 내면 끝나지만, 그때까지 번 돈은 그대로 받는다. (잃는 건 없음)
+- 보상 = 기본 보상(단어를 이을수록 커짐) × 글자 수 보너스 × 난이도 배율 + 미션 글자 보너스
+- 봇은 어려울수록 "다음 사람이 이을 단어가 적은" 단어를 낸다.
+  다만 어떤 난이도든 한방단어(이을 단어가 하나도 없는 단어)는 그것밖에 없을 때만 낸다.
+  유저는 한방단어를 내도 된다. (봇이 못 이으면 유저 승리 + 승리 보너스)
 - 단어 목록은 처음 게임을 시작할 때 한 번 읽어서 메모리에 둔다.
   (선착순 퀴즈의 초성 문제도 이 목록을 쓴다)
 """
@@ -13,31 +21,58 @@ import asyncio
 import random
 import re
 import time
+from collections import Counter
 from pathlib import Path
 
 import discord
 
 import database as db
+import respond
 from bot import client
 from fmt import debt_line, num
 
 # ───────────── 밸런스 설정 ─────────────
 TURN_SECONDS = 20             # 한 턴 제한 시간
-WORD_REWARD_BASE = 200        # 첫 단어 보상
-WORD_REWARD_STEP = 50         # 단어를 이을 때마다 늘어나는 보상
-WORD_REWARD_MAX = 1000        # 단어 하나당 최대 보상 (17번째 단어부터)
+WORD_REWARD_BASE = 200        # 첫 단어 기본 보상
+WORD_REWARD_STEP = 50         # 단어를 이을 때마다 늘어나는 기본 보상
+WORD_REWARD_MAX = 1000        # 단어 하나당 최대 기본 보상 (17번째 단어부터)
+LENGTH_BONUS = 0.25           # 2글자보다 한 글자 길 때마다 +25% (3글자 1.25배, 4글자 1.5배 ...)
+LENGTH_BONUS_MAX_LETTERS = 8  # 글자 수 보너스는 8글자(2.5배)까지
+MISSION_BONUS = 300           # 미션 글자 하나당 보너스 (× 난이도 배율)
+MISSION_CHARS = "가나다라마바사아자차카타파하고기리이지시도수주우무부미비소오조정상전대"
+WIN_BONUS = 2000              # 봇이 이을 단어를 못 찾으면 (× 난이도 배율)
 DAILY_MAX = 15000             # 하루에 끝말잇기로 벌 수 있는 최대 금액
 STOP_WORDS = {"그만", "포기", "ㅈㅈ", "gg"}
+PRACTICE_WORDS = {"연습"}     # %끝말잇기 연습 → 연습 모드가 켜진 채로 시작
 
-BOT_WORD_LENGTH = (2, 3)      # 봇이 내는 단어 길이 (길수록 처음 보는 단어가 많아서 짧게)
-BOT_SAFE_MIN = 30             # 봇은 다음 사람이 이을 수 있는 단어가 이만큼 이상 있는 단어만 낸다 (한방단어 금지)
+# 봇 난이도
+#   mult         보상 배율
+#   safe_min     평소에는 다음 사람이 이을 단어가 이만큼 이상 있는 단어만 낸다
+#   nasty        이 확률로 "이을 단어가 가장 적은 쪽" 단어를 고른다 (지옥은 항상 가장 적은 단어)
+#   short        True 면 2~3글자 단어 위주로 낸다 (긴 단어는 처음 보는 게 많아서)
+DIFFICULTIES = {
+    "easy":   {"name": "쉬움",   "emoji": "🟢", "mult": 0.05, "safe_min": 100, "nasty": 0.0, "short": True},
+    "normal": {"name": "보통",   "emoji": "🟡", "mult": 0.5,  "safe_min": 30,  "nasty": 0.1, "short": True},
+    "hard":   {"name": "어려움", "emoji": "🟠", "mult": 1.0,  "safe_min": 10,  "nasty": 0.5, "short": False},
+    "hell":   {"name": "지옥",   "emoji": "🔴", "mult": 2.0,  "safe_min": 1,   "nasty": 1.0, "short": False},
+}
+NASTY_TOP = 0.05              # "이을 단어가 적은 쪽" = 후보 중 하위 5%
+CHOOSE_SECONDS = 60           # 난이도 고르는 시간
+
+MULTI_WORDS = {"같이", "다같이", "멀티", "친구"}   # %끝말잇기 <이 단어> → 다같이 모드
+MULTI_MIN_PLAYERS = 2
+MULTI_MAX_PLAYERS = 8
+MULTI_WIN_BONUS = 1000        # 우승 보너스: (참가자 수 - 1) × 이 금액
+LOBBY_SECONDS = 120           # 대기방이 열려 있는 시간
 
 WORDS_PATH = Path(__file__).resolve().parent.parent / "kkwords.txt"
 
 
-def word_reward(count):
-    """count 번째로 이은 단어의 보상"""
-    return min(WORD_REWARD_BASE + WORD_REWARD_STEP * (count - 1), WORD_REWARD_MAX)
+def word_reward(count, length=2, mult=1.0):
+    """count 번째로 이은 length 글자 단어의 보상"""
+    base = min(WORD_REWARD_BASE + WORD_REWARD_STEP * (count - 1), WORD_REWARD_MAX)
+    letters = min(length, LENGTH_BONUS_MAX_LETTERS)
+    return round(base * (1 + LENGTH_BONUS * (letters - 2)) * mult)
 
 
 # ───────────── 단어 사전 ─────────────
@@ -125,20 +160,49 @@ def next_starts(word: str) -> set[str]:
     return {last, dueum(last)}
 
 
-def continuations(word: str) -> int:
-    return sum(_counts.get(c, 0) for c in next_starts(word))
+def continuations(word: str, used_starts: Counter | None = None) -> int:
+    """word 다음에 이을 수 있는 단어 수. used_starts(이미 나온 단어의 첫 글자 수)를 주면 그만큼 뺀다."""
+    total = 0
+    for c in next_starts(word):
+        total += _counts.get(c, 0) - (used_starts[c] if used_starts else 0)
+    return total
 
 
-def bot_pick(prev: str, used: set[str]) -> str | None:
+def pick_word(candidates: list[str], difficulty: str, used: set[str]) -> str:
+    """난이도에 맞게 candidates 중 하나를 고른다. (candidates 는 비어 있지 않아야 한다)"""
+    d = DIFFICULTIES[difficulty]
+    used_starts = Counter(u[0] for u in used)
+    # 고른 단어 자신도 나온 단어가 되므로, 자기 끝 글자로 시작하는 단어(예: 둬둬)면 1 을 더 뺀다
+    scored = [(continuations(w, used_starts) - (w[0] in next_starts(w)), w) for w in candidates]
+
+    # 한방단어는 그것밖에 없을 때만
+    alive = [(n, w) for n, w in scored if n > 0]
+    if not alive:
+        return random.choice(candidates)
+
+    if d["short"]:
+        alive = [(n, w) for n, w in alive if len(w) <= 3] or alive
+
+    if difficulty == "hell":
+        least = min(n for n, _ in alive)
+        return random.choice([w for n, w in alive if n == least])
+
+    if random.random() < d["nasty"]:
+        alive.sort()
+        return random.choice(alive[:max(1, int(len(alive) * NASTY_TOP))])[1]
+
+    safe = [w for n, w in alive if n >= d["safe_min"]]
+    return random.choice(safe or [w for _, w in alive])
+
+
+def bot_pick(prev: str, used: set[str], difficulty: str = "normal") -> str | None:
     """봇이 낼 단어. 이을 단어가 없으면 None (봇 패배)."""
     candidates = []
     for start in next_starts(prev):
         candidates += [w for w in words_starting_with(start) if w not in used]
     if not candidates:
         return None
-    low, high = BOT_WORD_LENGTH
-    safe = [w for w in candidates if low <= len(w) <= high and continuations(w) >= BOT_SAFE_MIN]
-    return random.choice(safe or candidates)
+    return pick_word(candidates, difficulty, used)
 
 
 def start_hint(word: str) -> str:
@@ -147,17 +211,23 @@ def start_hint(word: str) -> str:
     return f"**{last}**" + (f" (또는 **{dueum(last)}**)" if len(starts) > 1 else "")
 
 
-# ───────────── 게임 ─────────────
-playing: set[int] = set()   # 지금 끝말잇기 중인 유저
 
 
-async def earned_today(user_id) -> float:
+# ───────────── 게임 공통 ─────────────
+playing: set[int] = set()   # 지금 끝말잇기 중이거나 대기방에 있는 유저
+
+
+async def remaining_today(user_id) -> float:
+    """오늘 끝말잇기로 더 벌 수 있는 돈"""
     user = await db.get_user(user_id)
-    return user["wordchain_earned"] if user["wordchain_date"] == db.today() else 0.0
+    earned = user["wordchain_earned"] if user["wordchain_date"] == db.today() else 0.0
+    return max(0.0, DAILY_MAX - earned)
 
 
 async def pay(user_id, amount):
     """오늘 한도 안에서 지급한다. 실제로 지급한 금액과 receive 결과를 돌려준다."""
+    if amount <= 0:
+        return 0, {"collected": 0}
     today = db.today()
     async with db.user_tx(user_id) as conn:
         user = await db.get_user(user_id, conn)
@@ -168,124 +238,481 @@ async def pay(user_id, amount):
     return amount, result
 
 
-@client.command(aliases=["끝말잇기", "끝말"])
-async def wordchain(ctx):
-    user_id = ctx.author.id
-    if user_id in playing:
-        await ctx.send(f"{ctx.author.mention} ❌ 이미 끝말잇기를 하고 있어요!")
-        return
+def first_word(difficulty: str = "normal") -> str:
+    """게임을 시작할 단어. 아무 글자나 하나 골라서, 그 글자로 시작하는 2~3글자 단어 중 난이도에 맞게."""
+    char = random.choice([c for c, n in _counts.items() if n >= 200])
+    candidates = [w for w in words_starting_with(char) if len(w) <= 3]
+    return pick_word(candidates, difficulty, set())
 
-    remaining = DAILY_MAX - await earned_today(user_id)
-    if remaining <= 0:
-        await ctx.send(
-            f"{ctx.author.mention} ❌ 오늘은 끝말잇기로 **{num(DAILY_MAX)} byte**를 모두 벌었어요. "
-            "내일 다시 도전하세요!"
-        )
-        return
 
-    if not await load_words():
-        await ctx.send("❌ 단어 목록 파일(kkwords.txt)이 없어서 끝말잇기를 할 수 없어요. 관리자에게 알려주세요.")
-        return
-
-    playing.add(user_id)
+async def open_thread(message: discord.Message, name: str):
+    """게임용 스레드를 만든다. (채널, 새로 만들었는지)
+    이미 스레드 안이거나 권한이 없어서 못 만들면 그 채널에서 그대로 한다."""
+    if isinstance(message.channel, discord.Thread):
+        return message.channel, False
     try:
-        await play(ctx, remaining)
-    finally:
-        playing.discard(user_id)
+        return await message.create_thread(name=name[:100], auto_archive_duration=60), True
+    except discord.HTTPException as e:
+        print(f"[끝말잇기] 스레드 생성 실패, 채널에서 진행: {type(e).__name__}: {e}")
+        return message.channel, False
 
 
-async def play(ctx, remaining):
-    user = ctx.author
-    used: set[str] = set()
-    count = 0
-    earned = 0
+async def close_thread(thread, created: bool):
+    """게임이 끝난 스레드를 보관하고 잠근다. (잠그기는 스레드 관리 권한이 있어야 해서 실패하면 보관만)"""
+    if not created:
+        return
+    try:
+        await thread.edit(archived=True, locked=True)
+    except discord.HTTPException:
+        try:
+            await thread.edit(archived=True)
+        except discord.HTTPException:
+            pass
 
-    word = random_word(lengths=(2, 3))
-    while continuations(word) < BOT_SAFE_MIN:
-        word = random_word(lengths=(2, 3))
-    used.add(word)
 
-    embed = discord.Embed(
-        title="🔤 끝말잇기 시작!",
-        description=(
-            f"🤖 **{word}**\n\n"
-            f"{start_hint(word)}(으)로 시작하는 단어를 입력하세요. (턴당 {TURN_SECONDS}초)\n"
-            f"단어를 이을 때마다 **{num(WORD_REWARD_BASE)} byte**부터 점점 더 벌어요. "
-            f"`그만`을 입력하면 번 돈을 받고 끝나요."
-        ),
-        color=discord.Color.blurple(),
-    )
-    embed.set_footer(text=f"오늘 끝말잇기로 더 벌 수 있는 돈: {num(remaining)} byte")
-    await ctx.send(user.mention, embed=embed)
+async def take_turn(channel, player, word, used):
+    """player 가 word 에 이을 단어를 낼 때까지 기다린다.
+    ("ok", 단어, 메시지) / ("timeout", None, None) / ("stop", None, 메시지)"""
 
     def check(m: discord.Message):
         return (
-            m.author.id == user.id
-            and m.channel.id == ctx.channel.id
+            m.author.id == player.id
+            and m.channel.id == channel.id
             and not m.content.startswith(client.command_prefix)
         )
 
-    end_reason = None
-    while end_reason is None:
-        deadline = time.monotonic() + TURN_SECONDS
-        while True:
+    deadline = time.monotonic() + TURN_SECONDS
+    while True:
+        try:
+            msg = await client.wait_for("message", check=check, timeout=deadline - time.monotonic())
+        except asyncio.TimeoutError:
+            return "timeout", None, None
+
+        text = msg.content.strip()
+        if text.lower() in STOP_WORDS:
+            return "stop", None, msg
+
+        if not re.fullmatch(r"[가-힣]{2,}", text):
+            error = "한글 2글자 이상만 낼 수 있어요."
+        elif text[0] not in next_starts(word):
+            error = f"{start_hint(word)}(으)로 시작해야 해요."
+        elif text in used:
+            error = "이미 나온 단어예요."
+        elif not is_word(text):
+            error = "사전에 없는 단어예요."
+        else:
+            return "ok", text, msg
+        left = max(0, int(deadline - time.monotonic()))
+        await msg.reply(f"❌ {error} (남은 시간 {left}초)", mention_author=False)
+
+
+async def check_can_play(ctx) -> bool:
+    if ctx.author.id in playing:
+        await ctx.send(f"{ctx.author.mention} ❌ 이미 끝말잇기를 하고 있어요!")
+        return False
+    if not await load_words():
+        await ctx.send("❌ 단어 목록 파일(kkwords.txt)이 없어서 끝말잇기를 할 수 없어요. 관리자에게 알려주세요.")
+        return False
+    return True
+
+
+@client.command(aliases=["끝말잇기", "끝말"])
+async def wordchain(ctx, mode: str = None):
+    """%끝말잇기 → 봇과 1대1, %끝말잇기 연습 → 1대1 연습, %끝말잇기 같이 → 친구들과 다같이"""
+    if mode in MULTI_WORDS:
+        await multi_lobby(ctx)
+    else:
+        await solo(ctx, practice=mode in PRACTICE_WORDS)
+
+
+# ───────────── 봇과 1대1 ─────────────
+
+class DifficultyView(discord.ui.View):
+    """난이도 버튼 4개 + 연습 모드 켜기/끄기"""
+
+    def __init__(self, user, remaining, practice=False):
+        super().__init__(timeout=CHOOSE_SECONDS)
+        self.user = user
+        self.remaining = remaining
+        self.practice = practice
+        self.choice = None
+        self.message: discord.Message | None = None
+        for key, d in DIFFICULTIES.items():
+            button = discord.ui.Button(label=d["name"], emoji=d["emoji"], style=discord.ButtonStyle.primary, row=0)
+            button.callback = self.make_callback(key)
+            self.add_item(button)
+        self.update_practice_button()
+
+    def update_practice_button(self):
+        self.toggle_practice.label = f"연습 모드: {'켜짐' if self.practice else '꺼짐'}"
+        self.toggle_practice.style = discord.ButtonStyle.success if self.practice else discord.ButtonStyle.secondary
+
+    def embed(self, footer=None):
+        lines = []
+        for d in DIFFICULTIES.values():
+            first = word_reward(1, 2, d["mult"])
+            lines.append(f"{d['emoji']} **{d['name']}** — 보상 ×{d['mult']:g} (첫 단어 {num(first)} byte~)")
+        embed = discord.Embed(
+            title="🔤 끝말잇기 — 난이도를 고르세요" + (" (🧪 연습)" if self.practice else ""),
+            description=(
+                "\n".join(lines) + "\n\n"
+                "어려울수록 봇이 **이을 단어가 적은 단어**를 내요. 대신 보상도 커요!\n"
+                f"📏 긴 단어일수록 보상 UP (한 글자당 +{LENGTH_BONUS:.0%})\n"
+                f"🎯 **미션 글자**가 들어간 단어를 내면 추가 보너스\n"
+                f"🏆 봇이 못 이으면 승리 보너스 ({num(WIN_BONUS)} × 배율)\n\n"
+                + ("🧪 **연습 모드**: 보상이 없고, 하루 한도와 상관없이 할 수 있어요."
+                   if self.practice else f"💰 오늘 더 벌 수 있는 돈: **{num(self.remaining)} byte**")
+            ),
+            color=discord.Color.blurple(),
+        )
+        embed.set_footer(text=footer or f"{CHOOSE_SECONDS}초 안에 골라 주세요.")
+        return embed
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user.id:
+            await respond.reply(interaction, "❌ 다른 사람의 끝말잇기예요. `%끝말잇기`로 직접 시작하세요!", ephemeral=True)
+            return False
+        return True
+
+    def make_callback(self, key):
+        async def callback(interaction: discord.Interaction):
+            if not self.practice and self.remaining <= 0:
+                await respond.reply(
+                    interaction,
+                    f"❌ 오늘은 끝말잇기로 **{num(DAILY_MAX)} byte**를 모두 벌었어요. 연습 모드를 켜고 해 보세요!",
+                    ephemeral=True,
+                )
+                return
+            self.choice = key
+            d = DIFFICULTIES[key]
+            for item in self.children:
+                item.disabled = True
+            await respond.edit(
+                interaction,
+                embed=self.embed(f"{d['emoji']} {d['name']}{' (연습)' if self.practice else ''} 선택! 스레드에서 시작해요."),
+                view=self,
+            )
+            self.stop()
+        return callback
+
+    @discord.ui.button(label="연습 모드", emoji="🧪", style=discord.ButtonStyle.secondary, row=1)
+    async def toggle_practice(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.practice = not self.practice
+        self.update_practice_button()
+        await respond.edit(interaction, embed=self.embed(), view=self)
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
             try:
-                msg = await client.wait_for("message", check=check, timeout=deadline - time.monotonic())
-            except asyncio.TimeoutError:
-                end_reason = f"⏰ 시간 초과! 봇의 단어는 **{word}** 였어요."
-                break
+                await self.message.edit(embed=self.embed("⏰ 시간이 지나 닫혔어요."), view=self)
+            except discord.HTTPException:
+                pass
 
-            text = msg.content.strip()
-            if text.lower() in STOP_WORDS:
-                end_reason = "🛑 그만하기를 선택했어요."
-                break
 
-            starts = next_starts(word)
-            if not re.fullmatch(r"[가-힣]{2,}", text):
-                error = "한글 2글자 이상만 낼 수 있어요."
-            elif text[0] not in starts:
-                error = f"{start_hint(word)}(으)로 시작해야 해요."
-            elif text in used:
-                error = "이미 나온 단어예요."
-            elif not is_word(text):
-                error = "사전에 없는 단어예요."
-            else:
-                break
-            left = max(0, int(deadline - time.monotonic()))
-            await msg.reply(f"❌ {error} (남은 시간 {left}초)", mention_author=False)
+async def solo(ctx, practice=False):
+    user = ctx.author
+    if not await check_can_play(ctx):
+        return
 
-        if end_reason:
+    playing.add(user.id)
+    try:
+        view = DifficultyView(user, await remaining_today(user.id), practice)
+        view.message = await ctx.send(embed=view.embed(), view=view)
+        await view.wait()
+        if view.choice is None:
+            return
+        d = DIFFICULTIES[view.choice]
+        label = f"{d['name']}{' 연습' if view.practice else ''}"
+        thread, created = await open_thread(view.message, f"🔤 {user.display_name}의 끝말잇기 ({label})")
+        await play_solo(thread, user, view.remaining, view.choice, view.practice)
+        await close_thread(thread, created)
+    finally:
+        playing.discard(user.id)
+
+
+def new_mission(old=None) -> str:
+    return random.choice([c for c in MISSION_CHARS if c != old])
+
+
+async def play_solo(channel, user, remaining, difficulty="normal", practice=False):
+    d = DIFFICULTIES[difficulty]
+    mult = d["mult"]
+    used: set[str] = set()
+    count = 0
+    earned = 0
+    mission = new_mission()
+
+    def gain(amount):
+        """한도 안에서 번 돈에 더하고, 실제로 더한 금액을 돌려준다. (연습이면 0)"""
+        nonlocal earned
+        if practice:
+            return 0
+        amount = max(0, min(amount, remaining - earned))
+        earned += amount
+        return amount
+
+    word = first_word(difficulty)
+    used.add(word)
+
+    embed = discord.Embed(
+        title=f"🔤 끝말잇기 시작! {d['emoji']} {d['name']}" + (" (🧪 연습)" if practice else ""),
+        description=(
+            f"🤖 **{word}**\n\n"
+            f"{start_hint(word)}(으)로 시작하는 단어를 입력하세요. (턴당 {TURN_SECONDS}초)\n"
+            f"🎯 미션 글자: **{mission}** — 들어간 단어를 내면 보너스!\n"
+            + ("연습 모드라 보상은 없어요. " if practice else "단어가 길수록, 오래 이을수록 보상이 커져요. ")
+            + "`그만`을 입력하면 끝나요."
+        ),
+        color=discord.Color.blurple(),
+    )
+    if not practice:
+        embed.set_footer(text=f"오늘 끝말잇기로 더 벌 수 있는 돈: {num(remaining)} byte")
+    await channel.send(user.mention, embed=embed)
+
+    while True:
+        status, text, msg = await take_turn(channel, user, word, used)
+        if status == "timeout":
+            end_reason = f"⏰ 시간 초과! 봇의 단어는 **{word}** 였어요."
+            break
+        if status == "stop":
+            end_reason = "🛑 그만하기를 선택했어요."
             break
 
-        # 유저가 단어를 이었다
         used.add(text)
         count += 1
-        reward = min(word_reward(count), remaining - earned)
-        earned += reward
-        if earned >= remaining:
-            end_reason = f"🎯 오늘 끝말잇기 한도(**{num(DAILY_MAX)} byte**)를 다 채웠어요!"
-            break
+        reward = gain(word_reward(count, len(text), mult))
+        lines = [f"✅ {count}단어째" + (f" +{num(reward)} byte" if reward else "")]
+        hits = text.count(mission)
+        if hits:
+            bonus = gain(MISSION_BONUS * hits * mult)
+            lines.append(f"🎯 미션 성공! **{mission}** ×{hits}" + (f" +{num(bonus)} byte" if bonus else ""))
+            mission = new_mission(mission)
+        if not practice:
+            lines[0] += f" (누적 **{num(earned)}**)"
+            if earned >= remaining:
+                end_reason = f"🎯 오늘 끝말잇기 한도(**{num(DAILY_MAX)} byte**)를 다 채웠어요!"
+                break
 
-        word = bot_pick(text, used)
+        word = bot_pick(text, used, difficulty)
         if word is None:
-            end_reason = f"🏆 봇이 **{text}**에 이을 단어를 못 찾았어요. 당신의 승리!"
+            bonus = gain(WIN_BONUS * mult)
+            end_reason = (
+                f"🏆 봇이 **{text}**에 이을 단어를 못 찾았어요. 당신의 승리!"
+                + (f" (승리 보너스 +{num(bonus)} byte)" if bonus else "")
+            )
             break
         used.add(word)
 
-        await msg.reply(
-            f"✅ +{num(reward)} byte (누적 **{num(earned)}**, {count}단어)\n"
-            f"🤖 **{word}** → {start_hint(word)}",
-            mention_author=False,
-        )
+        lines.append(f"🤖 **{word}** → {start_hint(word)}   🎯 미션: **{mission}**")
+        await msg.reply("\n".join(lines), mention_author=False)
 
-    paid, result = await pay(user.id, earned) if earned > 0 else (0, {"collected": 0})
+    paid, result = (0, {"collected": 0}) if practice else await pay(user.id, earned)
 
     embed = discord.Embed(
-        title="🔤 끝말잇기 끝!",
+        title=f"🔤 끝말잇기 끝! {d['emoji']} {d['name']}" + (" (🧪 연습)" if practice else ""),
         description=end_reason + debt_line(result["collected"]),
         color=discord.Color.green() if paid > 0 else discord.Color.light_grey(),
     )
     embed.add_field(name="📝 이은 단어", value=f"{count}개", inline=True)
-    embed.add_field(name="💰 받은 돈", value=f"{num(paid)} byte", inline=True)
+    embed.add_field(name="💰 받은 돈", value="연습 (없음)" if practice else f"{num(paid)} byte", inline=True)
     embed.set_author(name=str(user), icon_url=user.avatar.url if user.avatar else None)
-    await ctx.send(embed=embed)
+    await channel.send(embed=embed)
+
+
+# ───────────── 친구들과 다같이 ─────────────
+# 대기방에서 [참가]로 모이고, 방장이 [시작]을 누르면 스레드에서 순서대로 단어를 잇는다.
+# 시간 안에 못 내거나 `그만`을 치면 탈락. 마지막까지 남은 사람이 우승.
+# 보상: 단어마다 1대1과 같은 보상(사람마다 따로 늘어남) + 우승 보너스. 모두 각자의 하루 한도 안에서.
+
+class LobbyView(discord.ui.View):
+    def __init__(self, host: discord.Member):
+        super().__init__(timeout=LOBBY_SECONDS)
+        self.host = host
+        self.players: list[discord.Member] = [host]
+        self.started = False
+        self.message: discord.Message | None = None
+
+    def embed(self, footer=None):
+        embed = discord.Embed(
+            title="🔤 다같이 끝말잇기 — 참가자 모집 중!",
+            description=(
+                f"[참가]를 눌러 들어오세요. 방장({self.host.mention})이 [시작]을 누르면 스레드에서 시작해요.\n"
+                f"순서대로 단어를 잇고, {TURN_SECONDS}초 안에 못 내면 탈락! 마지막까지 남으면 우승.\n\n"
+                f"💰 단어마다 **{num(WORD_REWARD_BASE)} byte**부터 (사람마다 따로 늘어남, 긴 단어일수록 UP)\n"
+                f"🏆 우승 보너스: **(참가자 수 - 1) × {num(MULTI_WIN_BONUS)} byte**"
+            ),
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(
+            name=f"👥 참가자 ({len(self.players)}/{MULTI_MAX_PLAYERS})",
+            value="\n".join(p.mention for p in self.players),
+            inline=False,
+        )
+        embed.set_footer(text=footer or (
+            f"{MULTI_MIN_PLAYERS}명부터 시작할 수 있어요. 보상은 각자 하루 한도 {num(DAILY_MAX)} byte 안에서"
+        ))
+        return embed
+
+    def joined(self, user) -> bool:
+        return any(p.id == user.id for p in self.players)
+
+    @discord.ui.button(label="참가", emoji="🙋", style=discord.ButtonStyle.success)
+    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user = interaction.user
+        if self.joined(user):
+            await respond.reply(interaction, "이미 참가했어요!", ephemeral=True)
+        elif user.id in playing:
+            await respond.reply(interaction, "❌ 이미 다른 끝말잇기를 하고 있어요.", ephemeral=True)
+        elif len(self.players) >= MULTI_MAX_PLAYERS:
+            await respond.reply(interaction, f"❌ 최대 {MULTI_MAX_PLAYERS}명까지예요.", ephemeral=True)
+        else:
+            self.players.append(user)
+            playing.add(user.id)
+            await respond.edit(interaction, embed=self.embed(), view=self)
+
+    @discord.ui.button(label="나가기", emoji="🚪", style=discord.ButtonStyle.secondary)
+    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user = interaction.user
+        if user.id == self.host.id:
+            await respond.reply(interaction, "방장은 나갈 수 없어요. [취소]를 눌러 주세요.", ephemeral=True)
+        elif not self.joined(user):
+            await respond.reply(interaction, "참가하지 않았어요.", ephemeral=True)
+        else:
+            self.players = [p for p in self.players if p.id != user.id]
+            playing.discard(user.id)
+            await respond.edit(interaction, embed=self.embed(), view=self)
+
+    @discord.ui.button(label="시작", emoji="▶️", style=discord.ButtonStyle.primary)
+    async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.host.id:
+            await respond.reply(interaction, "방장만 시작할 수 있어요.", ephemeral=True)
+        elif len(self.players) < MULTI_MIN_PLAYERS:
+            await respond.reply(interaction, f"❌ {MULTI_MIN_PLAYERS}명 이상 모여야 시작할 수 있어요.", ephemeral=True)
+        else:
+            self.started = True
+            await self.close(interaction, "▶️ 게임 시작! 아래 스레드로 이동하세요.")
+
+    @discord.ui.button(label="취소", emoji="✖️", style=discord.ButtonStyle.danger)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.host.id:
+            await respond.reply(interaction, "방장만 취소할 수 있어요.", ephemeral=True)
+        else:
+            await self.close(interaction, "✖️ 방장이 대기방을 닫았어요.")
+
+    async def close(self, interaction, footer):
+        for item in self.children:
+            item.disabled = True
+        await respond.edit(interaction, embed=self.embed(footer), view=self)
+        self.stop()
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(embed=self.embed("⏰ 시간이 지나 대기방이 닫혔어요."), view=self)
+            except discord.HTTPException:
+                pass
+
+
+async def multi_lobby(ctx):
+    if not await check_can_play(ctx):
+        return
+
+    view = LobbyView(ctx.author)
+    playing.add(ctx.author.id)
+    try:
+        view.message = await ctx.send(embed=view.embed(), view=view)
+        await view.wait()
+        if not view.started:
+            return
+        players = list(view.players)
+        names = ", ".join(p.display_name for p in players)
+        thread, created = await open_thread(view.message, f"🔤 다같이 끝말잇기 ({names})")
+        await play_multi(thread, players)
+        await close_thread(thread, created)
+    finally:
+        for p in view.players:
+            playing.discard(p.id)
+
+
+async def play_multi(channel, players):
+    random.shuffle(players)
+    alive = list(players)
+    remaining = {p.id: await remaining_today(p.id) for p in players}
+    earned = {p.id: 0 for p in players}
+    counts = {p.id: 0 for p in players}
+    out = []   # 탈락한 순서
+    used: set[str] = set()
+
+    word = first_word()
+    used.add(word)
+
+    embed = discord.Embed(
+        title="🔤 다같이 끝말잇기 시작!",
+        description=(
+            f"시작 단어: **{word}**\n"
+            "순서: " + " → ".join(p.mention for p in alive) + "\n\n"
+            f"차례가 되면 {TURN_SECONDS}초 안에 단어를 입력하세요. 못 내거나 `그만`을 치면 탈락!"
+        ),
+        color=discord.Color.blurple(),
+    )
+    await channel.send(" ".join(p.mention for p in players), embed=embed)
+
+    turn = 0
+    while len(alive) > 1:
+        player = alive[turn]
+        await channel.send(f"👉 {player.mention} 차례! **{word}** → {start_hint(word)}")
+        status, text, msg = await take_turn(channel, player, word, used)
+
+        if status != "ok":
+            alive.remove(player)
+            out.append(player)
+            reason = "⏰ 시간 초과" if status == "timeout" else "🏳️ 기권"
+            await channel.send(f"{reason}! {player.mention} 탈락 (남은 사람 {len(alive)}명)")
+            # 탈락한 사람 자리에 다음 사람이 오므로 turn 은 그대로 (끝이었으면 처음으로)
+            turn %= len(alive)
+            continue
+
+        used.add(text)
+        word = text
+        counts[player.id] += 1
+        reward = min(word_reward(counts[player.id], len(text)), remaining[player.id] - earned[player.id])
+        earned[player.id] += reward
+        if reward > 0:
+            await msg.reply(f"✅ +{num(reward)} byte (누적 {num(earned[player.id])})", mention_author=False)
+        else:
+            await msg.add_reaction("✅")
+        turn = (turn + 1) % len(alive)
+
+    winner = alive[0]
+    bonus = MULTI_WIN_BONUS * (len(players) - 1)
+    earned[winner.id] += min(bonus, remaining[winner.id] - earned[winner.id])
+
+    paid = {}
+    debt_lines = []
+    for p in players:
+        paid[p.id], result = await pay(p.id, earned[p.id])
+        if result["collected"]:
+            debt_lines.append(f"{p.mention}: 미납금 {num(result['collected'])} byte 자동 징수")
+
+    ranking = [winner] + out[::-1]
+    embed = discord.Embed(
+        title="🏆 다같이 끝말잇기 끝!",
+        description=f"우승: {winner.mention} (우승 보너스 **{num(bonus)} byte**)\n마지막 단어: **{word}**",
+        color=discord.Color.gold(),
+    )
+    embed.add_field(
+        name="📊 결과",
+        value="\n".join(
+            f"**{i}위** {p.mention} — {counts[p.id]}단어, **+{num(paid[p.id])} byte**"
+            for i, p in enumerate(ranking, start=1)
+        ),
+        inline=False,
+    )
+    if debt_lines:
+        embed.add_field(name="🧾 미납금", value="\n".join(debt_lines), inline=False)
+    embed.set_footer(text=f"보상은 각자 하루 끝말잇기 한도({num(DAILY_MAX)} byte) 안에서 지급돼요.")
+    await channel.send(embed=embed)

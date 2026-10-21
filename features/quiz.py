@@ -1,18 +1,21 @@
 """선착순 퀴즈: 1~2시간마다 퀴즈 채널에 문제가 나오고, 가장 먼저 맞힌 사람이 돈을 받는다.
 
     %퀴즈채널 <채널ID>   (관리자) 퀴즈를 올릴 채널 설정
-    %퀴즈출제            (관리자) 지금 바로 퀴즈 하나 내기
+    %퀴즈출제 [종류]     (관리자) 지금 바로 퀴즈 하나 내기 (계산 / 초성 / 뜻풀이)
 
 문제 종류
 - 🧮 계산: 봇이 만든 계산 문제. 숫자로 답한다.
 - 🔤 초성: 초성에 맞는 단어를 아무거나 하나. (끝말잇기 단어 목록에 있는 단어면 정답)
-- 🌍 상식: Open Trivia DB(https://opentdb.com, 무료/키 필요 없음)에서 가져온 영어 4지선다. 번호로 답한다.
-  불러오기에 실패하면 계산 문제로 대신 낸다.
+- 📖 뜻풀이: 국립국어원 한국어기초사전 오픈 API 에서 단어 뜻을 가져와서, 뜻(+초성 힌트)을 보고 단어를 맞힌다.
+  무료지만 인증키가 필요하다: https://krdict.korean.go.kr/openApi/openApiInfo 에서 발급받아
+  .env 에 KRDICT_API_KEY=발급받은키 를 적는다. (하루 5만 번까지)
+  키가 없거나 불러오기에 실패하면 다른 문제로 대신 낸다.
 """
 import asyncio
 import random
+import os
 import re
-import urllib.parse
+import xml.etree.ElementTree as ET
 
 import discord
 import requests
@@ -30,8 +33,12 @@ ANSWER_SECONDS = 60                 # 답할 수 있는 시간
 REWARD = (2000, 4000)               # 정답 보상 (랜덤)
 TRIES_PER_USER = 3                  # 한 사람이 한 문제에 낼 수 있는 답 수 (4지선다는 1번)
 
-KIND_WEIGHTS = {"math": 4, "chosung": 3, "trivia": 3}
-TRIVIA_URL = "https://opentdb.com/api.php?amount=1&type=multiple&encode=url3986"
+KIND_WEIGHTS = {"math": 3, "chosung": 3, "meaning": 4}
+KIND_NAMES = {"계산": "math", "초성": "chosung", "뜻풀이": "meaning", "뜻": "meaning"}
+
+KRDICT_URL = "https://krdict.korean.go.kr/api/search"
+# 뜻풀이 문제의 단어는 이 글자로 시작하는 초급·중급 명사 중에서 고른다.
+MEANING_STARTS = "가나다마바사아자차카타파하고노도모보소오조초코토포호구누두무부수우주추후기미비시이지치피히"
 
 minutes_until_next = random.randint(*QUIZ_INTERVAL_MINUTES)
 running_channels: set[int] = set()   # 지금 퀴즈가 진행 중인 채널
@@ -87,28 +94,40 @@ def make_chosung():
     }
 
 
-def fetch_trivia():
-    data = requests.get(TRIVIA_URL, timeout=5).json()
-    item = data["results"][0]
-    unquote = urllib.parse.unquote
-    correct = unquote(item["correct_answer"])
-    choices = [correct] + [unquote(c) for c in item["incorrect_answers"]]
-    random.shuffle(choices)
-    answer_no = choices.index(correct) + 1
+def fetch_meaning(key):
+    """한국어기초사전에서 단어 하나와 뜻을 가져온다."""
+    params = {
+        "key": key, "q": random.choice(MEANING_STARTS), "part": "word", "sort": "popular",
+        "num": 100, "advanced": "y", "method": "start", "pos": 1,          # pos 1 = 명사
+        "level": "level1,level2", "letter_s": 2, "letter_e": 4,         # 초급·중급, 2~4글자
+    }
+    root = ET.fromstring(requests.get(KRDICT_URL, params=params, timeout=5).content)
+    if root.tag == "error":
+        raise RuntimeError(f"API 오류 {root.findtext('error_code')}: {root.findtext('message')}")
+
+    candidates = []
+    for item in root.iter("item"):
+        word = (item.findtext("word") or "").strip()
+        definition = (item.findtext("sense/definition") or "").strip()
+        if re.fullmatch(r"[가-힣]{2,4}", word) and definition:
+            candidates.append((word, definition))
+    if not candidates:
+        raise RuntimeError("조건에 맞는 단어가 없음")
+    word, definition = random.choice(candidates)
+    definition = definition.replace(word, "○" * len(word))   # 뜻 안에 정답이 그대로 있으면 가린다
 
     def check(msg):
-        if msg not in {"1", "2", "3", "4"}:
+        if not re.fullmatch(r"[가-힣]+", msg):
             return None
-        return int(msg) == answer_no
+        return msg == word
 
     return {
-        "title": f"🌍 상식 퀴즈 ({unquote(item['category'])})",
-        "question": f"**{unquote(item['question'])}**\n\n"
-                    + "\n".join(f"**{i}.** {c}" for i, c in enumerate(choices, start=1)),
-        "hint": "정답 번호(1~4)를 입력하세요. 한 사람당 한 번만!",
-        "answer": f"{answer_no}. {correct}",
+        "title": "📖 뜻풀이 퀴즈",
+        "question": f"**{definition}**\n\n힌트: **{' '.join(wordchain.chosung(word))}** ({len(word)}글자)",
+        "hint": "이 뜻을 가진 단어를 입력하세요.",
+        "answer": word,
         "check": check,
-        "tries": 1,
+        "tries": TRIES_PER_USER,
     }
 
 
@@ -116,12 +135,17 @@ async def make_quiz(kind=None):
     kind = kind or random.choices(list(KIND_WEIGHTS), weights=KIND_WEIGHTS.values())[0]
     if kind == "chosung" and not await wordchain.load_words():
         kind = "math"
-    if kind == "trivia":
+    if kind == "meaning":
+        key = os.getenv("KRDICT_API_KEY")
         try:
-            return await asyncio.to_thread(fetch_trivia)
+            if not key:
+                raise RuntimeError(".env 에 KRDICT_API_KEY 가 없음")
+            return await asyncio.to_thread(fetch_meaning, key)
         except Exception as e:
-            print(f"[퀴즈] 상식 문제 불러오기 실패, 계산 문제로 대신: {type(e).__name__}: {e}")
-            kind = "math"
+            print(f"[퀴즈] 뜻풀이 문제 불러오기 실패, 다른 문제로 대신: {type(e).__name__}: {e}")
+            kind = random.choice(["math", "chosung"])
+            if kind == "chosung" and not await wordchain.load_words():
+                kind = "math"
     return make_chosung() if kind == "chosung" else make_math()
 
 
@@ -241,8 +265,8 @@ async def set_quiz_channel(ctx, channel_id: int):
 @client.command(aliases=["퀴즈출제"])
 @commands.has_permissions(administrator=True)
 async def publish_quiz(ctx, kind: str = None):
-    """%퀴즈출제 [계산|초성|상식]"""
+    """%퀴즈출제 [계산|초성|뜻풀이]"""
     await ctx.message.delete()
-    kind = {"계산": "math", "초성": "chosung", "상식": "trivia"}.get(kind)
+    kind = KIND_NAMES.get(kind)
     channel_ids = await db.get_quiz_channels() or [ctx.channel.id]
     await publish(channel_ids, kind)

@@ -11,6 +11,7 @@ import database as db
 import respond
 from bot import client
 from fmt import debt_line, num
+from features import abilities
 from features.bank import get_total_loan
 
 # ───────────── 밸런스 설정 ─────────────
@@ -326,7 +327,9 @@ async def welfare(ctx):
             else:
                 streak = 0
 
-            amount = min(WELFARE_BASE + WELFARE_STEP * streak, WELFARE_MAX)
+            base_amount = min(WELFARE_BASE + WELFARE_STEP * streak, WELFARE_MAX)
+            bonus = await abilities.total(user_id, "welfare_bonus", conn)  # 🍚 기초수급 보상 능력
+            amount = round(base_amount * (1 + bonus / 100))
 
             # 수급 정보 저장 + 지급 (미납금이 있으면 자동 징수)
             await db.update_user(
@@ -346,13 +349,17 @@ async def welfare(ctx):
         embed.set_footer(text="내일 다시 이용해주세요.")
         return await ctx.send(embed=embed)
 
-    next_amount = min(amount + WELFARE_STEP, WELFARE_MAX)
+    next_amount = round(min(base_amount + WELFARE_STEP, WELFARE_MAX) * (1 + bonus / 100))
     embed = discord.Embed(
         title="✅ 기초수급 지급 완료!",
         description=debt_line(result["collected"]).strip() or None,
         color=discord.Color.green()
     )
-    embed.add_field(name="💰 지급 금액", value=f"{num(amount)} byte", inline=True)
+    embed.add_field(
+        name="💰 지급 금액",
+        value=f"{num(amount)} byte" + (f"\n(🍚 능력 +{num(bonus)}%)" if bonus else ""),
+        inline=True
+    )
     embed.add_field(name="📆 연속 수급", value=f"{streak + 1}일차", inline=True)
     embed.set_footer(
         text=f"내일도 오면 {num(next_amount)} byte! (하루라도 빠지면 {num(WELFARE_BASE)}부터 다시)"

@@ -5,9 +5,10 @@
     %포지션 [@유저]               내 포지션과 손익 보기
     %청산 <번호 | 전체>            포지션 정리하고 돈 받기
 
-- 증거금(내 돈) × 배율 만큼의 규모로 거래한다. 5배면 가격이 1% 움직일 때 내 돈은 5% 움직인다.
+- 증거금(내 돈) × 배율(최대 10배, 🚀 배율 한계 돌파 능력으로 최대 15배) 만큼의 규모로 거래한다. 5배면 가격이 1% 움직일 때 내 돈은 5% 움직인다.
 - 손실이 증거금만큼 커지면(= 청산가에 닿으면) 1분마다 하는 가격 갱신 때 강제청산되고 증거금을 전부 잃는다.
-- 청산할 때 수수료: 포지션 규모의 0.5%.
+- 수수료: 진입할 때 포지션 규모의 0.5% (증거금과 따로 잔액에서 낸다), 정리할 때 포지션 규모의 0.5%.
+- 보유 비용: 포지션 규모의 시간당 0.1% 가 증거금에서 계속 빠진다. (오래 들고 있을수록 청산가가 가까워진다)
 - 상장폐지되면 가격 0 으로 정산한다. (롱은 전부 잃고, 숏은 크게 번다)
 - 뉴스로 방향이 정해진 구간에는 새로 진입할 수 없다. (뉴스 보고 들어가면 무조건 버는 구멍 방지)
   초상승장 / 주식부도 중에는 모든 종목, 부도 위기 뉴스가 진행 중이면 그 종목. 이미 연 포지션은 그대로 둔다.
@@ -18,13 +19,18 @@ from discord.ui import Button, View
 import database as db
 import respond
 from bot import client
-from features import stocks
+from features import abilities, stocks
 from fmt import debt_line, num
 
 # ───────────── 밸런스 설정 ─────────────
-MAX_LEVERAGE = 5              # 최대 배율
+MAX_LEVERAGE = 10             # 최대 배율
 MARGIN_LIMIT = 100000         # 한 사람이 동시에 걸 수 있는 증거금 합계
+OPEN_FEE = 0.005              # 진입 수수료 (포지션 규모 기준 0.5%, 증거금과 따로 낸다)
 CLOSE_FEE = 0.005             # 청산 수수료 (포지션 규모 기준 0.5%)
+# 보유 비용: 포지션 규모 기준 시간당 0.1%. 증거금에서 계속 빠지므로 오래 들고 있을수록 청산가가 가까워진다.
+# 손실은 증거금에서 멈추고 이익은 끝이 없어서, 보유 비용이 없으면 고배율을 오래 들고 있는 것만으로 평균 이득이 났다.
+# (시뮬레이션: 4배 변동폭에서 아무렇게나 15배 10시간 보유가 +5.8% → 이 비용으로 손해)
+HOLD_FEE_PER_HOUR = 0.001
 
 SIDE_TEXT = {"LONG": "📈 롱", "SHORT": "📉 숏"}
 
@@ -38,17 +44,34 @@ def pnl(pos, price):
     return size * change if pos["side"] == "LONG" else -size * change
 
 
+def holding_fee(pos, at=None):
+    """지금까지 쌓인 보유 비용 (진입 전 미리보기처럼 opened_at 이 없으면 0)"""
+    opened = pos.get("opened_at")
+    if opened is None:
+        return 0.0
+    hours = max(0.0, ((at or db.now()) - opened).total_seconds() / 3600)
+    return pos["margin"] * pos["leverage"] * HOLD_FEE_PER_HOUR * hours
+
+
+def hourly_fee(pos):
+    return pos["margin"] * pos["leverage"] * HOLD_FEE_PER_HOUR
+
+
 def equity(pos, price):
-    """지금 청산하면 남는 내 돈 (수수료 전, 0 미만으로는 안 내려감)"""
-    return max(0.0, pos["margin"] + pnl(pos, price))
+    """지금 청산하면 남는 내 돈 (보유 비용은 빼고 청산 수수료는 빼기 전, 0 미만으로는 안 내려감)"""
+    return max(0.0, pos["margin"] + pnl(pos, price) - holding_fee(pos))
 
 
 def liquidation_price(pos):
-    """이 가격에 닿으면 강제청산"""
-    move = 1 / pos["leverage"]
+    """이 가격에 닿으면 강제청산. 쌓인 보유 비용만큼 진입가 쪽으로 가까워진다."""
+    move = max(0.0, pos["margin"] - holding_fee(pos)) / (pos["margin"] * pos["leverage"])
     if pos["side"] == "LONG":
         return pos["entry_price"] * (1 - move)
     return pos["entry_price"] * (1 + move)
+
+
+def open_fee(pos):
+    return pos["margin"] * pos["leverage"] * OPEN_FEE
 
 
 def close_fee(pos):
@@ -66,27 +89,39 @@ def current_price(symbol):
 
 # ───────────── 주식 가격 갱신 때 호출됨 (stocks.update_stocks) ─────────────
 
-async def check_liquidations():
-    """새 가격으로 모든 포지션을 검사해서, 손실이 증거금 이상이면 강제청산한다."""
-    for pos in await db.all_positions():
+async def check_liquidations(positions=None):
+    """새 가격으로 모든 포지션을 검사해서, 손실이 증거금 이상이면 강제청산한다. 청산한 개수를 돌려준다.
+    positions 를 주면 DB 에서 읽지 않고 그 목록을 검사하고, 정리된 포지션은 목록에서 뺀다. (%주식가속)"""
+    count = 0
+    for pos in list(positions) if positions is not None else await db.all_positions():
         if pos["symbol"] not in stocks.stock_prices:
             continue
         price = current_price(pos["symbol"])
         if equity(pos, price) > 0:
             continue
 
-        async with db.transaction() as conn:
+        if positions is not None:
+            positions.remove(pos)
+        async with db.user_tx(pos["user_id"]) as conn:
             # delete_position 이 None 이면 이미 다른 곳에서 정리된 것
             if await db.delete_position(pos["id"], conn) is None:
                 continue
+            # 🧯 청산 보험: 증거금의 일부를 돌려받는다
+            refund = pos["margin"] * await abilities.total(pos["user_id"], "liq_insurance", conn) / 100
+            if refund > 0:
+                await db.receive(pos["user_id"], refund, conn)
+                await db.log_money(pos["user_id"], "futures_insurance", refund, position_memo(pos), conn)
             await db.add_notice(
                 pos["user_id"],
                 f"💥 강제청산: `{pos['symbol']}` {SIDE_TEXT[pos['side']]} {pos['leverage']}배 "
                 f"(진입가 {num(pos['entry_price'])} → {num(price)}) — "
-                f"증거금 {num(pos['margin'])} byte를 모두 잃었습니다.",
+                + (f"🧯 청산 보험으로 증거금 {num(pos['margin'])} byte 중 {num(refund)} byte를 돌려받았습니다."
+                   if refund > 0 else f"증거금 {num(pos['margin'])} byte를 모두 잃었습니다."),
                 conn,
             )
         print(f"[강제청산] 유저 {pos['user_id']} {pos['symbol']} {pos['side']} x{pos['leverage']}")
+        count += 1
+    return count
 
 
 async def settle_symbol(symbol, exit_price, reason):
@@ -133,18 +168,23 @@ async def open_position(ctx, side, stock_name, margin, leverage):
     if margin <= 0:
         await ctx.send("❌ 증거금은 1 이상이어야 합니다.")
         return
-    if not 1 <= leverage <= MAX_LEVERAGE:
-        await ctx.send(f"❌ 배율은 1~{MAX_LEVERAGE}배 사이로 입력해주세요.")
+    max_leverage = MAX_LEVERAGE + int(await abilities.total(user_id, "leverage_up"))  # 🚀 배율 한계 돌파
+    if not 1 <= leverage <= max_leverage:
+        await ctx.send(f"❌ 배율은 1~{max_leverage}배 사이로 입력해주세요.")
         return
     blocked = await entry_block_reason(symbol)
     if blocked:
         await ctx.send(f"❌ {blocked}")
         return
 
+    price = current_price(symbol)
+    preview = {"symbol": symbol, "side": side, "margin": margin, "leverage": leverage, "entry_price": price}
+    total = margin + open_fee(preview)  # 진입할 때 잔액에서 나가는 돈
+
     user = await db.get_user(user_id)
     used = sum(p["margin"] for p in await db.get_positions(user_id))
-    if user["money"] < margin:
-        await ctx.send("❌ 잔액이 부족합니다.")
+    if user["money"] < total:
+        await ctx.send(f"❌ 잔액이 부족합니다. (증거금 + 진입 수수료 {num(total)} byte 필요)")
         return
     if used + margin > MARGIN_LIMIT:
         await ctx.send(
@@ -152,9 +192,6 @@ async def open_position(ctx, side, stock_name, margin, leverage):
             f"(지금 사용 중: {num(used)} byte)"
         )
         return
-
-    price = current_price(symbol)
-    preview = {"symbol": symbol, "side": side, "margin": margin, "leverage": leverage, "entry_price": price}
 
     embed = discord.Embed(
         title=f"{SIDE_TEXT[side]} 포지션 진입 확인",
@@ -178,7 +215,11 @@ async def open_position(ctx, side, stock_name, margin, leverage):
         value=(
             f"가격이 1% 움직이면 내 돈은 {leverage}% 움직여요.\n"
             "청산가에 닿으면 증거금을 **전부** 잃어요.\n"
+            f"진입 수수료 {num(OPEN_FEE * 100)}% (거래 규모 기준): {num(open_fee(preview))} byte → "
+            f"지금 잔액에서 **{num(total)} byte**가 나가요\n"
             f"정리할 때 수수료 {num(CLOSE_FEE * 100)}% (거래 규모 기준): {num(close_fee(preview))} byte\n"
+            f"보유 비용 시간당 {num(HOLD_FEE_PER_HOUR * 100)}% (거래 규모 기준): **시간당 {num(hourly_fee(preview))} byte**가 "
+            "증거금에서 빠져요. 오래 들고 있을수록 청산가가 가까워져요.\n"
             "실제 진입가는 확인 버튼을 누른 순간의 가격이에요."
         ),
         inline=False
@@ -200,14 +241,16 @@ async def open_position(ctx, side, stock_name, margin, leverage):
             used_now = sum(p["margin"] for p in await db.get_positions(user_id, conn))
             if error:
                 pass
-            elif money < margin:
-                error = "잔액이 부족합니다."
+            elif money < total:
+                error = f"잔액이 부족합니다. (증거금 + 진입 수수료 {num(total)} byte 필요)"
             elif used_now + margin > MARGIN_LIMIT:
                 error = f"증거금 합계 한도({num(MARGIN_LIMIT)} byte)를 넘습니다."
             else:
-                await db.update_user(user_id, conn, money=money - margin)
+                fee = open_fee(preview)
+                await db.update_user(user_id, conn, money=money - margin - fee)
                 position_id = await db.add_position(user_id, symbol, side, margin, leverage, entry, conn)
                 await db.log_money(user_id, "futures_open", -margin, position_memo(preview), conn)
+                await db.log_money(user_id, "futures_fee", -fee, position_memo(preview), conn)
 
         if error:
             await respond.edit(interaction,
@@ -221,7 +264,7 @@ async def open_position(ctx, side, stock_name, margin, leverage):
             embed=discord.Embed(
                 title=f"✅ {SIDE_TEXT[side]} 진입 완료 (#{position_id})",
                 description=(
-                    f"**{symbol}** {leverage}배, 증거금 {num(margin)} byte\n"
+                    f"**{symbol}** {leverage}배, 증거금 {num(margin)} byte (진입 수수료 {num(open_fee(preview))} byte)\n"
                     f"진입가 {num(entry)} / 청산가 {num(liquidation_price(pos))}\n"
                     f"`%포지션`으로 손익을 확인하고 `%청산 {position_id}`로 정리하세요."
                 ),
@@ -286,7 +329,8 @@ async def positions(ctx, member: discord.Member = None):
     total_pnl = 0.0
     for pos in rows:
         price = current_price(pos["symbol"])
-        p = pnl(pos, price)
+        hold = holding_fee(pos)
+        p = pnl(pos, price) - hold   # 보유 비용까지 뺀 손익
         total_margin += pos["margin"]
         total_pnl += p
         embed.add_field(
@@ -295,6 +339,7 @@ async def positions(ctx, member: discord.Member = None):
                 f"증거금 {num(pos['margin'])} byte\n"
                 f"진입가 {num(pos['entry_price'])} → 현재가 {num(price)}\n"
                 f"손익 **{num(p, sign=True)} byte** ({num(p / pos['margin'] * 100, sign=True)}%)\n"
+                f"보유 비용 -{num(hold)} byte (시간당 {num(hourly_fee(pos))})\n"
                 f"청산가 {num(liquidation_price(pos))}"
             ),
             inline=False
@@ -302,7 +347,7 @@ async def positions(ctx, member: discord.Member = None):
 
     embed.add_field(
         name="합계",
-        value=f"증거금 {num(total_margin)} byte / 손익 **{num(total_pnl, sign=True)} byte**",
+        value=f"증거금 {num(total_margin)} byte / 손익 **{num(total_pnl, sign=True)} byte** (보유 비용 포함)",
         inline=False
     )
     embed.set_footer(text="정리하려면 %청산 <번호> 또는 %청산 전체")
@@ -341,18 +386,19 @@ async def close_position(ctx, target: str = None):
     for pos in chosen:
         price = current_price(pos["symbol"])
         p = pnl(pos, price)
-        payout = max(0.0, equity(pos, price) - close_fee(pos))
+        hold = holding_fee(pos)
+        payout = max(0.0, equity(pos, price) - close_fee(pos))   # equity 에서 보유 비용은 이미 빠짐
         async with db.user_tx(user_id) as conn:
             # 이미 강제청산된 포지션이면 None (두 번 정산 방지)
             if await db.delete_position(pos["id"], conn) is None:
                 continue
             result = await db.receive(user_id, payout, conn)
-            await db.log_money(user_id, "futures_close", payout, position_memo(pos), conn)
+            await db.log_money(user_id, "futures_close", payout, f"{position_memo(pos)} hold_fee {hold:.2f}", conn)
         total_payout += payout
         total_collected += result["collected"]
         lines.append(
             f"#{pos['id']} {pos['symbol']} {SIDE_TEXT[pos['side']]} {pos['leverage']}배: "
-            f"손익 {num(p, sign=True)} → 받은 돈 {num(payout)} byte"
+            f"손익 {num(p, sign=True)} · 보유 비용 -{num(hold)} → 받은 돈 {num(payout)} byte"
         )
 
     if not lines:

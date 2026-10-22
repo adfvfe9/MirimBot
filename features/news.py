@@ -1,12 +1,13 @@
-"""주식 뉴스: 30~90분마다 랜덤 뉴스가 나오고, 뉴스에 맞춰 주가가 10~30분 동안 서서히 움직인다.
+"""주식 뉴스: 30~90분마다 랜덤 뉴스가 나오고, 뉴스가 나오는 순간 주가가 한 번에 튄다.
 
     %뉴스                최근 뉴스 보기
     %뉴스채널 <채널ID>    (관리자) 뉴스를 올릴 채널 설정
     %뉴스발행            (관리자) 지금 바로 뉴스 하나 내기
 
-- 효과는 한 번에 튀지 않고 매분 조금씩 더해진다. (stocks.update_stocks 가 current_drift 를 사용)
+- 큰 움직임(점프)은 뉴스와 동시에 일어난다. 뉴스를 보고 들어가면 이미 움직인 뒤다. (stocks.jump)
+- 그 뒤 10~30분 동안 작은 후속 움직임이 이어지는데, 방향은 반반에 가깝다. (stocks.update_stocks 가 current_drift 를 사용)
+  예전처럼 뉴스 뒤에 서서히 움직이면 뉴스만 보고 레버리지를 타서 누구나 벌 수 있었다.
 - 일부 뉴스는 기사만 보고 방향을 알 수 없다: 루머(반반), 뒤통수(호재인데 하락 / 악재인데 상승)
-  → 뉴스를 보고 빨리 움직인 학생이 유리하다.
 - 진행 중인 효과는 메모리에만 있어서, 봇을 재시작하면 사라진다. (뉴스 기록은 DB 에 남음)
 """
 import random
@@ -27,22 +28,30 @@ EFFECT_MINUTES = (10, 30)             # 효과가 지속되는 시간
 KIND_WEIGHTS = {
     "good": 20,           # 개별 종목 호재
     "bad": 20,            # 개별 종목 악재
-    "rumor": 30,          # 해석이 엇갈리는 뉴스 (오를지 내릴지 반반)
+    "rumor": 32,          # 해석이 엇갈리는 뉴스 (오를지 내릴지 반반)
     "market_good": 10,    # 시장 전체 호재
     "market_bad": 10,     # 시장 전체 악재
     "bubble": 5,          # 초상승장 (끝나면 주식부도로 이어짐)
-    "default_risk": 5,    # 한 종목 부도 위기 (상장폐지 위험)
+    "default_risk": 3,    # 한 종목 부도 위기 (상장폐지 위험)
 }
 
 # 호재/악재 뉴스인데 실제로는 반대로 움직일 확률 ("이미 가격에 반영", "소문에 사서 뉴스에 팔아라")
 TWIST_CHANCE = 0.2
 
-# 1분마다 가격에 더해지는 변화 (기준가 대비 비율). 예: 0.01 이면 기준가의 1% 만큼 오른다.
-STOCK_DRIFT = (0.003, 0.010)          # 개별 종목: 분당 기준가의 +-0.3~1.0% → 뉴스가 끝날 때 평균 약 8% 움직임
-MARKET_DRIFT = (0.002, 0.005)         # 시장 전체: 분당 기준가의 +-0.2~0.5%
-DEFAULT_RISK_DRIFT = (0.06, 0.10)     # 부도 위기: 분당 기준가의 -6~10% → 상장폐지 확률 JS 4% ~ RUST 34%
+# 점프: 뉴스가 나오는 순간 한 번에 튀는 크기 (변화율, 0.1 이면 약 10%)
+JUMP_SIZE = (0.06, 0.15)              # 기준 = 0.06 + 종목 하루 변동성 × 0.15, 실제는 그 0.5~1.5배 (JS 약 4~11%, RUST 약 8~23%)
+MARKET_JUMP = (0.01, 0.04)            # 시장 전체 뉴스: 모든 종목 1~4%
+DEFAULT_RISK_JUMP = (0.15, 0.30)      # 부도 위기: 15~30% 폭락
+
+# 후속 움직임: 점프 뒤 효과가 끝날 때까지 1분마다 더해지는 변화 (현재가 대비 비율)
+FOLLOW_SAME_CHANCE = 0.55             # 점프와 같은 방향일 확률 (거의 반반이라 뉴스만 보고 따라가면 수수료만큼 손해)
+STOCK_DRIFT = (0.0005, 0.0015)        # 개별 종목: 분당 0.05~0.15%
+RUMOR_DRIFT = (0.001, 0.003)          # 루머: 분당 0.1~0.3%, 방향 반반
+MARKET_DRIFT = (0.0002, 0.0005)       # 시장 전체: 분당 0.02~0.05%
+DEFAULT_RISK_DRIFT = (0.003, 0.010)   # 부도 위기: 분당 0.3~1% 계속 하락
 DEFAULT_RISK_MINUTES = (10, 15)
-BUBBLE_MINUTES = (10, 20)             # 초상승장 길이 (끝나면 stocks 가 주식부도 20분을 건다)
+DELIST_CHANCE = (0.02, 0.20)          # 부도 위기가 상장폐지로 끝날 확률: 가장 안정적인 종목(JS) ~ 가장 위험한 종목(RUST)
+BUBBLE_MINUTES = (10, 20)             # 초상승장 길이 (끝나면 stocks 가 모든 종목을 떨어뜨리고 주식부도 20분을 건다)
 
 # ───────────── 뉴스 문장 틀 ({s} 자리에 종목 이름이 들어간다) ─────────────
 GOOD = [
@@ -123,14 +132,14 @@ KIND_STYLE = {
 }
 
 # 진행 중인 효과
-# [{"symbol": 종목 또는 None(시장 전체), "drift": 분당 변화, "left": 남은 분, "kind": 뉴스 종류}]
+# [{"symbol": 종목 또는 None(시장 전체), "drift": 분당 변화, "left": 남은 분, "kind": 뉴스 종류, "delist": 끝나면 상장폐지}]
 # kind 는 기사 분위기라서 실제 방향(drift 부호)과 다를 수 있다. (뒤통수 뉴스, 루머)
 active_effects = []
 minutes_until_next = random.randint(*NEWS_INTERVAL_MINUTES)
 
 
 def current_drift(symbol):
-    """이번 분에 해당 종목에 더할 변화 (기준가 대비 비율, stocks.update_stocks 에서 사용)"""
+    """이번 분에 해당 종목에 더할 변화 (현재가 대비 비율, stocks.update_stocks 에서 사용)"""
     return sum(e["drift"] for e in active_effects if e["symbol"] in (None, symbol))
 
 
@@ -160,44 +169,69 @@ def market_badge():
 
 
 def tick_effects():
-    """1분 지남: 효과 남은 시간을 줄이고 끝난 효과를 지운다."""
+    """1분 지남: 효과 남은 시간을 줄이고 끝난 효과를 지운다.
+    상장폐지로 끝나는 부도 위기 종목 목록을 돌려준다. (stocks.update_stocks 가 상장폐지 처리)"""
     for e in active_effects:
         e["left"] -= 1
+    doomed = [e["symbol"] for e in active_effects if e["left"] <= 0 and e.get("delist")]
     active_effects[:] = [e for e in active_effects if e["left"] > 0]
+    return doomed
+
+
+def follow_direction(direction):
+    """점프 뒤 후속 움직임 방향. 점프와 같은 방향일 확률이 FOLLOW_SAME_CHANCE 라 거의 반반이다."""
+    return direction if random.random() < FOLLOW_SAME_CHANCE else -direction
+
+
+def stock_jump_size(symbol):
+    """종목 뉴스 점프 크기 (변하기 쉬운 종목일수록 크다)"""
+    base, per_vol = JUMP_SIZE
+    return random.uniform(0.5, 1.5) * (base + stocks.stock_info[symbol]["vol"] * per_vol)
+
+
+def delist_chance(symbol):
+    """부도 위기가 상장폐지로 끝날 확률. 하루 변동성이 가장 낮은 종목이 DELIST_CHANCE[0], 가장 높은 종목이 [1]."""
+    vols = [info["vol"] for info in stocks.stock_info.values()]
+    low, high = min(vols), max(vols)
+    ratio = (stocks.stock_info[symbol]["vol"] - low) / (high - low) if high > low else 0
+    return DELIST_CHANCE[0] + (DELIST_CHANCE[1] - DELIST_CHANCE[0]) * ratio
 
 
 async def make_news(kind=None):
-    """뉴스 하나를 만들고 효과를 건다. (kind, symbol, headline, body) 를 돌려준다."""
+    """뉴스 하나를 만들고 점프와 효과를 건다. (kind, symbol, headline, body) 를 돌려준다.
+    가격을 바꾸므로 stocks.update_lock 을 잡은 상태에서 불러야 한다. (publish, %주식가속)"""
     if kind is None:
         kind = random.choices(list(KIND_WEIGHTS), weights=list(KIND_WEIGHTS.values()))[0]
 
     symbol = random.choice(list(stocks.stock_info)) if kind in ("good", "bad", "rumor", "default_risk") else None
     minutes = random.randint(*EFFECT_MINUTES)
 
-    def add(drift, left=minutes, target=symbol):
-        active_effects.append({"symbol": target, "drift": drift, "left": left, "kind": kind})
+    def add(drift, left=minutes, target=symbol, delist=False):
+        active_effects.append({"symbol": target, "drift": drift, "left": left, "kind": kind, "delist": delist})
 
     if kind in ("good", "bad"):
         headline, body = random.choice(GOOD if kind == "good" else BAD)
         direction = 1 if kind == "good" else -1
         if random.random() < TWIST_CHANCE:
             direction = -direction  # 뒤통수: 기사와 반대로 움직인다
-        add(direction * random.uniform(*STOCK_DRIFT))
+        await stocks.jump(symbol, direction * stock_jump_size(symbol))
+        add(follow_direction(direction) * random.uniform(*STOCK_DRIFT))
     elif kind == "rumor":
         headline, body = random.choice(RUMOR)
-        add(random.choice((1, -1)) * random.uniform(*STOCK_DRIFT))
-    elif kind == "market_good":
-        headline, body = random.choice(MARKET_GOOD)
-        add(random.uniform(*MARKET_DRIFT))
-    elif kind == "market_bad":
-        headline, body = random.choice(MARKET_BAD)
-        add(-random.uniform(*MARKET_DRIFT))
+        add(random.choice((1, -1)) * random.uniform(*RUMOR_DRIFT))
+    elif kind in ("market_good", "market_bad"):
+        headline, body = random.choice(MARKET_GOOD if kind == "market_good" else MARKET_BAD)
+        direction = 1 if kind == "market_good" else -1
+        await stocks.jump_all(direction * random.uniform(*MARKET_JUMP))
+        add(follow_direction(direction) * random.uniform(*MARKET_DRIFT))
     elif kind == "bubble":
         headline, body = random.choice(BUBBLE)
         await stocks.set_override_state("HYPER_BULL", random.randint(*BUBBLE_MINUTES) * 60)
     else:  # default_risk
         headline, body = random.choice(DEFAULT_RISK)
-        add(-random.uniform(*DEFAULT_RISK_DRIFT), left=random.randint(*DEFAULT_RISK_MINUTES))
+        await stocks.jump(symbol, -random.uniform(*DEFAULT_RISK_JUMP))
+        add(-random.uniform(*DEFAULT_RISK_DRIFT), left=random.randint(*DEFAULT_RISK_MINUTES),
+            delist=random.random() < delist_chance(symbol))
 
     headline = headline.format(s=symbol)
     body = body.format(s=symbol)
@@ -217,7 +251,8 @@ def news_embed(kind, symbol, headline, body, when=None):
 
 async def publish(kind=None):
     """뉴스를 만들어 설정된 모든 뉴스 채널에 올린다."""
-    kind, symbol, headline, body = await make_news(kind)
+    async with stocks.update_lock:  # 뉴스가 가격을 바꾸므로 1분 갱신 / %주식가속과 겹치지 않게
+        kind, symbol, headline, body = await make_news(kind)
     embed = news_embed(kind, symbol, headline, body)
     for channel_id in await db.get_news_channels():
         channel = client.get_channel(channel_id)
@@ -231,13 +266,21 @@ async def publish(kind=None):
     return embed
 
 
+def minute_passed():
+    """1분 지남. 뉴스를 낼 때가 됐으면 True 를 돌려주고 다음 뉴스까지 남은 분을 새로 정한다.
+    (news_loop 와 %주식가속 이 같이 쓴다)"""
+    global minutes_until_next
+    minutes_until_next -= 1
+    if minutes_until_next <= 0:
+        minutes_until_next = random.randint(*NEWS_INTERVAL_MINUTES)
+        return True
+    return False
+
+
 @tasks.loop(minutes=1)
 async def news_loop():
-    global minutes_until_next
     try:
-        minutes_until_next -= 1
-        if minutes_until_next <= 0:
-            minutes_until_next = random.randint(*NEWS_INTERVAL_MINUTES)
+        if minute_passed():
             await publish()
     except Exception as e:
         print(f"[뉴스 오류] {type(e).__name__}: {e}")

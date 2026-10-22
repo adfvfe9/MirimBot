@@ -34,6 +34,7 @@ import discord
 import database as db
 import respond
 from bot import client
+from features import abilities
 from fmt import debt_line, num
 
 # ───────────── 밸런스 설정 ─────────────
@@ -247,11 +248,22 @@ def start_hint(word: str) -> str:
 playing: set[int] = set()   # 지금 끝말잇기 중이거나 대기방에 있는 유저
 
 
+async def daily_max(user_id, conn=None) -> float:
+    """하루 끝말잇기 보상 한도 (🔤 끝말잇기 보상 능력만큼 늘어난다)"""
+    return DAILY_MAX * (1 + await abilities.total(user_id, "wordchain_bonus", conn) / 100)
+
+
+async def player_bonus(user_id):
+    """(보상 배율, 한 턴 제한 시간) — 🔤 끝말잇기 보상 / ⌛ 끝말잇기 시간 능력"""
+    bonus = await abilities.totals(user_id)
+    return 1 + bonus.get("wordchain_bonus", 0) / 100, TURN_SECONDS + bonus.get("wordchain_time", 0)
+
+
 async def remaining_today(user_id) -> float:
     """오늘 끝말잇기로 더 벌 수 있는 돈"""
     user = await db.get_user(user_id)
     earned = user["wordchain_earned"] if user["wordchain_date"] == db.today() else 0.0
-    return max(0.0, DAILY_MAX - earned)
+    return max(0.0, await daily_max(user_id) - earned)
 
 
 async def pay(user_id, amount):
@@ -262,7 +274,7 @@ async def pay(user_id, amount):
     async with db.user_tx(user_id) as conn:
         user = await db.get_user(user_id, conn)
         earned = user["wordchain_earned"] if user["wordchain_date"] == today else 0.0
-        amount = max(0, min(amount, DAILY_MAX - earned))
+        amount = max(0, min(amount, await daily_max(user_id, conn) - earned))
         await db.update_user(user_id, conn, wordchain_date=today, wordchain_earned=earned + amount)
         result = await db.receive(user_id, amount, conn) if amount > 0 else {"collected": 0}
         await db.log_money(user_id, "wordchain", amount, conn=conn)
@@ -301,7 +313,7 @@ async def close_thread(thread, created: bool):
             pass
 
 
-async def take_turn(channel, player, word, used):
+async def take_turn(channel, player, word, used, seconds=TURN_SECONDS):
     """player 가 word 에 이을 단어를 낼 때까지 기다린다. (결과, 단어, 메시지, 걸린 초)
     ("ok", 단어, 메시지, 초) / ("timeout", None, None, None) / ("stop", None, 메시지, None)"""
 
@@ -313,7 +325,7 @@ async def take_turn(channel, player, word, used):
         )
 
     started = time.monotonic()
-    deadline = started + TURN_SECONDS
+    deadline = started + seconds
     while True:
         try:
             msg = await client.wait_for("message", check=check, timeout=deadline - time.monotonic())
@@ -521,16 +533,19 @@ def turn_embed(count, word, elapsed, points, score, money_text, mission, hits, m
     return embed
 
 
-def add_bot_word(embed, word, mission):
+def add_bot_word(embed, word, mission, seconds=TURN_SECONDS):
     embed.add_field(name="🤖 봇의 단어", value=f"**{word}**  →  {start_hint(word)}(으)로 시작", inline=False)
-    embed.set_footer(text=f"🎯 미션 글자: {mission}  ·  ⏱️ {TURN_SECONDS}초 안에 입력")
+    embed.set_footer(text=f"🎯 미션 글자: {mission}  ·  ⏱️ {seconds}초 안에 입력")
     return embed
 
 
 async def play_solo(channel, user, remaining, difficulty="normal", practice=False):
     d = DIFFICULTIES[difficulty]
-    mult = d["mult"]
     ranked = difficulty in RANKED and not practice
+    reward_mult, seconds = await player_bonus(user.id)
+    mult = d["mult"] * reward_mult
+    if ranked:
+        seconds = TURN_SECONDS  # 랭킹 판은 공평하게 ⌛ 끝말잇기 시간 능력을 쓰지 않는다
     used: set[str] = set()
     count = 0
     earned = 0
@@ -560,7 +575,7 @@ async def play_solo(channel, user, remaining, difficulty="normal", practice=Fals
         title=f"🔤 끝말잇기 시작! {d['emoji']} {d['name']}" + (" (🧪 연습)" if practice else ""),
         description=(
             f"🤖 **{word}**\n\n"
-            f"{start_hint(word)}(으)로 시작하는 단어를 입력하세요. (턴당 {TURN_SECONDS}초)\n"
+            f"{start_hint(word)}(으)로 시작하는 단어를 입력하세요. (턴당 {seconds}초)\n"
             f"🎯 미션 글자: **{mission}** — 들어간 단어를 내면 보너스!\n"
             f"{money_line}\n"
             + ("⭐ 이 판의 점수는 **랭킹**에 기록돼요. 빨리 낼수록 점수 UP!\n" if ranked else "")
@@ -573,7 +588,7 @@ async def play_solo(channel, user, remaining, difficulty="normal", practice=Fals
     await channel.send(user.mention, embed=embed)
 
     while True:
-        status, text, msg, elapsed = await take_turn(channel, user, word, used)
+        status, text, msg, elapsed = await take_turn(channel, user, word, used, seconds)
         if status == "timeout":
             end_reason = f"⏰ 시간 초과! 봇의 단어는 **{word}** 였어요."
             break
@@ -604,7 +619,7 @@ async def play_solo(channel, user, remaining, difficulty="normal", practice=Fals
             turn.add_field(
                 name="🎉 오늘 보상 한도 달성!",
                 value=(
-                    f"오늘 끝말잇기로 받을 수 있는 **{num(DAILY_MAX)} byte**를 다 채웠어요.\n"
+                    f"오늘 끝말잇기로 받을 수 있는 **{num(await daily_max(user.id))} byte**를 다 채웠어요.\n"
                     "계속하면 **보상 없이 점수만** 쌓여요." + (" (랭킹 기록 O)" if ranked else "")
                 ),
                 inline=False,
@@ -631,10 +646,10 @@ async def play_solo(channel, user, remaining, difficulty="normal", practice=Fals
         used.add(word)
 
         if turn:
-            await msg.reply(embed=add_bot_word(turn, word, mission), mention_author=False)
+            await msg.reply(embed=add_bot_word(turn, word, mission, seconds), mention_author=False)
         else:
             resume = discord.Embed(title="▶️ 계속! (점수만)", color=discord.Color.blurple())
-            await channel.send(embed=add_bot_word(resume, word, mission))
+            await channel.send(embed=add_bot_word(resume, word, mission, seconds))
 
     paid, result = (0, {"collected": 0}) if practice else await pay(user.id, earned)
     record = await db.record_wordchain(user.id, difficulty, score, count) if ranked and score > 0 else None
@@ -817,6 +832,8 @@ async def play_multi(channel, players):
     random.shuffle(players)
     alive = list(players)
     remaining = {p.id: await remaining_today(p.id) for p in players}
+    # 🔤 끝말잇기 보상 능력만 적용 (⌛ 시간 능력은 친구끼리 겨루는 판이라 쓰지 않는다)
+    reward_mult = {p.id: (await player_bonus(p.id))[0] for p in players}
     earned = {p.id: 0 for p in players}
     counts = {p.id: 0 for p in players}
     out = []   # 탈락한 순서
@@ -854,7 +871,7 @@ async def play_multi(channel, players):
         used.add(text)
         word = text
         counts[player.id] += 1
-        reward = min(word_reward(counts[player.id], len(text)), remaining[player.id] - earned[player.id])
+        reward = min(word_reward(counts[player.id], len(text), reward_mult[player.id]), remaining[player.id] - earned[player.id])
         earned[player.id] += reward
         if reward > 0:
             await msg.reply(f"✅ +{num(reward)} byte (누적 {num(earned[player.id])})", mention_author=False)

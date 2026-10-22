@@ -2,6 +2,7 @@
 import asyncio
 import datetime
 import io
+import math
 import os
 import random
 
@@ -15,6 +16,7 @@ from matplotlib import font_manager
 import database as db
 import respond
 from bot import client
+from features import abilities
 from fmt import num
 
 # 그래프에 한글이 나오도록 맑은 고딕 폰트 등록 (malgun.ttf 는 프로젝트 폴더에 있다)
@@ -31,7 +33,7 @@ plt.rcParams['axes.unicode_minus'] = False
 
 
 # ───────────── 주식 시장 상태 ─────────────
-# 상승장(BULL) ↔ 하락장(BEAR)이 5~120분마다 바뀐다.
+# 상승장(BULL) ↔ 하락장(BEAR)이 5~120분마다 바뀐다. (효과 크기는 아래 '가격 공식'의 TREND)
 # 초상승장(HYPER_BULL) / 주식부도(CRASH) 는 잠깐 덮어쓰는 이벤트 상태다.
 current_market = "BULL"
 market_ends_at = None      # 지금 상태(BULL/BEAR)가 끝나는 시각
@@ -71,13 +73,14 @@ async def get_effective_market_state():
             return override_state
         else:
             if override_state == "HYPER_BULL":
+                # 거품 붕괴: 모든 종목이 한 번에 떨어지고 주식부도 20분이 이어진다
                 await set_override_state("CRASH", 20 * 60)
+                await jump_all(-random.uniform(*CRASH_JUMP))
                 return "CRASH"
             elif override_state == "CRASH":
                 override_state = None
                 override_end = None
                 await save_market_state()
-                return "BULL"
     return current_market
 
 # 임시 시장 상태 설정 (초상승장, 주식부도)
@@ -92,41 +95,80 @@ SELL_FEE = 0.02   # 주식 판매 수수료 2% (모든 판매 명령어 공통)
 QUICK_SELL_FEE = 0.08     # 단타 수수료: 마지막으로 산 지 QUICK_SELL_MINUTES 분 안에 팔면 8%
 QUICK_SELL_MINUTES = 30
 
+# base: 기준가 (아주 천천히 이쪽으로 돌아온다), vol: 하루 변동성 (평소 흔들림이 하루에 대략 이만큼)
+# (v1.3: 너무 잔잔하다는 의견이 많아서 4배로 올렸다. 1분 평균 변동 JS 약 0.18% ~ RUST 약 1.3%)
 stock_info = {
-    "JAVA":   {"base": 500,  "limit": 0.08},
-    "C":      {"base": 300,  "limit": 0.06},
-    "C++":    {"base": 800,  "limit": 0.10},
-    "C#":     {"base": 1200, "limit": 0.09},
-    "PYTHON": {"base": 100,  "limit": 0.15},
-    "HTML":   {"base": 400,  "limit": 0.05},
-    "JS":     {"base": 2000, "limit": 0.02},
-    "TS":     {"base": 1000, "limit": 0.12},
-    "RUST":   {"base": 200,  "limit": 0.25},
-    "RUBY":   {"base": 1500, "limit": 0.04}
+    "JAVA":   {"base": 500,  "vol": 0.192},
+    "C":      {"base": 300,  "vol": 0.144},
+    "C++":    {"base": 800,  "vol": 0.240},
+    "C#":     {"base": 1200, "vol": 0.216},
+    "PYTHON": {"base": 100,  "vol": 0.360},
+    "HTML":   {"base": 400,  "vol": 0.120},
+    "JS":     {"base": 2000, "vol": 0.072},
+    "TS":     {"base": 1000, "vol": 0.288},
+    "RUST":   {"base": 200,  "vol": 0.600},
+    "RUBY":   {"base": 1500, "vol": 0.096}
 }
+
+# ───────────── 가격 공식 ─────────────
+# 1분마다: 새 가격 = 지금 가격 × e^(변화율). 변화율은 아래를 더한 것 (전부 현재가 대비 비율)
+#   평소 흔들림 (정규분포, 종목 vol 기준) + 아주 약한 되돌림 + 기본 성장 + 시장 상태 + 뉴스 후속 움직임
+# 큰 움직임은 뉴스가 나오는 순간 한 번에 튀는 점프로 온다. (features/news.py)
+# 예전처럼 기준가로 빠르게 돌아오면 "멀리 벗어난 종목 반대로 사기"로 누구나 벌 수 있어서, 되돌림은 반감기 14일로 아주 약하게 했다.
+# 값은 시뮬레이션으로 정했다: 되돌림 매매 · 추세 추종 · 뉴스 따라가기 · 아무렇게나 레버리지 모두 기대 손익이 0 이하,
+# 그냥 들고 있으면 하루 약 +1%. (부도 위기 / 거품 붕괴로 빠지는 만큼을 기본 성장이 메운다)
+MINUTES_PER_DAY = 1440
+REVERT_PER_MINUTE = math.log(2) / (14 * MINUTES_PER_DAY)   # 되돌림 반감기 14일
+GROWTH_PER_MINUTE = 0.015 / MINUTES_PER_DAY                # 기본 성장 하루 1.5%
+TREND = 0.10              # 상승장 / 하락장: 분당 평소 흔들림의 10% 만큼 오르거나 내린다
+STATE_DRIFT = {"HYPER_BULL": 0.004, "CRASH": -0.0005}      # 초상승장 분당 +0.4%, 주식부도 분당 -0.05%
+CRASH_JUMP = (0.02, 0.06)  # 거품이 꺼지는 순간 모든 종목이 2~6% 떨어진다
+DELIST_FLOOR = 0.02        # 기준가의 2% 밑으로 떨어지면 상장폐지
+
+
+def minute_sigma(name):
+    """종목의 1분 평소 흔들림 크기 (하루 변동성 / √1440)"""
+    return stock_info[name]["vol"] / math.sqrt(MINUTES_PER_DAY)
 
 # 현재 주가는 1분마다 자주 읽으므로 메모리에 들고 있고, 바뀔 때마다 DB 에 저장한다.
 stock_prices = {}
 last_update_time = datetime.datetime.now(datetime.timezone.utc)
 
+async def switch_market():
+    """상승장 ↔ 하락장 전환"""
+    global current_market, market_ends_at
+    current_market = "BEAR" if current_market == "BULL" else "BULL"
+    market_ends_at = db.now() + random_market_duration()
+    await save_market_state()
+    print(f"[🔁 시장 상태 변경됨] 현재 시장: {'📈 상승장' if current_market == 'BULL' else '📉 하락장'}")
+
+
+async def pass_market_minute():
+    """%주식가속용: 시장 상태 타이머를 1분 앞당긴다. (1분이 지난 것처럼) 상승장/하락장이 바뀌었으면 True.
+    초상승장/주식부도가 끝나는 처리는 get_effective_market_state 가 한다."""
+    global market_ends_at, override_end
+    one_minute = datetime.timedelta(minutes=1)
+    market_ends_at -= one_minute
+    if override_end:
+        override_end -= one_minute
+    if market_ends_at <= db.now():
+        await switch_market()
+        return True
+    return False
+
+
 # 시장 전환 루프
 async def market_cycle():
-    global current_market, market_ends_at
     await client.wait_until_ready()
+    print(f"[📢 시장 전환 대기] {max(0, int((market_ends_at - db.now()).total_seconds())) // 60}분 후 상태 변경 예정")
 
     while True:
+        # 종료 시각이 될 때까지 기다린다. %주식가속이 종료 시각을 당길 수 있어서 1분마다 다시 확인한다.
         remaining = (market_ends_at - db.now()).total_seconds()
-        print(f"[📢 시장 전환 대기] {max(0, int(remaining)) // 60}분 후 상태 변경 예정")
-
-        # 저장된 종료 시각까지 대기
         if remaining > 0:
-            await asyncio.sleep(remaining)
-
-        # 상태 전환
-        current_market = "BEAR" if current_market == "BULL" else "BULL"
-        market_ends_at = db.now() + random_market_duration()
-        await save_market_state()
-        print(f"[🔁 시장 상태 변경됨] 현재 시장: {'📈 상승장' if current_market == 'BULL' else '📉 하락장'}")
+            await asyncio.sleep(min(remaining, 60))
+            continue
+        await switch_market()
 
 # ───────────── 저장/로드 함수 ─────────────
 async def load_stock_prices():
@@ -146,60 +188,92 @@ async def load_stock_prices():
     last_update_time = datetime.datetime.now(datetime.timezone.utc)
 
 # ───────────── 주식 가격 갱신 ─────────────
-async def update_stocks():
+# 1분 자동 갱신과 %주식가속이 동시에 가격을 바꾸지 않게 막는 잠금
+update_lock = asyncio.Lock()
+
+
+async def update_stocks(history=None, positions=None):
+    """가격을 1분만큼 갱신한다. {"delisted": 상장폐지된 종목들, "liquidated": 강제청산 개수}
+    %주식가속은 매분 DB 를 다녀오면 느리므로 두 가지를 넘긴다.
+      history:   리스트를 주면 가격을 DB 에 저장하지 않고 [(종목, 가격), ...] 으로 여기에 쌓는다. (끝나고 한 번에 저장)
+      positions: 레버리지 포지션 목록을 주면 DB 에서 다시 읽지 않고 이걸로 강제청산을 검사한다."""
     global last_update_time
+    delisted = []
 
     effective_state = await get_effective_market_state()  # ✅ 현재 실질 시장 상태
 
+    doomed = []  # 이번 분에 상장폐지될 종목
     for name, info in stock_info.items():
         base = info["base"]
-        limit = info["limit"]
         prev_price = stock_prices[name]["current"]
+        sigma = minute_sigma(name)
 
-        # 기본 변동
-        change = random.uniform(-limit, limit)
+        # 평소 흔들림. -σ²/2 는 흔들림이 클수록 평균 가격이 저절로 오르는 효과를 지운다
+        # (안 지우면 변동이 큰 종목은 그냥 들고만 있어도 평균적으로 돈이 불어난다)
+        change = random.gauss(-sigma * sigma / 2, sigma)
+        change -= REVERT_PER_MINUTE * math.log(prev_price / base)  # 아주 약한 되돌림 (반감기 14일)
+        change += GROWTH_PER_MINUTE                              # 기본 성장
+        change += news().current_drift(name)                     # 📰 뉴스 후속 움직임 (features/news.py)
 
-        # 과한 변동 억제
-        bias = (base - prev_price) / base * 0.05
-        change += bias
-
-        # 📰 뉴스 효과: 기준가의 몇 % 만큼 더하거나 뺀다. (호재 +, 악재 -, features/news.py)
-        change += news().current_drift(name)
-
-        new_price = prev_price + base * change
-
-        # ✅ 상승장 / 하락장 / 초상승장 / 주식부도 효과 (곱연산)
-        # 상승장/하락장은 1분에 평균 ±0.2% → 가격이 기준가의 약 1.04배 / 0.96배 근처에서 놀게 된다.
+        # 상승장 / 하락장 / 초상승장 / 주식부도
         if effective_state == "BULL":
-            new_price *= (1 + random.uniform(-0.004, 0.008))   # 평균 +0.2%
+            change += TREND * sigma
         elif effective_state == "BEAR":
-            new_price *= (1 - random.uniform(-0.004, 0.008))   # 평균 -0.2%
-        elif effective_state == "HYPER_BULL":
-            new_price *= (1 + random.uniform(-0.01, 0.03))     # 평균 +1% (뉴스 '초대형 호재')
-        elif effective_state == "CRASH":
-            new_price *= (1 - random.uniform(-0.01, 0.03))     # 평균 -1% (거품 붕괴)
+            change -= TREND * sigma
+        else:
+            change += STATE_DRIFT.get(effective_state, 0)
 
-        # 상장폐지 처리: 모든 유저의 해당 주식 삭제 + 다음 %주식확인 때 알림
-        if new_price <= 0:
-            new_price = base
-            print(f"[📉 상장폐지] {name} → 기본가로 초기화됨")
-            await db.delist_stock(name)
-            # 레버리지 포지션은 가격 0 으로 정산 (롱은 증거금을 잃고, 숏은 크게 번다)
-            await futures().settle_symbol(name, exit_price=0, reason="상장폐지")
+        new_price = prev_price * math.exp(change)
+        if new_price < base * DELIST_FLOOR:
+            doomed.append(name)
 
         stock_prices[name]["previous"] = prev_price
-        stock_prices[name]["current"] = round(new_price, 2)
+        stock_prices[name]["current"] = max(round(new_price, 2), 0.01)
+
+    # 뉴스 효과 1분 경과. 상장폐지로 끝나는 부도 위기 종목을 받아온다.
+    doomed += news().tick_effects()
+    for name in dict.fromkeys(doomed):
+        await delist(name)
+        delisted.append(name)
 
     last_update_time = datetime.datetime.now(datetime.timezone.utc)
 
     # 현재가 저장 + 가격 기록 추가 (종목당 최근 1440개 = 24시간만 보관)
-    await db.save_stock_tick(stock_prices, keep=1440)
+    if history is None:
+        await db.save_stock_tick(stock_prices, keep=1440)
+    else:
+        history.extend((name, data["current"]) for name, data in stock_prices.items())
 
     # 새 가격으로 레버리지 포지션 강제청산 검사
-    await futures().check_liquidations()
+    liquidated = await futures().check_liquidations(positions)
+    return {"delisted": delisted, "liquidated": liquidated}
 
-    # 뉴스 효과 1분 경과
-    news().tick_effects()
+
+async def delist(name):
+    """상장폐지: 기준가로 되돌리고, 모든 유저의 해당 주식을 지우고(다음 %주식확인 때 알림), 레버리지는 가격 0 으로 정산."""
+    stock_prices[name]["current"] = float(stock_info[name]["base"])
+    print(f"[📉 상장폐지] {name} → 기본가로 초기화됨")
+    await db.delist_stock(name)
+    # 롱은 증거금을 잃고, 숏은 크게 번다
+    await futures().settle_symbol(name, exit_price=0, reason="상장폐지")
+
+
+async def jump(name, size):
+    """뉴스로 가격이 한 번에 튄다. size 는 변화율 (0.1 이면 약 +10.5%, -0.1 이면 약 -9.5%).
+    %주식에서 얼마나 튀었는지 보이게 previous 를 튀기 전 가격으로 둔다."""
+    data = stock_prices[name]
+    data["previous"] = data["current"]
+    data["current"] = max(round(data["current"] * math.exp(size), 2), 0.01)
+    await db.save_stock_prices(stock_prices)
+
+
+async def jump_all(size):
+    """시장 전체 뉴스 / 거품 붕괴: 모든 종목이 같이 튄다."""
+    for name in stock_prices:
+        data = stock_prices[name]
+        data["previous"] = data["current"]
+        data["current"] = max(round(data["current"] * math.exp(size), 2), 0.01)
+    await db.save_stock_prices(stock_prices)
 
 
 # features/futures.py, features/news.py 가 이 파일을 import 하므로, 서로 물고 물리지 않게 쓸 때 가져온다.
@@ -216,13 +290,125 @@ def news():
 @tasks.loop(minutes=1)
 async def auto_update_stocks():
     try:
-        await update_stocks()
+        async with update_lock:
+            await update_stocks()
     except Exception as e:
         print(f"[주식 갱신 오류] {type(e).__name__}: {e}")
 
 @auto_update_stocks.before_loop
 async def before_loop():
     await client.wait_until_ready()
+
+
+# ───────────── %주식가속 (관리자, 테스트용) ─────────────
+ACCEL_MAX_MINUTES = 1440   # 가격 기록이 종목당 1440개(24시간)까지라 그 이상은 의미가 없다
+ACCEL_PROGRESS_SECONDS = 2  # 진행 상황 메시지를 고치는 간격 (너무 자주 고치면 디스코드가 막는다)
+
+
+def accel_progress(done, minutes, elapsed):
+    """가속 진행 상황 한 줄. 예) ⏩ 주식 가속 중 ▓▓▓▓░░░░░░ 40% (48/120분) · 12초 지남"""
+    filled = done * 10 // minutes
+    bar = "▓" * filled + "░" * (10 - filled)
+    return f"⏩ 주식 가속 중 {bar} {done * 100 // minutes}% ({done}/{minutes}분) · {int(elapsed)}초 지남"
+
+
+@client.command(aliases=["주식가속"])
+@commands.has_permissions(administrator=True)
+async def accelerate_stocks(ctx, minutes: int = 60):
+    """minutes 분이 지난 것처럼 1분 처리를 minutes 번 바로 돌린다.
+    매분: 시장 상태 타이머(상승장/하락장, 초상승장/주식부도) 1분 당기기 → 뉴스 타이머 → 가격 갱신.
+    상장폐지, 강제청산도 실제로 처리된다. 단타 수수료(30분)는 실제 시각 그대로다.
+    가속 중에 나온 뉴스는 DB 에 저장되고(%뉴스) 효과도 걸리지만, 뉴스 채널에 도배되지 않게 채널에는 올리지 않는다."""
+    await ctx.message.delete()
+    if not 1 <= minutes <= ACCEL_MAX_MINUTES:
+        await ctx.send(f"❌ 1~{ACCEL_MAX_MINUTES}분 사이로 입력해주세요.")
+        return
+    if update_lock.locked():
+        await ctx.send("⏳ 지금 주식 가격을 갱신하는 중이에요. 잠시 뒤 다시 시도해주세요.")
+        return
+
+    before = {name: data["current"] for name, data in stock_prices.items()}
+    message = await ctx.send(accel_progress(0, minutes, 0))
+    delisted = []
+    liquidated = 0
+    switches = 0
+    headlines = []
+    done = 0
+    clock = asyncio.get_running_loop().time
+    started = last_shown = clock()
+    # 매분 DB 를 다녀오면 1분에 1초 가까이 걸려서, 가격 기록은 모았다가 끝나고 한 번에 저장하고
+    # 포지션은 한 번 읽어 둔 목록으로 강제청산을 검사한다. (60분마다, 상장폐지 뒤에는 다시 읽는다)
+    history = []
+    positions = await db.all_positions()
+    # 레버리지 보유 비용도 가속: 포지션 진입 시각을 1분씩 당긴다. (메모리 목록은 매분, DB 는 다시 읽을 때 모아서)
+    shifted = 0
+    one_minute = datetime.timedelta(minutes=1)
+
+    async with update_lock:
+        try:
+            for done in range(1, minutes + 1):
+                for pos in positions:
+                    if pos.get("opened_at"):
+                        pos["opened_at"] -= one_minute
+                switches += await pass_market_minute()
+                if news().minute_passed():
+                    _, _, headline, _ = await news().make_news()
+                    headlines.append(f"`{done}분` {headline}")
+                result = await update_stocks(history=history, positions=positions)
+                delisted += result["delisted"]
+                liquidated += result["liquidated"]
+                if result["delisted"] or done % 60 == 0:
+                    await db.shift_position_times(done - shifted)
+                    shifted = done
+                    positions = await db.all_positions()  # 상장폐지 정산, 그사이 새로 연 포지션 반영
+                if done < minutes and clock() - last_shown >= ACCEL_PROGRESS_SECONDS:
+                    last_shown = clock()
+                    await message.edit(content=accel_progress(done, minutes, last_shown - started))
+                await asyncio.sleep(0)  # 오래 걸려도 봇이 멈춘 것처럼 되지 않게 다른 일에 차례를 준다
+        except Exception as e:
+            print(f"[주식가속 오류] {type(e).__name__}: {e}")
+            await message.edit(content=f"❌ {done}/{minutes}분째에 오류가 나서 멈췄어요: {type(e).__name__}")
+            return
+        finally:
+            await db.shift_position_times(done - shifted)  # 남은 만큼 보유 시간 반영
+            if history:
+                await db.save_stock_tick(stock_prices, keep=1440, history=history)  # 모아 둔 가격 기록 저장
+            await save_market_state()  # 당긴 타이머 저장
+
+    embed = discord.Embed(
+        title=f"⏩ 주식 {minutes}분 가속 완료",
+        description=(
+            f"**{minutes}분**({num(minutes / 60)}시간)이 지난 것처럼 처리했어요. (실제로 걸린 시간 {int(clock() - started)}초)\n"
+            "새 가격은 `%주식`, 흐름은 `%주가그래프`로 확인하세요."
+        ),
+        color=discord.Color.blue()
+    )
+    for name, price in stock_prices.items():
+        old = before.get(name, price["current"])
+        change = (price["current"] / old - 1) * 100 if old else 0
+        embed.add_field(
+            name=name,
+            value=f"{num(old)} → {num(price['current'])}\n({num(change, sign=True)}%)",
+            inline=True
+        )
+    if delisted:
+        counts = {name: delisted.count(name) for name in dict.fromkeys(delisted)}
+        embed.add_field(
+            name="📉 상장폐지",
+            value=", ".join(f"{name} {n}번" for name, n in counts.items()),
+            inline=False
+        )
+    embed.add_field(name="💥 강제청산", value=f"{liquidated}건", inline=False)
+    # 지금이 상승장인지 하락장인지는 일부러 숨기고, 몇 번 바뀌었는지만 보여준다.
+    embed.add_field(name="🔁 시장 분위기 전환", value=f"{switches}번", inline=False)
+    if headlines:
+        shown = headlines[-10:]
+        more = f"\n... 외 {len(headlines) - len(shown)}개" if len(headlines) > len(shown) else ""
+        embed.add_field(name=f"📰 가속 중 나온 뉴스 ({len(headlines)}개)", value="\n".join(shown)[:1000] + more, inline=False)
+    else:
+        embed.add_field(name="📰 가속 중 나온 뉴스", value="없음", inline=False)
+    embed.set_footer(text=f"요청자: {ctx.author.display_name} · 가속 중 뉴스는 뉴스 채널에 올리지 않아요 (%뉴스로 확인)")
+    await message.edit(content=None, embed=embed)
 
 # ───────────── %주식 명령어 ─────────────
 @client.command(aliases=["주식"])
@@ -300,20 +486,31 @@ async def reset_stock(ctx):
 # 확인 창을 띄운 뒤 가격이 바뀔 수 있으므로, 실제 거래는 확인 버튼을 누른 순간의 현재가로 한다.
 # (창을 띄운 시점 가격으로 하면, 가격이 유리하게 바뀌었을 때만 확인을 눌러 공짜로 벌 수 있다)
 
-def sell_fee(stock):
-    """보유 주식(db.get_portfolio 의 값 하나)을 지금 팔 때의 수수료율. 산 지 30분 안이면 단타 수수료."""
+# 아래 함수들의 bonus 는 abilities.totals 결과 (⏱️ 단타 시간 단축, 💸 판매 수수료 할인)
+
+def quick_minutes(bonus=None):
+    """단타 수수료가 붙는 시간 (분)"""
+    return QUICK_SELL_MINUTES - (bonus or {}).get("quick_sell_time", 0)
+
+
+def is_quick(stock, bonus=None):
+    """보유 주식(db.get_portfolio 의 값 하나)이 아직 단타 수수료 시간 안인지"""
     bought = stock.get("last_bought_at")
-    if bought and db.now() - bought < datetime.timedelta(minutes=QUICK_SELL_MINUTES):
-        return QUICK_SELL_FEE
-    return SELL_FEE
+    return bool(bought) and db.now() - bought < datetime.timedelta(minutes=quick_minutes(bonus))
 
 
-def quick_sell_left(stock):
+def sell_fee(stock, bonus=None):
+    """지금 팔 때의 수수료율. 단타 시간 안이면 단타 수수료, 판매 수수료 할인 능력만큼 낮아진다."""
+    fee = QUICK_SELL_FEE if is_quick(stock, bonus) else SELL_FEE
+    return max(0.0, fee - (bonus or {}).get("sell_fee", 0) / 100)
+
+
+def quick_sell_left(stock, bonus=None):
     """단타 수수료가 끝나기까지 남은 분 (올림). 이미 끝났으면 0."""
     bought = stock.get("last_bought_at")
     if not bought:
         return 0
-    left = datetime.timedelta(minutes=QUICK_SELL_MINUTES) - (db.now() - bought)
+    left = datetime.timedelta(minutes=quick_minutes(bonus)) - (db.now() - bought)
     return max(0, -(-int(left.total_seconds()) // 60))
 
 
@@ -352,25 +549,26 @@ async def sell_shares(user_id, sales):
 
         earned = 0.0
         fees = {}
+        bonus = await abilities.totals(user_id, conn)
         for name, quantity in sales.items():
             stock = holdings[name]
             price = stock_prices[name]["current"]
-            fees[name] = sell_fee(stock)
+            fees[name] = sell_fee(stock, bonus)
             net = price * quantity * (1 - fees[name])
             earned += net
             await db.set_holding(user_id, name, stock["quantity"] - quantity, stock["avg_price"], conn)
             await db.log_money(
-                user_id, "stock_sell", net, f"{name} {quantity}주 @{price} 수수료 {fees[name]:.0%}", conn
+                user_id, "stock_sell", net, f"{name} {quantity}주 @{price} 수수료 {fees[name]:.2%}", conn
             )
         balance = await db.add_money(user_id, earned, conn)
     return {"earned": earned, "fees": fees, "balance": balance}
 
 
-def fee_text(stock):
+def fee_text(stock, bonus=None):
     """확인 창에 보여줄 수수료 설명"""
-    fee = sell_fee(stock)
-    if fee == QUICK_SELL_FEE:
-        return f"단타 수수료 {num(fee * 100)}% (산 지 {QUICK_SELL_MINUTES}분 안, {quick_sell_left(stock)}분 남음)"
+    fee = sell_fee(stock, bonus)
+    if is_quick(stock, bonus):
+        return f"단타 수수료 {num(fee * 100)}% (산 지 {quick_minutes(bonus)}분 안, {quick_sell_left(stock, bonus)}분 남음)"
     return f"수수료 {num(fee * 100)}%"
 
 # ───────────── 주식 이름 줄임말 처리 ─────────────
@@ -501,7 +699,8 @@ async def sell_stock(ctx, stock_name: str, amount: int):
 
 
     price = stock_prices[stock_key]["current"]
-    total_earned = price * amount * (1 - sell_fee(stock))
+    bonus = await abilities.totals(user_id)
+    total_earned = price * amount * (1 - sell_fee(stock, bonus))
 
     embed = discord.Embed(
         title="📤 주식 판매 확인",
@@ -510,7 +709,7 @@ async def sell_stock(ctx, stock_name: str, amount: int):
     )
     embed.add_field(name="종목", value=stock_key, inline=True)
     embed.add_field(name="수량", value=f"{amount} 주", inline=True)
-    embed.add_field(name=f"{fee_text(stock)} 차감 후 (지금 가격 기준)", value=f"{num(total_earned)} byte", inline=False)
+    embed.add_field(name=f"{fee_text(stock, bonus)} 차감 후 (지금 가격 기준)", value=f"{num(total_earned)} byte", inline=False)
     embed.set_footer(text="확인을 누르는 순간의 가격으로 거래돼요.")
 
     view = View()
@@ -834,6 +1033,7 @@ async def sell_all_stock(ctx, stock_name: str = None):
     await ctx.message.delete()
     user_id = ctx.author.id
     holdings = await db.get_portfolio(user_id)
+    bonus = await abilities.totals(user_id)
 
     # 개별 주식 판매
     if stock_name:
@@ -850,7 +1050,7 @@ async def sell_all_stock(ctx, stock_name: str = None):
         quantity = stock["quantity"]
         price = stock_prices[stock_key]["current"]
         gross = price * quantity
-        net = gross * (1 - sell_fee(stock))
+        net = gross * (1 - sell_fee(stock, bonus))
 
         embed = discord.Embed(
             title="📤 전량 판매 확인",
@@ -858,7 +1058,7 @@ async def sell_all_stock(ctx, stock_name: str = None):
             color=discord.Color.orange()
         )
         embed.add_field(name="1주 가격", value=f"{num(price)} byte", inline=True)
-        embed.add_field(name=f"수익 ({fee_text(stock)} 적용)", value=f"{num(net)} byte", inline=False)
+        embed.add_field(name=f"수익 ({fee_text(stock, bonus)} 적용)", value=f"{num(net)} byte", inline=False)
         embed.set_footer(text="확인을 누르는 순간의 가격으로 거래돼요.")
 
         view = View()
@@ -929,10 +1129,10 @@ async def sell_all_stock(ctx, stock_name: str = None):
 
         p = stock_prices.get(name, {}).get("current", stock_info[name]["base"])
         gross = p * q
-        net = gross * (1 - sell_fee(stock))
+        net = gross * (1 - sell_fee(stock, bonus))
 
         is_loss = net < cost  # ✅ 손해 여부 판단
-        quick = " ⏱️단타" if sell_fee(stock) == QUICK_SELL_FEE else ""
+        quick = " ⏱️단타" if is_quick(stock, bonus) else ""
 
         if is_loss:
             summary_lines.append(f"⚠️ {name}: {q}주 → {num(net)} byte (손해!){quick}")

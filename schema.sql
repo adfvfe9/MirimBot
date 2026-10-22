@@ -100,6 +100,46 @@ CREATE TABLE IF NOT EXISTS enhance_items (            -- enhance_data.json
 -- 예전 규칙(+0 ~ +300)으로 만든 아이템은 새 범위(+1 ~ +13)에 맞춘다.
 UPDATE enhance_items SET level = LEAST(GREATEST(level, 1), 13) WHERE level < 1 OR level > 13;
 
+-- 강화 아이템 능력 슬롯 (features/abilities.py). +5 / +7 / +9 / +11 / +13 에서 슬롯이 하나씩 열린다.
+-- 레벨이 떨어지면 그 위 슬롯은 꺼지기만 하고 남는다. 아이템을 팔거나 파괴되면 같이 지운다.
+CREATE TABLE IF NOT EXISTS enhance_abilities (
+    user_id   BIGINT  NOT NULL,
+    item_name TEXT    NOT NULL,
+    slot      INT     NOT NULL,                       -- 1~5
+    ability   TEXT    NOT NULL,                       -- abilities.ABILITIES 의 키
+    tier      INT     NOT NULL,                       -- 0 일반 / 1 희귀 / 2 영웅 / 3 전설
+    value     NUMERIC NOT NULL,                       -- 등급 범위 안에서 뽑힌 수치
+    locked    BOOLEAN NOT NULL DEFAULT FALSE,         -- 잠그면 리롤해도 안 바뀐다 (대신 리롤이 비싸진다)
+    PRIMARY KEY (user_id, item_name, slot)
+);
+
+-- 암시장 (features/market.py): 유저끼리 강화 아이템을 사고판다.
+-- 등록하면 아이템은 판매자 목록에서 빠져서 여기 보관된다. (팔리면 구매자에게, 취소/만료되면 판매자에게 돌아간다)
+CREATE TABLE IF NOT EXISTS market_listings (
+    id         BIGSERIAL PRIMARY KEY,
+    seller_id  BIGINT      NOT NULL,
+    item_name  TEXT        NOT NULL,
+    level      INT         NOT NULL,
+    abilities  JSONB       NOT NULL DEFAULT '[]',     -- 등록할 때의 능력 슬롯 [{slot, ability, tier, value, locked}]
+    price      NUMERIC     NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS market_listings_seller_idx ON market_listings (seller_id);
+
+-- 암시장 거래 기록 (예상 가격 = 같은 레벨 최근 거래 평균)
+CREATE TABLE IF NOT EXISTS market_trades (
+    id        BIGSERIAL PRIMARY KEY,
+    seller_id BIGINT      NOT NULL,
+    buyer_id  BIGINT      NOT NULL,
+    item_name TEXT        NOT NULL,
+    level     INT         NOT NULL,
+    slots     INT         NOT NULL,                    -- 능력 슬롯 개수
+    price     NUMERIC     NOT NULL,
+    sold_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS market_trades_level_idx ON market_trades (level, id);
+
 CREATE TABLE IF NOT EXISTS inventory (                -- items.json (상점에서 산 아이템)
     user_id   BIGINT NOT NULL,
     item_name TEXT   NOT NULL,

@@ -32,7 +32,7 @@ from discord.ext import commands, tasks
 
 import database as db
 from bot import client
-from features import quiz_bank, quiz_gen, quiz_math, wordchain
+from features import abilities, quiz_bank, quiz_gen, quiz_math, wordchain
 from fmt import debt_line, num
 
 # ───────────── 밸런스 설정 ─────────────
@@ -40,10 +40,10 @@ QUIZ_INTERVAL_MINUTES = (60, 120)   # 다음 퀴즈까지 랜덤 간격
 QUIZ_HOURS = range(8, 24)           # 퀴즈가 나오는 시간 (한국 시간 8시 ~ 23시대)
 NUMBER_TRIES = 3                    # 숫자 답: 한 사람이 한 문제에 낼 수 있는 답 수 (객관식은 1번)
 
-LEVELS = {   # 제한 시간(초), 보상 범위, 나올 확률(가중치)
-    "하": {"seconds": 60,  "reward": (1500, 2500),  "weight": 45},
-    "중": {"seconds": 300, "reward": (3000, 5000),  "weight": 35},
-    "상": {"seconds": 600, "reward": (6000, 10000), "weight": 20},
+LEVELS = {   # 제한 시간(초), 보상 범위, 나올 확률(가중치), 정답자가 토큰 1개를 받을 확률(%)
+    "하": {"seconds": 60,  "reward": (1500, 2500),  "weight": 45, "token": 10},
+    "중": {"seconds": 300, "reward": (3000, 5000),  "weight": 35, "token": 30},
+    "상": {"seconds": 600, "reward": (6000, 10000), "weight": 20, "token": 60},
 }
 SUBJECTS = {  # 이모지, 나올 확률(가중치)
     "수학": ("🧮", 30), "국어": ("📚", 15), "영어": ("🔠", 15), "사회": ("🏛️", 10),
@@ -251,7 +251,9 @@ async def run_quiz(channel, quiz):
             description=f"{quiz['question']}\n\n{quiz['hint']}",
             color={"하": discord.Color.green(), "중": discord.Color.gold(), "상": discord.Color.red()}[quiz["level"]],
         )
-        embed.set_footer(text=f"⏱️ 제한 시간 {time_text(seconds)} · 가장 먼저 맞힌 사람에게 {num(reward)} byte!")
+        embed.set_footer(
+            text=f"⏱️ 제한 시간 {time_text(seconds)} · 가장 먼저 맞힌 사람에게 {num(reward)} byte! (🪙 토큰 {level['token']}% 확률)"
+        )
         if quiz["image"]:
             embed.set_image(url="attachment://quiz.png")
             await channel.send(embed=embed, file=discord.File(io.BytesIO(quiz["image"]), filename="quiz.png"))
@@ -307,10 +309,16 @@ async def run_quiz(channel, quiz):
 
         result = await db.receive(winner.author.id, reward)
         await db.log_money(winner.author.id, "quiz", reward)
+        # 🪙 토큰 보상 (강화 능력 리롤 재료). 🪙 퀴즈 토큰 확률 능력만큼 확률이 오른다
+        token_chance = level["token"] + await abilities.total(winner.author.id, "quiz_token")
+        got_token = abilities.chance(token_chance)
+        if got_token:
+            await db.add_tokens(winner.author.id, 1)
         embed = discord.Embed(
             title="🎉 정답!",
             description=(
-                f"{winner.author.mention}님이 가장 먼저 맞혔어요! **+{num(reward)} byte**\n"
+                f"{winner.author.mention}님이 가장 먼저 맞혔어요! **+{num(reward)} byte**"
+                + (" **+🪙 토큰 1개**" if got_token else "") + "\n"
                 f"정답: **{quiz['answer']}**{explain}"
                 + debt_line(result["collected"])
             ),

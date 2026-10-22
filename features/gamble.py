@@ -8,6 +8,7 @@ import discord
 import database as db
 import respond
 from bot import client
+from features import abilities
 from fmt import debt_line, num
 
 
@@ -59,6 +60,11 @@ async def play_gamble(user_id, amount=None):
             [m for m, _ in GAMBLE_TABLE], weights=[w for _, w in GAMBLE_TABLE]
         )[0]
         payout = amount * multiplier
+        refund = 0.0
+        if multiplier == 0:
+            # 🎰 도박 꽝 환급 (상한 8%: 기대값이 0.95 + 0.5 × 8% = 0.99 라 도박은 여전히 손해)
+            refund = amount * await abilities.total(user_id, "gamble_refund", conn) / 100
+            payout = refund
         net_change = payout - amount
         new_balance = current_money + net_change
 
@@ -75,6 +81,7 @@ async def play_gamble(user_id, amount=None):
         "amount": amount,
         "multiplier": multiplier,
         "payout": payout,
+        "refund": refund,
         "net_change": net_change,
         "balance": new_balance,
     }
@@ -104,7 +111,11 @@ def gamble_embed(result, title, description):
         description=description,
         color=color
     )
-    embed.add_field(name="배율", value="꽝" if multiplier == 0 else f"{num(multiplier)}배", inline=True)
+    embed.add_field(
+        name="배율",
+        value=(f"꽝 (🎰 환급 {num(result['refund'])})" if result.get("refund") else "꽝") if multiplier == 0 else f"{num(multiplier)}배",
+        inline=True
+    )
     embed.add_field(name="돌려받은 금액", value=f"{num(result['payout'])} byte", inline=True)
     embed.add_field(name="순이익", value=f"{net_symbol} {num(net_change, sign=True)} byte", inline=True)
     embed.add_field(name="현재 잔액", value=f"{num(result['balance'])} byte", inline=False)
@@ -369,6 +380,15 @@ class RPSView(discord.ui.View):
             if self.streak >= RPS_MAX_STREAK:
                 await self.pay_out(interaction, title=f"🏆 {RPS_MAX_STREAK}연승 달성! 자동 수령")
                 return
+
+        # ✊ 가위바위보 부활: 졌지만 확률로 무효 (무승부처럼 연승과 누적 보상 유지)
+        elif abilities.chance(await abilities.total(self.player_id, "rps_revive")):
+            embed.color = discord.Color.gold()
+            embed.add_field(
+                name="✊ 부활!",
+                value="졌지만 **가위바위보 부활** 능력이 발동해서 무효가 됐어요. 연승과 누적 보상이 유지됩니다.",
+                inline=False
+            )
 
         # 패배: 연승과 누적 보상 초기화
         else:

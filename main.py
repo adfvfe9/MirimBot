@@ -31,6 +31,7 @@ from bot import client, get_token
 
 # import 하는 순간 각 파일의 명령어가 봇에 등록된다.
 from features import (  # noqa: F401
+    abilities,
     admin,
     assets,
     bank,
@@ -38,6 +39,7 @@ from features import (  # noqa: F401
     enhance,
     gamble,
     general,
+    market,
     moderation,
     news,
     quiz,

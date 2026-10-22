@@ -5,19 +5,24 @@
     %강화목록 [@유저]     보유 아이템
     %강화랭킹             서버 전체 최고 강화 아이템
     %강화확률             확률표
+    %강화제작 <이름> <레벨> [@유저]   (관리자) 원하는 레벨의 아이템 바로 만들기
+    %강화수정 <이름> <레벨> [@유저]   (관리자) 아이템 레벨 바꾸기
 
 - 아이템은 +1 로 시작해서 최대 +13.
+- +5 / +7 / +9 / +11 / +13 에 처음 도달하면 능력 슬롯이 열린다. (features/abilities.py)
 - 낮은 레벨은 실패해도 유지, +6 부터는 떨어질 수 있고, +7 부터는 파괴될 수 있다. (최대 10%)
 - 한 번 더 누를 때마다 평균적으로 가진 가치의 3~10% 를 잃는다. 고강일수록 확률은 낮고 대박은 크다. (로또 구조)
 """
 import random
 
 import discord
+from discord.ext import commands
 from discord.ui import Button, View
 
 import database as db
 import respond
 from bot import client
+from features import abilities
 from fmt import debt_line, num
 
 # ───────────── 밸런스 설정 ─────────────
@@ -66,8 +71,10 @@ def outcome_chances(level):
     return success, fail * keep / 100, fail * down / 100, fail * destroy / 100
 
 
-def roll(level):
-    """한 번 굴린다. ('success' | 'keep' | 'down' | 'destroy', 새 레벨 또는 None)"""
+def roll(level, bonus=None):
+    """한 번 굴린다. (결과, 새 레벨 또는 None, 발동한 능력 또는 None)
+    결과: 'success' | 'keep' | 'down' | 'destroy'. bonus 는 abilities.totals 결과 (대성공 / 하락 방지 / 파괴 방지)"""
+    bonus = bonus or {}
     success, keep, down, destroy = outcome_chances(level)
     result = random.choices(
         ["success", "keep", "down", "destroy"], weights=[success, keep, down, destroy]
@@ -78,7 +85,15 @@ def roll(level):
         "down": max(1, level - 1),
         "destroy": None,
     }[result]
-    return result, new_level
+
+    special = None
+    if result == "success" and level + 2 <= abilities.GREAT_SUCCESS_MAX_LEVEL and abilities.chance(bonus.get("great_success", 0)):
+        new_level, special = level + 2, "great_success"
+    elif result == "down" and abilities.chance(bonus.get("down_guard", 0)):
+        result, new_level, special = "keep", level, "down_guard"
+    elif result == "destroy" and abilities.chance(bonus.get("destroy_guard", 0)):
+        result, new_level, special = "keep", level, "destroy_guard"
+    return result, new_level, special
 
 
 RESULT_TEXT = {
@@ -87,6 +102,21 @@ RESULT_TEXT = {
     "down": "📉 강화 실패 (레벨 하락)",
     "destroy": "💥 강화 실패 (아이템 파괴)",
 }
+
+SPECIAL_TEXT = {
+    "great_success": "💥 **대성공!** 한 번에 +2",
+    "down_guard": "🍀 하락 방지 발동!",
+    "destroy_guard": "🛡️ **파괴 방지 발동!**",
+}
+
+
+def result_line(r):
+    """'✅ 강화 성공: +3 → +4  (-1,200 byte)' + 능력 발동 / 새 슬롯"""
+    new_text = "파괴" if r["new"] is None else f"+{r['new']}"
+    line = f"{RESULT_TEXT[r['result']]}: +{r['old']} → {new_text}"
+    if r.get("special"):
+        line += f"  {SPECIAL_TEXT[r['special']]}"
+    return line
 
 
 async def try_enhance(user_id, item_name):
@@ -103,18 +133,22 @@ async def try_enhance(user_id, item_name):
         if money < cost:
             return f"💸 돈이 부족합니다. (필요: {num(cost)} byte / 보유: {num(money)} byte)"
 
-        result, new_level = roll(level)
+        result, new_level, special = roll(level, await abilities.totals(user_id, conn))
         await db.update_user(user_id, conn, money=money - cost)
         await db.log_money(user_id, "enhance_try", -cost, f"+{level} → {result}", conn)
+        opened = []
         if new_level is None:
             await db.delete_enhance_item(user_id, item_name, conn)
         else:
             await db.set_enhance_level(user_id, item_name, new_level, conn)
+            opened = await abilities.sync_slots(user_id, item_name, new_level, conn)  # +5/+7/... 처음 도달하면 슬롯 열림
 
     return {
         "result": result,
         "old": level,
         "new": new_level,
+        "special": special,
+        "opened": opened,
         "cost": cost,
         "balance": money - cost,
     }
@@ -298,15 +332,16 @@ class EnhanceView(View):
             return
 
         self.apply(r)
-        new_text = "파괴" if r["new"] is None else f"+{r['new']}"
-        self.last = f"{RESULT_TEXT[r['result']]}: +{r['old']} → {new_text}  (-{num(r['cost'])} byte)"
+        self.last = f"{result_line(r)}  (-{num(r['cost'])} byte)"
+        if r["opened"]:
+            self.last += "\n" + abilities.opened_text(r["opened"]) + f"\n`%강화능력설정 {self.item_name}`으로 확인 / 리롤"
         await self.refresh(interaction)
         await announce(interaction.channel, interaction.user, self.item_name, r["result"], r["old"], r["new"])
 
     async def on_auto(self, interaction):
         await respond.defer(interaction)
         self.sell_armed = False
-        logs, total_cost, tries, stop = [], 0, 0, ""
+        logs, total_cost, tries, stop, opened = [], 0, 0, "", []
 
         while tries < AUTO_MAX_TRIES:
             if self.level is None or self.level >= self.target:
@@ -317,9 +352,9 @@ class EnhanceView(View):
                 break
             tries += 1
             total_cost += r["cost"]
+            opened += r["opened"]
             self.apply(r)
-            new_text = "파괴" if r["new"] is None else f"+{r['new']}"
-            logs.append(f"{RESULT_TEXT[r['result']]}: +{r['old']} → {new_text}")
+            logs.append(result_line(r).replace("**", ""))
             await announce(interaction.channel, interaction.user, self.item_name, r["result"], r["old"], r["new"])
 
         if self.level is not None and self.level >= self.target:
@@ -334,6 +369,7 @@ class EnhanceView(View):
         self.last = (
             f"{head}\n시도 {tries}회, 총 비용 {num(total_cost)} byte\n"
             + ("```" + "\n".join(logs[-10:]) + "```" if logs else "")
+            + (abilities.opened_text(opened) if opened and self.level is not None else "")
         )
         await self.refresh(interaction)
 
@@ -412,8 +448,13 @@ async def enhance_list(ctx, member: discord.Member = None):
 
     embed = discord.Embed(title=f"{member.display_name}님의 강화 아이템 ({len(user_items)}/{MAX_ITEMS})", color=0x2ecc71)
     for item_name, level in sorted(user_items.items(), key=lambda x: -x[1]):
-        embed.add_field(name=f"{item_name} +{level}", value=f"판매가 {num(SELL_PRICE[level])} byte", inline=True)
+        embed.add_field(
+            name=f"{item_name} +{level}",
+            value=f"판매가 {num(SELL_PRICE[level])} byte\n✨ 슬롯 {abilities.open_slot_count(level)}/{len(abilities.SLOT_LEVELS)}",
+            inline=True
+        )
 
+    embed.set_footer(text="✨ 능력: %강화능력설정 <아이템> · 합친 효과: %내능력")
     await ctx.send(embed=embed)
 
 
@@ -435,6 +476,53 @@ async def sell_enhance(ctx, item_name: str):
     embed.add_field(name="💵 획득 Byte", value=f"**{num(price)} byte**", inline=False)
     embed.add_field(name="💳 현재 보유 금액", value=f"**{num(result['balance'])} byte**", inline=False)
     await ctx.send(embed=embed)
+
+
+# ───────────── 관리자: 아이템 만들기 / 레벨 바꾸기 (테스트용) ─────────────
+
+async def admin_set_level(ctx, item_name, level, member, create):
+    member = member or ctx.author
+    if not 1 <= level <= MAX_LEVEL:
+        await ctx.send(f"❌ 레벨은 +1 ~ +{MAX_LEVEL} 사이로 입력해주세요.")
+        return
+    if len(item_name) > NAME_MAX_LEN:
+        await ctx.send(f"❌ 아이템 이름은 {NAME_MAX_LEN}자까지예요.")
+        return
+    async with db.user_tx(member.id) as conn:
+        old = (await db.get_enhance_items(member.id, conn)).get(item_name)
+        if create and old is not None:
+            error = f"❌ `{item_name}` 아이템이 이미 있어요. 레벨을 바꾸려면 `%강화수정`을 쓰세요."
+        elif not create and old is None:
+            error = f"❌ `{item_name}` 아이템이 없어요. 만들려면 `%강화제작`을 쓰세요."
+        else:
+            error = None
+            await db.set_enhance_level(member.id, item_name, level, conn)
+            opened = await abilities.sync_slots(member.id, item_name, level, conn)
+    if error:
+        await ctx.send(error)
+        return
+
+    change = f"+{level} 제작" if create else f"+{old} → +{level}"
+    lines = [f"🛠️ {member.mention}님의 **{item_name}** {change} (관리자)"]
+    if opened:
+        lines.append(abilities.opened_text(opened))
+    if not create and level < old:
+        lines.append("💤 레벨이 내려가서 그 위 슬롯은 꺼졌어요. (다시 올리면 켜져요)")
+    await ctx.send("\n".join(lines))
+
+
+@client.command(aliases=["강화제작"])
+@commands.has_permissions(administrator=True)
+async def admin_craft(ctx, item_name: str, level: int, member: discord.Member = None):
+    """원하는 레벨의 아이템을 바로 만든다. 보유 개수 제한(5개)을 무시한다. 열리는 슬롯에는 능력이 붙는다."""
+    await admin_set_level(ctx, item_name, level, member, create=True)
+
+
+@client.command(aliases=["강화수정"])
+@commands.has_permissions(administrator=True)
+async def admin_set_enhance(ctx, item_name: str, level: int, member: discord.Member = None):
+    """이미 있는 아이템의 레벨을 바꾼다. 처음 도달하는 슬롯은 열리고, 내려가면 위 슬롯은 꺼진다."""
+    await admin_set_level(ctx, item_name, level, member, create=False)
 
 
 @client.command(aliases=["강화랭킹"])

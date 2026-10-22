@@ -24,6 +24,7 @@ main.py 는 SQL 을 직접 쓰지 않고 이 파일의 함수만 호출한다.
 from __future__ import annotations
 
 import datetime
+import json
 import os
 from contextlib import asynccontextmanager
 from decimal import Decimal
@@ -240,9 +241,10 @@ async def receive(user_id, amount, conn=None) -> dict:
 #   loan / loan_repay             대출 / 상환
 #   deposit_in / deposit_out      적금 넣기 / 빼기
 #   enhance_craft / enhance_try / enhance_sell
-#   futures_open / futures_close / futures_settle (상장폐지 정산)
+#   futures_open / futures_fee (진입 수수료) / futures_close / futures_settle (상장폐지 정산) / futures_insurance (청산 보험)
 #   stock_buy / stock_sell / chart
 #   gamble / rps / quiz / wordchain / token_buy
+#   market_buy / market_sell (암시장, 판매 쪽은 수수료 뺀 금액) / market_fee
 async def log_money(user_id, source: str, amount, memo: str | None = None, conn=None) -> None:
     """돈이 바뀐 기록을 남긴다. 돈을 바꾼 것과 같은 conn 으로 부르면 함께 취소/저장된다."""
     if not amount:
@@ -263,6 +265,8 @@ async def bankrupt(user_id, day: datetime.date, conn=None) -> None:
         await c.execute("DELETE FROM portfolio WHERE user_id = $1", uid)
         await c.execute("DELETE FROM stock_positions WHERE user_id = $1", uid)
         await c.execute("DELETE FROM enhance_items WHERE user_id = $1", uid)
+        await c.execute("DELETE FROM enhance_abilities WHERE user_id = $1", uid)
+        await c.execute("DELETE FROM market_listings WHERE seller_id = $1", uid)  # 암시장에 맡긴 아이템도
         await update_user(
             uid, c, money=0, unpaid_amount=0, deposit_amount=0, deposit_start=None,
             bankruptcy_date=day,
@@ -350,11 +354,113 @@ async def all_enhance_items() -> list[dict]:
 
 
 async def delete_enhance_item(user_id, item_name: str, conn=None) -> int | None:
-    """아이템을 지우고 지워진 아이템의 레벨을 돌려준다. 없으면 None."""
-    return await (conn or pool()).fetchval(
+    """아이템을 지우고 지워진 아이템의 레벨을 돌려준다. 없으면 None. 붙어 있던 능력도 같이 지운다."""
+    c = conn or pool()
+    await c.execute(
+        "DELETE FROM enhance_abilities WHERE user_id = $1 AND item_name = $2", int(user_id), item_name
+    )
+    return await c.fetchval(
         "DELETE FROM enhance_items WHERE user_id = $1 AND item_name = $2 RETURNING level",
         int(user_id), item_name,
     )
+
+
+# ───────────── 강화 능력 슬롯 (features/abilities.py) ─────────────
+
+async def get_abilities(user_id, conn=None) -> list[dict]:
+    """[{item_name, slot, ability, tier, value, locked}, ...] 아이템 이름, 슬롯 순"""
+    rows = await (conn or pool()).fetch(
+        "SELECT item_name, slot, ability, tier, value, locked FROM enhance_abilities "
+        "WHERE user_id = $1 ORDER BY item_name, slot",
+        int(user_id),
+    )
+    return [{**dict(r), "value": float(r["value"])} for r in rows]
+
+
+async def set_ability(user_id, item_name: str, slot: int, ability: str, tier: int, value: float, conn=None) -> None:
+    """슬롯에 능력을 넣는다. 잠금 상태는 그대로 둔다."""
+    await (conn or pool()).execute(
+        """
+        INSERT INTO enhance_abilities (user_id, item_name, slot, ability, tier, value) VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (user_id, item_name, slot) DO UPDATE
+            SET ability = EXCLUDED.ability, tier = EXCLUDED.tier, value = EXCLUDED.value
+        """,
+        int(user_id), item_name, slot, ability, tier, _num(value),
+    )
+
+
+async def set_ability_lock(user_id, item_name: str, slot: int, locked: bool, conn=None) -> None:
+    await (conn or pool()).execute(
+        "UPDATE enhance_abilities SET locked = $4 WHERE user_id = $1 AND item_name = $2 AND slot = $3",
+        int(user_id), item_name, slot, locked,
+    )
+
+
+# ───────────── 암시장 (features/market.py) ─────────────
+
+def _listing_from_row(row) -> dict:
+    listing = dict(row)
+    listing["price"] = float(listing["price"])
+    if isinstance(listing["abilities"], str):
+        listing["abilities"] = json.loads(listing["abilities"])
+    return listing
+
+
+async def add_listing(seller_id, item_name: str, level: int, abilities: list, price: float,
+                      expires_at: datetime.datetime, conn=None) -> int:
+    return await (conn or pool()).fetchval(
+        """
+        INSERT INTO market_listings (seller_id, item_name, level, abilities, price, expires_at)
+        VALUES ($1, $2, $3, $4::jsonb, $5, $6) RETURNING id
+        """,
+        int(seller_id), item_name, level, json.dumps(abilities), _num(price), expires_at,
+    )
+
+
+async def active_listings(at: datetime.datetime) -> list[dict]:
+    """만료되지 않은 등록 전부 (최근 등록 순)"""
+    rows = await pool().fetch("SELECT * FROM market_listings WHERE expires_at > $1 ORDER BY id DESC", at)
+    return [_listing_from_row(r) for r in rows]
+
+
+async def seller_listings(seller_id, conn=None) -> list[dict]:
+    rows = await (conn or pool()).fetch(
+        "SELECT * FROM market_listings WHERE seller_id = $1 ORDER BY id", int(seller_id)
+    )
+    return [_listing_from_row(r) for r in rows]
+
+
+async def get_listing(listing_id: int, conn=None, lock: bool = False) -> dict | None:
+    row = await (conn or pool()).fetchrow(
+        "SELECT * FROM market_listings WHERE id = $1" + (" FOR UPDATE" if lock else ""), listing_id
+    )
+    return _listing_from_row(row) if row else None
+
+
+async def delete_listing(listing_id: int, conn=None) -> dict | None:
+    """등록을 지우고 지운 등록을 돌려준다. 이미 없으면 None. (두 번 팔리기 방지)"""
+    row = await (conn or pool()).fetchrow("DELETE FROM market_listings WHERE id = $1 RETURNING *", listing_id)
+    return _listing_from_row(row) if row else None
+
+
+async def expired_listing_ids(at: datetime.datetime) -> list[int]:
+    rows = await pool().fetch("SELECT id FROM market_listings WHERE expires_at <= $1", at)
+    return [r["id"] for r in rows]
+
+
+async def add_trade(seller_id, buyer_id, item_name: str, level: int, slots: int, price: float, conn=None) -> None:
+    await (conn or pool()).execute(
+        "INSERT INTO market_trades (seller_id, buyer_id, item_name, level, slots, price) VALUES ($1, $2, $3, $4, $5, $6)",
+        int(seller_id), int(buyer_id), item_name, level, slots, _num(price),
+    )
+
+
+async def recent_trade_prices(level: int, limit: int = 10) -> list[float]:
+    """같은 레벨 최근 거래가 (최근 것부터)"""
+    rows = await pool().fetch(
+        "SELECT price FROM market_trades WHERE level = $1 ORDER BY id DESC LIMIT $2", level, limit
+    )
+    return [float(r["price"]) for r in rows]
 
 
 # ───────────── 상점 아이템 (인벤토리) ─────────────
@@ -394,13 +500,21 @@ async def save_stock_prices(stock_prices: dict, conn=None) -> None:
     )
 
 
-async def save_stock_tick(stock_prices: dict, keep: int = 1440) -> None:
-    """1분 갱신 결과 저장: 현재가 저장 + 가격 기록 추가 + 종목당 최근 keep 개만 남기기."""
+async def save_stock_tick(stock_prices: dict, keep: int = 1440, history=None) -> None:
+    """1분 갱신 결과 저장: 현재가 저장 + 가격 기록 추가 + 종목당 최근 keep 개만 남기기.
+    history 에 [(종목, 가격), ...] 를 주면 현재가 대신 그 기록들을 순서대로 한 번에 넣는다. (%주식가속)"""
+    if history is None:
+        history = [(s, p["current"]) for s, p in stock_prices.items()]
     async with transaction() as conn:
         await save_stock_prices(stock_prices, conn)
-        await conn.executemany(
-            "INSERT INTO price_history (symbol, price) VALUES ($1, $2)",
-            [(s, _num(p["current"])) for s, p in stock_prices.items()],
+        # 한 쿼리로 넣는다. (기록이 수천 줄이어도 DB 를 한 번만 다녀온다)
+        await conn.execute(
+            """
+            INSERT INTO price_history (symbol, price)
+            SELECT symbol, price FROM unnest($1::text[], $2::numeric[]) WITH ORDINALITY AS t(symbol, price, n)
+            ORDER BY n
+            """,
+            [s for s, _ in history], [_num(p) for _, p in history],
         )
         await conn.execute(
             """
@@ -537,6 +651,14 @@ async def add_position(user_id, symbol: str, side: str, margin: float, leverage:
         """,
         int(user_id), symbol, side, _num(margin), leverage, _num(entry_price),
     )
+
+
+async def shift_position_times(minutes: int) -> None:
+    """%주식가속: 모든 포지션의 진입 시각을 minutes 분 앞으로 당긴다. (그만큼 보유 비용이 쌓인 것처럼)"""
+    if minutes > 0:
+        await pool().execute(
+            "UPDATE stock_positions SET opened_at = opened_at - ($1 * interval '1 minute')", minutes
+        )
 
 
 async def delete_position(position_id: int, conn=None) -> dict | None:
@@ -829,9 +951,10 @@ async def set_quiz_channel(guild_id, channel_id) -> None:
 # %초기화 로 비우는 테이블.
 # suggestion_admins(건의 관리자 목록)는 게임 데이터가 아니라 권한 설정이라 남긴다.
 RESET_TABLES = [
-    "users", "loans", "enhance_items", "inventory",
+    "users", "loans", "enhance_items", "enhance_abilities", "inventory",
     "stocks", "price_history", "portfolio", "stock_positions", "stock_notices", "market_state",
     "warnings", "warning_logs", "suggestions", "news", "wordchain_records", "money_log",
+    "market_listings", "market_trades",
 ]
 
 

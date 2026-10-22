@@ -36,7 +36,7 @@ from features import abilities, quiz_bank, quiz_gen, quiz_math, wordchain
 from fmt import debt_line, num
 
 # ───────────── 밸런스 설정 ─────────────
-QUIZ_INTERVAL_MINUTES = (60, 120)   # 다음 퀴즈까지 랜덤 간격
+QUIZ_INTERVAL_MINUTES = (10, 20)   # 다음 퀴즈까지 랜덤 간격
 QUIZ_HOURS = range(8, 24)           # 퀴즈가 나오는 시간 (한국 시간 8시 ~ 23시대)
 NUMBER_TRIES = 3                    # 숫자 답: 한 사람이 한 문제에 낼 수 있는 답 수 (객관식은 1번)
 

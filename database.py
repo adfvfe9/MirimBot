@@ -232,11 +232,33 @@ async def receive(user_id, amount, conn=None) -> dict:
     }
 
 
+# 돈 기록 source 목록 (밸런스 분석용, schema.sql 의 money_log)
+#   admin_add / admin_remove      관리자 머니추가 / 머니제거
+#   transfer_send / transfer_recv 송금 (보낸 쪽은 수수료 포함)
+#   welfare / consolation         기초수급 / 위로금
+#   bankrupt                      파산으로 사라진 잔액
+#   loan / loan_repay             대출 / 상환
+#   deposit_in / deposit_out      적금 넣기 / 빼기
+#   enhance_craft / enhance_try / enhance_sell
+#   futures_open / futures_close / futures_settle (상장폐지 정산)
+#   stock_buy / stock_sell / chart
+#   gamble / rps / quiz / wordchain / token_buy
+async def log_money(user_id, source: str, amount, memo: str | None = None, conn=None) -> None:
+    """돈이 바뀐 기록을 남긴다. 돈을 바꾼 것과 같은 conn 으로 부르면 함께 취소/저장된다."""
+    if not amount:
+        return
+    await (conn or pool()).execute(
+        "INSERT INTO money_log (user_id, source, amount, memo) VALUES ($1, $2, $3, $4)",
+        int(user_id), source, _num(amount), memo,
+    )
+
+
 async def bankrupt(user_id, day: datetime.date, conn=None) -> None:
     """파산: 돈, 미납금, 대출, 적금, 주식, 레버리지 포지션, 강화 아이템을 전부 정리한다."""
     uid = int(user_id)
 
     async def run(c):
+        await log_money(uid, "bankrupt", -await get_money(uid, c), conn=c)
         await c.execute("DELETE FROM loans WHERE user_id = $1", uid)
         await c.execute("DELETE FROM portfolio WHERE user_id = $1", uid)
         await c.execute("DELETE FROM stock_positions WHERE user_id = $1", uid)
@@ -407,13 +429,17 @@ async def clear_price_history() -> None:
 
 
 async def get_portfolio(user_id, conn=None) -> dict[str, dict]:
-    """{종목: {"quantity": 수량, "avg_price": 평균단가}}"""
+    """{종목: {"quantity": 수량, "avg_price": 평균단가, "last_bought_at": 마지막으로 산 시각 또는 None}}"""
     rows = await (conn or pool()).fetch(
-        "SELECT symbol, quantity, avg_price FROM portfolio WHERE user_id = $1 ORDER BY symbol",
+        "SELECT symbol, quantity, avg_price, last_bought_at FROM portfolio WHERE user_id = $1 ORDER BY symbol",
         int(user_id),
     )
     return {
-        r["symbol"]: {"quantity": r["quantity"], "avg_price": float(r["avg_price"])}
+        r["symbol"]: {
+            "quantity": r["quantity"],
+            "avg_price": float(r["avg_price"]),
+            "last_bought_at": r["last_bought_at"],
+        }
         for r in rows
     }
 
@@ -430,18 +456,21 @@ async def all_portfolios() -> dict[int, dict[str, dict]]:
     return result
 
 
-async def set_holding(user_id, symbol: str, quantity: int, avg_price: float, conn=None) -> None:
-    """보유 주식 저장. 수량이 0 이하면 삭제한다."""
+async def set_holding(user_id, symbol: str, quantity: int, avg_price: float, conn=None,
+                      bought_at: datetime.datetime | None = None) -> None:
+    """보유 주식 저장. 수량이 0 이하면 삭제한다.
+    bought_at 을 주면 마지막으로 산 시각을 그걸로 바꾸고, 안 주면 (판매) 그대로 둔다."""
     if quantity <= 0:
         await delete_holdings(user_id, [symbol], conn)
         return
     await (conn or pool()).execute(
         """
-        INSERT INTO portfolio (user_id, symbol, quantity, avg_price) VALUES ($1, $2, $3, $4)
+        INSERT INTO portfolio (user_id, symbol, quantity, avg_price, last_bought_at) VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (user_id, symbol) DO UPDATE
-            SET quantity = EXCLUDED.quantity, avg_price = EXCLUDED.avg_price
+            SET quantity = EXCLUDED.quantity, avg_price = EXCLUDED.avg_price,
+                last_bought_at = COALESCE(EXCLUDED.last_bought_at, portfolio.last_bought_at)
         """,
-        int(user_id), symbol, quantity, Decimal(repr(float(avg_price))),
+        int(user_id), symbol, quantity, Decimal(repr(float(avg_price))), bought_at,
     )
 
 
@@ -802,7 +831,7 @@ async def set_quiz_channel(guild_id, channel_id) -> None:
 RESET_TABLES = [
     "users", "loans", "enhance_items", "inventory",
     "stocks", "price_history", "portfolio", "stock_positions", "stock_notices", "market_state",
-    "warnings", "warning_logs", "suggestions", "news", "wordchain_records",
+    "warnings", "warning_logs", "suggestions", "news", "wordchain_records", "money_log",
 ]
 
 

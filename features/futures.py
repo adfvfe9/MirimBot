@@ -9,6 +9,8 @@
 - 손실이 증거금만큼 커지면(= 청산가에 닿으면) 1분마다 하는 가격 갱신 때 강제청산되고 증거금을 전부 잃는다.
 - 청산할 때 수수료: 포지션 규모의 0.5%.
 - 상장폐지되면 가격 0 으로 정산한다. (롱은 전부 잃고, 숏은 크게 번다)
+- 뉴스로 방향이 정해진 구간에는 새로 진입할 수 없다. (뉴스 보고 들어가면 무조건 버는 구멍 방지)
+  초상승장 / 주식부도 중에는 모든 종목, 부도 위기 뉴스가 진행 중이면 그 종목. 이미 연 포지션은 그대로 둔다.
 """
 import discord
 from discord.ui import Button, View
@@ -53,6 +55,11 @@ def close_fee(pos):
     return pos["margin"] * pos["leverage"] * CLOSE_FEE
 
 
+def position_memo(pos):
+    """돈 기록(money_log)에 남길 포지션 설명. 예) RUST SHORT x5 margin 100000"""
+    return f"{pos['symbol']} {pos['side']} x{pos['leverage']} margin {pos['margin']}"
+
+
 def current_price(symbol):
     return stocks.stock_prices[symbol]["current"]
 
@@ -93,6 +100,7 @@ async def settle_symbol(symbol, exit_price, reason):
                 continue
             if payout > 0:
                 await db.receive(pos["user_id"], payout, conn)
+                await db.log_money(pos["user_id"], "futures_settle", payout, position_memo(pos), conn)
             await db.add_notice(
                 pos["user_id"],
                 f"⚠️ {reason}: `{symbol}` {SIDE_TEXT[pos['side']]} {pos['leverage']}배 포지션이 "
@@ -102,6 +110,18 @@ async def settle_symbol(symbol, exit_price, reason):
 
 
 # ───────────── 진입 ─────────────
+
+async def entry_block_reason(symbol):
+    """지금 이 종목에 새로 진입할 수 없으면 그 이유, 진입할 수 있으면 None."""
+    state = await stocks.get_effective_market_state()
+    if state == "HYPER_BULL":
+        return "🚀 초상승장(거품) 중에는 레버리지 신규 진입이 막혀 있어요."
+    if state == "CRASH":
+        return "📉 주식부도(거품 붕괴) 중에는 레버리지 신규 진입이 막혀 있어요."
+    if stocks.news().under_default_risk(symbol):
+        return f"💥 `{symbol}`은(는) 부도 위기 중이라 레버리지 신규 진입이 막혀 있어요."
+    return None
+
 
 async def open_position(ctx, side, stock_name, margin, leverage):
     user_id = ctx.author.id
@@ -115,6 +135,10 @@ async def open_position(ctx, side, stock_name, margin, leverage):
         return
     if not 1 <= leverage <= MAX_LEVERAGE:
         await ctx.send(f"❌ 배율은 1~{MAX_LEVERAGE}배 사이로 입력해주세요.")
+        return
+    blocked = await entry_block_reason(symbol)
+    if blocked:
+        await ctx.send(f"❌ {blocked}")
         return
 
     user = await db.get_user(user_id)
@@ -130,7 +154,7 @@ async def open_position(ctx, side, stock_name, margin, leverage):
         return
 
     price = current_price(symbol)
-    preview = {"side": side, "margin": margin, "leverage": leverage, "entry_price": price}
+    preview = {"symbol": symbol, "side": side, "margin": margin, "leverage": leverage, "entry_price": price}
 
     embed = discord.Embed(
         title=f"{SIDE_TEXT[side]} 포지션 진입 확인",
@@ -169,17 +193,21 @@ async def open_position(ctx, side, stock_name, margin, leverage):
             return
 
         entry = current_price(symbol)
-        error = None
+        # 확인 창을 띄운 뒤에 뉴스가 났을 수도 있으니 다시 검사
+        error = await entry_block_reason(symbol)
         async with db.user_tx(user_id) as conn:
             money = await db.get_money(user_id, conn)
             used_now = sum(p["margin"] for p in await db.get_positions(user_id, conn))
-            if money < margin:
+            if error:
+                pass
+            elif money < margin:
                 error = "잔액이 부족합니다."
             elif used_now + margin > MARGIN_LIMIT:
                 error = f"증거금 합계 한도({num(MARGIN_LIMIT)} byte)를 넘습니다."
             else:
                 await db.update_user(user_id, conn, money=money - margin)
                 position_id = await db.add_position(user_id, symbol, side, margin, leverage, entry, conn)
+                await db.log_money(user_id, "futures_open", -margin, position_memo(preview), conn)
 
         if error:
             await respond.edit(interaction,
@@ -319,6 +347,7 @@ async def close_position(ctx, target: str = None):
             if await db.delete_position(pos["id"], conn) is None:
                 continue
             result = await db.receive(user_id, payout, conn)
+            await db.log_money(user_id, "futures_close", payout, position_memo(pos), conn)
         total_payout += payout
         total_collected += result["collected"]
         lines.append(

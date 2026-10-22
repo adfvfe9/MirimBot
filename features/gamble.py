@@ -69,6 +69,7 @@ async def play_gamble(user_id, amount=None):
             gamble_net=user["gamble_net"] + net_change,
             gamble_last_at=now,
         )
+        await db.log_money(user_id, "gamble", net_change, f"bet {amount} x{multiplier}", conn)
 
     return {
         "amount": amount,
@@ -544,6 +545,7 @@ class RPSView(discord.ui.View):
 
         # 보상 지급 및 저장 (미납금이 있으면 자동 징수)
         result = await db.receive(self.player_id, reward)
+        await db.log_money(self.player_id, "rps", reward, f"streak {self.streak}")
 
         for button in self.children:
             button.disabled = True

@@ -306,6 +306,7 @@ async def run_quiz(channel, quiz):
             return
 
         result = await db.receive(winner.author.id, reward)
+        await db.log_money(winner.author.id, "quiz", reward)
         embed = discord.Embed(
             title="🎉 정답!",
             description=(

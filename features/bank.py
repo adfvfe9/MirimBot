@@ -381,6 +381,7 @@ class LoanModal(Modal, title="💵 대출 금액 입력"):
                 owed = amount * (1 + LOAN_INTEREST)
                 await db.add_loan(self.user_id, owed, db.now(), conn)
                 await db.receive(self.user_id, amount, conn)
+                await db.log_money(self.user_id, "loan", amount, conn=conn)
 
         if error:
             return await respond.reply(interaction, error, ephemeral=True)
@@ -451,6 +452,7 @@ class RepayModal(Modal, title="✅ 상환 금액 입력"):
                         await db.delete_loan(loan["id"], conn)
 
                 await db.update_user(self.user_id, conn, money=balance - amount)
+                await db.log_money(self.user_id, "loan_repay", -amount, conn=conn)
                 remaining_loan = get_total_loan([l for l in loans if l["amount"] > 0.001])
 
         if error:
@@ -508,6 +510,7 @@ class DepositModal(Modal, title="💰 적금 금액 입력"):
                     deposit_amount=new_principal,
                     deposit_start=db.now(),
                 )
+                await db.log_money(self.user_id, "deposit_in", -amount, conn=conn)
 
         if error:
             return await respond.reply(interaction, error, ephemeral=True)
@@ -569,6 +572,7 @@ class WithdrawModal(Modal, title="💳 적금 출금"):
                         self.user_id, conn, deposit_amount=remaining, deposit_start=db.now()
                     )
                 result = await db.receive(self.user_id, withdraw_amount, conn)
+                await db.log_money(self.user_id, "deposit_out", withdraw_amount, conn=conn)
 
         if error:
             return await respond.reply(interaction, error, ephemeral=True)

@@ -265,6 +265,7 @@ async def pay(user_id, amount):
         amount = max(0, min(amount, DAILY_MAX - earned))
         await db.update_user(user_id, conn, wordchain_date=today, wordchain_earned=earned + amount)
         result = await db.receive(user_id, amount, conn) if amount > 0 else {"collected": 0}
+        await db.log_money(user_id, "wordchain", amount, conn=conn)
     return amount, result
 
 

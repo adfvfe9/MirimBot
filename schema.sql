@@ -132,6 +132,8 @@ CREATE TABLE IF NOT EXISTS portfolio (                -- portfolio.json
     avg_price NUMERIC NOT NULL,
     PRIMARY KEY (user_id, symbol)
 );
+-- 마지막으로 산 시각. 이 시각부터 30분 안에 팔면 단타 수수료가 붙는다. (features/stocks.py)
+ALTER TABLE portfolio ADD COLUMN IF NOT EXISTS last_bought_at TIMESTAMPTZ;
 
 -- 레버리지 포지션 (롱 / 숏)
 -- 증거금 × 배율 만큼의 규모로 진입하고, 손실이 증거금의 90% 에 닿으면 강제청산된다.
@@ -230,6 +232,21 @@ CREATE TABLE IF NOT EXISTS suggestion_admins (        -- suggestion_admins.json
     user_id BIGINT PRIMARY KEY
 );
 
+
+
+-- ───────────── 돈 기록 ─────────────
+-- 돈이 들어오고 나간 기록. 어떤 활동으로 누가 얼마를 벌고 잃는지 밸런스를 보려고 남긴다.
+-- amount 는 그 활동으로 바뀐 잔액 (들어오면 +, 나가면 -). 미납금 자동 징수는 따로 빼지 않는다.
+CREATE TABLE IF NOT EXISTS money_log (
+    id         BIGSERIAL PRIMARY KEY,
+    user_id    BIGINT      NOT NULL,
+    source     TEXT        NOT NULL,                  -- stock_sell, futures_close, gamble ... (database.log_money 참고)
+    amount     NUMERIC     NOT NULL,
+    memo       TEXT,                                  -- 종목, 배율 같은 참고 정보
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS money_log_source_idx ON money_log (source, created_at);
+CREATE INDEX IF NOT EXISTS money_log_user_idx ON money_log (user_id, created_at);
 
 
 -- ───────────── 봇 운영 상태 ─────────────

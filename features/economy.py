@@ -64,6 +64,7 @@ async def moneyadd(ctx, member: discord.Member, amount: int):
             return
 
         result = await db.receive(user_id, amount)
+        await db.log_money(user_id, "admin_add", amount, f"by {ctx.author.id}")
         embed = Embed(
             description=(
                 f"✅ **{member.display_name}** 님에게 **{num(amount)} byte**를 추가했습니다."
@@ -110,6 +111,7 @@ async def moneydel(ctx, member: discord.Member, amount: int):
 
         # 잔액보다 많이 빼면 모자란 만큼은 미납금(빚)이 된다.
         await db.add_money(user_id, -amount)
+        await db.log_money(user_id, "admin_remove", -amount, f"by {ctx.author.id}")
         embed = Embed(
             description=f"✅ **{member.display_name}** 님에게서 **{num(amount)} byte**를 제거했습니다.",
             color=discord.Color.green()
@@ -204,6 +206,8 @@ async def send(ctx, member: discord.Member, amount: int):
                     send_total=total_sent + amount,
                 )
                 result = await db.receive(receiver_id, amount, conn)
+                await db.log_money(sender_id, "transfer_send", -total_cost, f"to {receiver_id}", conn)
+                await db.log_money(receiver_id, "transfer_recv", amount, f"from {sender_id}", conn)
 
         if error:
             await respond.edit(interaction,
@@ -286,6 +290,7 @@ async def consolation(ctx):
             amount = random.randint(CONSOLATION_MIN, CONSOLATION_MAX)
             await db.update_user(user_id, conn, consolation_date=today)
             result = await db.receive(user_id, amount, conn)
+            await db.log_money(user_id, "consolation", amount, conn=conn)
 
     if error:
         await ctx.send(error)
@@ -330,6 +335,7 @@ async def welfare(ctx):
                 welfare_streak=streak,
             )
             result = await db.receive(user_id, amount, conn)
+            await db.log_money(user_id, "welfare", amount, f"streak {streak}", conn)
 
     if already_claimed:
         embed = discord.Embed(

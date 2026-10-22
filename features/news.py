@@ -134,6 +134,11 @@ def current_drift(symbol):
     return sum(e["drift"] for e in active_effects if e["symbol"] in (None, symbol))
 
 
+def under_default_risk(symbol):
+    """이 종목에 부도 위기 효과가 진행 중인지. (방향이 정해진 급락이라 레버리지 신규 진입을 막는다, features/futures.py)"""
+    return any(e["symbol"] == symbol and e["kind"] == "default_risk" for e in active_effects)
+
+
 # %주식 화면에 붙는 뉴스 표시 (기사 분위기 기준이라 실제 방향은 숨겨진다)
 BADGES = {"good": "🔥", "bad": "🧊", "rumor": "❓", "default_risk": "💥"}
 

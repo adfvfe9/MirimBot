@@ -105,6 +105,7 @@ async def try_enhance(user_id, item_name):
 
         result, new_level = roll(level)
         await db.update_user(user_id, conn, money=money - cost)
+        await db.log_money(user_id, "enhance_try", -cost, f"+{level} → {result}", conn)
         if new_level is None:
             await db.delete_enhance_item(user_id, item_name, conn)
         else:
@@ -131,6 +132,7 @@ async def craft(user_id, item_name):
         if money < CRAFT_COST:
             return f"💸 제작비 {num(CRAFT_COST)} byte가 부족합니다."
         await db.update_user(user_id, conn, money=money - CRAFT_COST)
+        await db.log_money(user_id, "enhance_craft", -CRAFT_COST, conn=conn)
         await db.set_enhance_level(user_id, item_name, 1, conn)
     return None
 
@@ -143,6 +145,7 @@ async def sell(user_id, item_name):
             return None
         price = SELL_PRICE[level]
         result = await db.receive(user_id, price, conn)
+        await db.log_money(user_id, "enhance_sell", price, f"+{level}", conn)
     return level, price, result
 
 

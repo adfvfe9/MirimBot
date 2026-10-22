@@ -77,6 +77,7 @@ async def purchase_tokens(user_id, count, price, total_cost):
             tokens=result["tokens"],
             token_price=result["price"],
         )
+        await db.log_money(user_id, "token_buy", -total_cost, f"{count}개", conn)
         return result
 
 

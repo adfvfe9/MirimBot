@@ -89,6 +89,8 @@ async def set_override_state(state, duration_seconds):
 
 # ───────────── 주식 기본 정보 ─────────────
 SELL_FEE = 0.02   # 주식 판매 수수료 2% (모든 판매 명령어 공통)
+QUICK_SELL_FEE = 0.08     # 단타 수수료: 마지막으로 산 지 QUICK_SELL_MINUTES 분 안에 팔면 8%
+QUICK_SELL_MINUTES = 30
 
 stock_info = {
     "JAVA":   {"base": 500,  "limit": 0.08},
@@ -295,9 +297,31 @@ async def reset_stock(ctx):
     await ctx.send(embed=embed)
 
 # ───────────── 주식 거래 공통 처리 ─────────────
-async def buy_shares(user_id, stock_key, amount, price, total_cost):
-    """돈을 내고 주식을 산다. 잔액이 부족하면 None, 성공하면 남은 잔액."""
+# 확인 창을 띄운 뒤 가격이 바뀔 수 있으므로, 실제 거래는 확인 버튼을 누른 순간의 현재가로 한다.
+# (창을 띄운 시점 가격으로 하면, 가격이 유리하게 바뀌었을 때만 확인을 눌러 공짜로 벌 수 있다)
+
+def sell_fee(stock):
+    """보유 주식(db.get_portfolio 의 값 하나)을 지금 팔 때의 수수료율. 산 지 30분 안이면 단타 수수료."""
+    bought = stock.get("last_bought_at")
+    if bought and db.now() - bought < datetime.timedelta(minutes=QUICK_SELL_MINUTES):
+        return QUICK_SELL_FEE
+    return SELL_FEE
+
+
+def quick_sell_left(stock):
+    """단타 수수료가 끝나기까지 남은 분 (올림). 이미 끝났으면 0."""
+    bought = stock.get("last_bought_at")
+    if not bought:
+        return 0
+    left = datetime.timedelta(minutes=QUICK_SELL_MINUTES) - (db.now() - bought)
+    return max(0, -(-int(left.total_seconds()) // 60))
+
+
+async def buy_shares(user_id, stock_key, amount):
+    """현재가로 주식을 산다. 잔액이 부족하면 None, 성공하면 {"price", "cost", "balance"}."""
     async with db.user_tx(user_id) as conn:
+        price = stock_prices[stock_key]["current"]
+        total_cost = round(price * amount, 2)
         balance = await db.get_money(user_id, conn)
         if balance < total_cost:
             return None
@@ -309,22 +333,45 @@ async def buy_shares(user_id, stock_key, amount, price, total_cost):
         total_quantity = stock["quantity"] + amount
         total_spent = stock["quantity"] * stock["avg_price"] + total_cost
 
-        await db.set_holding(user_id, stock_key, total_quantity, total_spent / total_quantity, conn)
-        return await db.add_money(user_id, -total_cost, conn)
+        await db.set_holding(
+            user_id, stock_key, total_quantity, total_spent / total_quantity, conn, bought_at=db.now()
+        )
+        balance = await db.add_money(user_id, -total_cost, conn)
+        await db.log_money(user_id, "stock_buy", -total_cost, f"{stock_key} {amount}주 @{price}", conn)
+    return {"price": price, "cost": total_cost, "balance": balance}
 
 
-async def sell_shares(user_id, sales, earned):
-    """sales = {종목: 팔 수량}. 보유 수량이 부족하면 None, 성공하면 남은 잔액."""
+async def sell_shares(user_id, sales):
+    """sales = {종목: 팔 수량}. 현재가로 판다.
+    보유 수량이 부족하면 None, 성공하면 {"earned": 받은 돈, "fees": {종목: 수수료율}, "balance": 잔액}."""
     async with db.user_tx(user_id) as conn:
         holdings = await db.get_portfolio(user_id, conn)
         for name, quantity in sales.items():
             if holdings.get(name, {}).get("quantity", 0) < quantity:
                 return None
 
+        earned = 0.0
+        fees = {}
         for name, quantity in sales.items():
             stock = holdings[name]
+            price = stock_prices[name]["current"]
+            fees[name] = sell_fee(stock)
+            net = price * quantity * (1 - fees[name])
+            earned += net
             await db.set_holding(user_id, name, stock["quantity"] - quantity, stock["avg_price"], conn)
-        return await db.add_money(user_id, earned, conn)
+            await db.log_money(
+                user_id, "stock_sell", net, f"{name} {quantity}주 @{price} 수수료 {fees[name]:.0%}", conn
+            )
+        balance = await db.add_money(user_id, earned, conn)
+    return {"earned": earned, "fees": fees, "balance": balance}
+
+
+def fee_text(stock):
+    """확인 창에 보여줄 수수료 설명"""
+    fee = sell_fee(stock)
+    if fee == QUICK_SELL_FEE:
+        return f"단타 수수료 {num(fee * 100)}% (산 지 {QUICK_SELL_MINUTES}분 안, {quick_sell_left(stock)}분 남음)"
+    return f"수수료 {num(fee * 100)}%"
 
 # ───────────── 주식 이름 줄임말 처리 ─────────────
 stock_aliases = {
@@ -368,7 +415,11 @@ async def buy_stock(ctx, stock_name: str, amount: int):
     )
     embed.add_field(name="종목", value=stock_key, inline=True)
     embed.add_field(name="수량", value=f"{amount} 주", inline=True)
-    embed.add_field(name="총 가격", value=f"{num(total_cost)} byte", inline=False)
+    embed.add_field(name="총 가격 (지금 가격 기준)", value=f"{num(total_cost)} byte", inline=False)
+    embed.set_footer(
+        text=f"확인을 누르는 순간의 가격으로 거래돼요. 산 뒤 {QUICK_SELL_MINUTES}분 안에 팔면 단타 수수료 "
+             f"{num(QUICK_SELL_FEE * 100)}%가 붙어요."
+    )
 
     view = View()
 
@@ -378,7 +429,8 @@ async def buy_stock(ctx, stock_name: str, amount: int):
             await respond.reply(interaction, "이 버튼은 당신의 것이 아니에요!", ephemeral=True)
             return
 
-        if await buy_shares(user_id, stock_key, amount, price, total_cost) is None:
+        bought = await buy_shares(user_id, stock_key, amount)
+        if bought is None:
             await respond.edit(interaction,
                 embed=discord.Embed(
                     title="❌ 구매 실패",
@@ -392,7 +444,10 @@ async def buy_stock(ctx, stock_name: str, amount: int):
         await respond.edit(interaction,
             embed=discord.Embed(
                 title="✅ 구매 완료",
-                description=f"{stock_key} {amount}주 구매 완료!",
+                description=(
+                    f"{stock_key} {amount}주 구매 완료!\n"
+                    f"1주 {num(bought['price'])} byte, 총 {num(bought['cost'])} byte"
+                ),
                 color=discord.Color.green()
             ),
             view=None
@@ -446,7 +501,7 @@ async def sell_stock(ctx, stock_name: str, amount: int):
 
 
     price = stock_prices[stock_key]["current"]
-    total_earned = price * amount * (1 - SELL_FEE)  # 판매 수수료 2%
+    total_earned = price * amount * (1 - sell_fee(stock))
 
     embed = discord.Embed(
         title="📤 주식 판매 확인",
@@ -455,7 +510,8 @@ async def sell_stock(ctx, stock_name: str, amount: int):
     )
     embed.add_field(name="종목", value=stock_key, inline=True)
     embed.add_field(name="수량", value=f"{amount} 주", inline=True)
-    embed.add_field(name=f"수수료 {num(SELL_FEE * 100)}% 차감 후", value=f"{num(total_earned)} byte", inline=False)
+    embed.add_field(name=f"{fee_text(stock)} 차감 후 (지금 가격 기준)", value=f"{num(total_earned)} byte", inline=False)
+    embed.set_footer(text="확인을 누르는 순간의 가격으로 거래돼요.")
 
     view = View()
 
@@ -465,7 +521,8 @@ async def sell_stock(ctx, stock_name: str, amount: int):
             await respond.reply(interaction, "이 버튼은 당신의 것이 아니에요!", ephemeral=True)
             return
 
-        if await sell_shares(user_id, {stock_key: amount}, total_earned) is None:
+        sold = await sell_shares(user_id, {stock_key: amount})
+        if sold is None:
             await respond.edit(interaction,
                 embed=discord.Embed(
                     title="❌ 판매 실패",
@@ -479,7 +536,10 @@ async def sell_stock(ctx, stock_name: str, amount: int):
         await respond.edit(interaction,
             embed=discord.Embed(
                 title="✅ 판매 완료",
-                description=f"{stock_key} {amount}주 판매 완료!",
+                description=(
+                    f"{stock_key} {amount}주 판매 완료!\n"
+                    f"받은 돈 {num(sold['earned'])} byte (수수료 {num(sold['fees'][stock_key] * 100)}%)"
+                ),
                 color=discord.Color.green()
             ),
             view=None
@@ -598,7 +658,11 @@ async def buy_all_stock(ctx, stock_name: str):
     )
     embed.add_field(name="구매 수량", value=f"{max_amount} 주", inline=True)
     embed.add_field(name="1주 가격", value=f"{num(price)} byte", inline=True)
-    embed.add_field(name="총 가격", value=f"{num(total_cost)} byte", inline=False)
+    embed.add_field(name="총 가격 (지금 가격 기준)", value=f"{num(total_cost)} byte", inline=False)
+    embed.set_footer(
+        text=f"확인을 누르는 순간의 가격으로 거래돼요. 산 뒤 {QUICK_SELL_MINUTES}분 안에 팔면 단타 수수료 "
+             f"{num(QUICK_SELL_FEE * 100)}%가 붙어요."
+    )
 
     view = View()
 
@@ -608,11 +672,12 @@ async def buy_all_stock(ctx, stock_name: str):
             await respond.reply(interaction, "이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
             return
 
-        if await buy_shares(user_id, stock_key, max_amount, price, total_cost) is None:
+        bought = await buy_shares(user_id, stock_key, max_amount)
+        if bought is None:
             await respond.edit(interaction,
                 embed=discord.Embed(
                     title="❌ 구매 실패",
-                    description="잔액이 부족합니다.",
+                    description="잔액이 부족합니다. (그사이 가격이 올랐을 수 있어요. 명령어를 다시 실행해주세요)",
                     color=discord.Color.red()
                 ),
                 view=None
@@ -621,7 +686,10 @@ async def buy_all_stock(ctx, stock_name: str):
 
         result = discord.Embed(
             title="✅ 전량 구매 완료",
-            description=f"{stock_key} {max_amount}주를 구매했습니다.",
+            description=(
+                f"{stock_key} {max_amount}주를 구매했습니다.\n"
+                f"1주 {num(bought['price'])} byte, 총 {num(bought['cost'])} byte"
+            ),
             color=discord.Color.green()
         )
         await respond.edit(interaction, embed=result, view=None)
@@ -682,6 +750,10 @@ async def buy_half_stock(ctx, stock_name: str):
         value=f"{num(balance - total_cost)} byte",
         inline=False
     )
+    embed.set_footer(
+        text=f"확인을 누르는 순간의 가격으로 거래돼요. 산 뒤 {QUICK_SELL_MINUTES}분 안에 팔면 단타 수수료 "
+             f"{num(QUICK_SELL_FEE * 100)}%가 붙어요."
+    )
 
     view = View()
 
@@ -694,14 +766,12 @@ async def buy_half_stock(ctx, stock_name: str):
             )
             return
 
-        # 확인 버튼을 누르기 전 잔액 및 주가가 변경되었는지 검사
-        current_price = stock_prices[stock_key]["current"]
-        new_balance = None
+        # 확인 버튼을 누르기 전 주가가 바뀌었으면 다시 실행하게 한다 (예전 가격으로 사는 것 방지)
+        bought = None
+        if stock_prices[stock_key]["current"] == price:
+            bought = await buy_shares(user_id, stock_key, buy_amount)
 
-        if current_price == price:
-            new_balance = await buy_shares(user_id, stock_key, buy_amount, price, total_cost)
-
-        if new_balance is None:
+        if bought is None:
             await respond.edit(interaction,
                 embed=discord.Embed(
                     title="❌ 구매 실패",
@@ -719,12 +789,12 @@ async def buy_half_stock(ctx, stock_name: str):
         )
         result.add_field(
             name="사용 금액",
-            value=f"{num(total_cost)} byte",
+            value=f"{num(bought['cost'])} byte",
             inline=True
         )
         result.add_field(
             name="남은 잔액",
-            value=f"{num(new_balance)} byte",
+            value=f"{num(bought['balance'])} byte",
             inline=True
         )
 
@@ -780,7 +850,7 @@ async def sell_all_stock(ctx, stock_name: str = None):
         quantity = stock["quantity"]
         price = stock_prices[stock_key]["current"]
         gross = price * quantity
-        net = gross * (1 - SELL_FEE)  # 판매 수수료 2%
+        net = gross * (1 - sell_fee(stock))
 
         embed = discord.Embed(
             title="📤 전량 판매 확인",
@@ -788,7 +858,8 @@ async def sell_all_stock(ctx, stock_name: str = None):
             color=discord.Color.orange()
         )
         embed.add_field(name="1주 가격", value=f"{num(price)} byte", inline=True)
-        embed.add_field(name="수익 (수수료 적용)", value=f"{num(net)} byte", inline=False)
+        embed.add_field(name=f"수익 ({fee_text(stock)} 적용)", value=f"{num(net)} byte", inline=False)
+        embed.set_footer(text="확인을 누르는 순간의 가격으로 거래돼요.")
 
         view = View()
 
@@ -798,7 +869,8 @@ async def sell_all_stock(ctx, stock_name: str = None):
                 await respond.reply(interaction, "이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
                 return
 
-            if await sell_shares(user_id, {stock_key: quantity}, net) is None:
+            sold = await sell_shares(user_id, {stock_key: quantity})
+            if sold is None:
                 await respond.edit(interaction,
                     embed=discord.Embed(
                         title="❌ 판매 실패",
@@ -811,7 +883,10 @@ async def sell_all_stock(ctx, stock_name: str = None):
 
             result = discord.Embed(
                 title="✅ 전량 판매 완료",
-                description=f"{stock_key} {quantity}주를 판매했습니다.",
+                description=(
+                    f"{stock_key} {quantity}주를 판매했습니다.\n"
+                    f"받은 돈 {num(sold['earned'])} byte (수수료 {num(sold['fees'][stock_key] * 100)}%)"
+                ),
                 color=discord.Color.green()
             )
             await respond.edit(interaction, embed=result, view=None)
@@ -854,14 +929,15 @@ async def sell_all_stock(ctx, stock_name: str = None):
 
         p = stock_prices.get(name, {}).get("current", stock_info[name]["base"])
         gross = p * q
-        net = gross * (1 - SELL_FEE)
+        net = gross * (1 - sell_fee(stock))
 
         is_loss = net < cost  # ✅ 손해 여부 판단
+        quick = " ⏱️단타" if sell_fee(stock) == QUICK_SELL_FEE else ""
 
         if is_loss:
-            summary_lines.append(f"⚠️ {name}: {q}주 → {num(net)} byte (손해!)")
+            summary_lines.append(f"⚠️ {name}: {q}주 → {num(net)} byte (손해!){quick}")
         else:
-            summary_lines.append(f"{name}: {q}주 → {num(net)} byte")
+            summary_lines.append(f"{name}: {q}주 → {num(net)} byte{quick}")
 
         total_quantity += q
         total_net += net
@@ -874,6 +950,10 @@ async def sell_all_stock(ctx, stock_name: str = None):
     embed.add_field(name="총 수량", value=f"{total_quantity} 주", inline=True)
     embed.add_field(name="예상 수익", value=f"{num(total_net)} byte", inline=True)
     embed.add_field(name="📋 상세 목록", value="\n".join(summary_lines), inline=False)
+    embed.set_footer(
+        text=f"⏱️단타: 산 지 {QUICK_SELL_MINUTES}분 안이라 수수료 {num(QUICK_SELL_FEE * 100)}% "
+             f"(보통은 {num(SELL_FEE * 100)}%). 확인을 누르는 순간의 가격으로 거래돼요."
+    )
 
     view = View()
 
@@ -884,7 +964,8 @@ async def sell_all_stock(ctx, stock_name: str = None):
             return
 
         sales = {name: stock["quantity"] for name, stock in user_stocks.items()}
-        if await sell_shares(user_id, sales, total_net) is None:
+        sold = await sell_shares(user_id, sales)
+        if sold is None:
             await respond.edit(interaction,
                 embed=discord.Embed(
                     title="❌ 판매 실패",
@@ -897,7 +978,7 @@ async def sell_all_stock(ctx, stock_name: str = None):
 
         result = discord.Embed(
             title="✅ 전체 주식 전량 판매 완료",
-            description=f"{num(total_net)} byte를 획득했습니다.",
+            description=f"{num(sold['earned'])} byte를 획득했습니다.",
             color=discord.Color.green()
         )
         await respond.edit(interaction, embed=result, view=None)
@@ -993,6 +1074,7 @@ async def stock_chart(ctx, *args):
                 await ctx.send(f"💸 돈이 부족합니다. {minutes}분 그래프는 {num(cost)} byte예요. (보유: {num(money)} byte)")
                 return
             await db.update_user(ctx.author.id, conn, money=money - cost)
+            await db.log_money(ctx.author.id, "chart", -cost, f"{minutes}분", conn)
 
     title = f"{stock_key or '모든 주식'} 최근 {minutes}분 주가"
     buf = draw_chart(series, minutes, title)

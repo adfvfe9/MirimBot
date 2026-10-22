@@ -277,7 +277,6 @@ class EnhanceView(View):
 
     async def on_craft(self, interaction):
         await respond.defer(interaction)
-        await interaction.response.defer()
         error = await craft(self.user_id, self.item_name)
         if error:
             self.last = error
@@ -288,7 +287,6 @@ class EnhanceView(View):
 
     async def on_enhance(self, interaction):
         await respond.defer(interaction)
-        await interaction.response.defer()
         self.sell_armed = False
         r = await try_enhance(self.user_id, self.item_name)
         if isinstance(r, str):
@@ -304,7 +302,6 @@ class EnhanceView(View):
 
     async def on_auto(self, interaction):
         await respond.defer(interaction)
-        await interaction.response.defer()
         self.sell_armed = False
         logs, total_cost, tries, stop = [], 0, 0, ""
 
@@ -339,7 +336,6 @@ class EnhanceView(View):
 
     async def on_sell(self, interaction):
         await respond.defer(interaction)
-        await interaction.response.defer()
         if not self.sell_armed:
             self.sell_armed = True
             self.last = f"💰 정말 **+{self.level} {self.item_name}**을(를) {num(SELL_PRICE[self.level])} byte에 팔까요? 한 번 더 누르세요."

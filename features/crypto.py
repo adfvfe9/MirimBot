@@ -14,7 +14,7 @@
   토큰은 리롤 재료라, 코인으로 토큰이 저절로 불어나면 리롤이 공짜가 된다.
   시뮬레이션: 그냥 보유 / 급락 뒤 사기 / 급등 뒤 사기 모두 수수료만큼 손해. (하루 최저가와 최고가 차이는 보통 1.7배)
   처음 생각한 하루 80% 는 일주일이면 보통 90% 를 잃을 만큼 거칠어서 낮췄다.
-- 수수료: 살 때 1%, 팔 때 1%. 팔면 토큰은 정수만 받는다. (끝자리는 버린다)
+- 수수료: 살 때 1%, 팔 때 1%. 팔면 토큰은 정수만 받고, 딱 그만큼의 코인만 팔려서 남는 끝자리는 코인으로 남는다.
 - 가격이 0.1 밑으로 내려가면 ×100, 1000 위로 올라가면 ÷100 액면 조정을 한다. 보유량도 반대로 바뀌어서 가치는 그대로.
 - 레버리지는 일부러 없다. (손실은 막히고 이익은 끝이 없어서 구조적으로 이득이 나기 쉽다)
 """
@@ -189,14 +189,17 @@ async def sell(user_id, amount=None):
             return f"❌ 가진 코인은 {have:.6f} BTC 예요."
         coins = min(coins, have)
         now_price = price
-        tokens = math.floor(coins * now_price * (1 - FEE))
+        unit = now_price * (1 - FEE)          # 코인 1개를 팔면 받는 토큰 (수수료 뺀 것)
+        tokens = math.floor(coins * unit)
         if tokens < 1:
-            return f"❌ 너무 적어요. 수수료를 빼고 1토큰 이상이 돼야 팔 수 있어요. (지금 {coins * now_price * (1 - FEE):.2f} 토큰어치)"
-        left = have - coins
+            return f"❌ 너무 적어요. 수수료를 빼고 1토큰 이상이 돼야 팔 수 있어요. (지금 {coins * unit:.2f} 토큰어치)"
+        # 토큰은 정수라서, 딱 tokens 개가 되는 만큼만 팔고 남는 끝자리는 코인으로 남긴다
+        sold = min(coins, tokens / unit)
+        left = have - sold
         spent_left = holding["spent"] * (left / have) if have else 0
         await db.set_coin_holding(user_id, left if left > 1e-12 else 0, spent_left, conn)
         await db.add_tokens(user_id, tokens, conn)
-    return {"coins": coins, "tokens": tokens, "price": now_price, "left": max(left, 0)}
+    return {"coins": sold, "tokens": tokens, "price": now_price, "left": max(left, 0)}
 
 
 # ───────────── 명령어 ─────────────
@@ -302,7 +305,7 @@ async def coin_sell(ctx, amount: str = None):
         title="₿ 비트코인 판매 확인",
         description=(
             f"**{shown:.6f} BTC**를 팔면 지금 가격({num(price)} 토큰)으로 약 "
-            f"**{math.floor(shown * price * (1 - FEE))} 토큰**을 받아요. (수수료 {int(FEE * 100)}%, 끝자리는 버려요)\n"
+            f"**{math.floor(shown * price * (1 - FEE))} 토큰**을 받아요. (수수료 {int(FEE * 100)}%, 토큰은 정수만 받고 남는 끝자리는 코인으로 남아요)\n"
             "확인을 누르는 순간의 가격으로 거래돼요."
         ),
         color=discord.Color.orange(),

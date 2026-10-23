@@ -134,6 +134,7 @@ USER_DEFAULTS = {
     "bankruptcy_date": None,
     "tokens": 0,
     "token_price": 100,
+    "token_price_at": None,
     "deposit_amount": 0.0,
     "deposit_start": None,
     "unpaid_amount": 0.0,
@@ -407,13 +408,14 @@ def _listing_from_row(row) -> dict:
 
 
 async def add_listing(seller_id, item_name: str, level: int, abilities: list, price: float,
-                      expires_at: datetime.datetime, conn=None) -> int:
+                      expires_at: datetime.datetime, conn=None, tokens: int = 0) -> int:
+    """등록. tokens > 0 이면 토큰 묶음 등록 (price 는 묶음 전체 가격)"""
     return await (conn or pool()).fetchval(
         """
-        INSERT INTO market_listings (seller_id, item_name, level, abilities, price, expires_at)
-        VALUES ($1, $2, $3, $4::jsonb, $5, $6) RETURNING id
+        INSERT INTO market_listings (seller_id, item_name, level, abilities, price, expires_at, tokens)
+        VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7) RETURNING id
         """,
-        int(seller_id), item_name, level, json.dumps(abilities), _num(price), expires_at,
+        int(seller_id), item_name, level, json.dumps(abilities), _num(price), expires_at, tokens,
     )
 
 
@@ -448,19 +450,29 @@ async def expired_listing_ids(at: datetime.datetime) -> list[int]:
     return [r["id"] for r in rows]
 
 
-async def add_trade(seller_id, buyer_id, item_name: str, level: int, slots: int, price: float, conn=None) -> None:
+async def add_trade(seller_id, buyer_id, item_name: str, level: int, slots: int, price: float,
+                    conn=None, tokens: int = 0) -> None:
     await (conn or pool()).execute(
-        "INSERT INTO market_trades (seller_id, buyer_id, item_name, level, slots, price) VALUES ($1, $2, $3, $4, $5, $6)",
-        int(seller_id), int(buyer_id), item_name, level, slots, _num(price),
+        "INSERT INTO market_trades (seller_id, buyer_id, item_name, level, slots, price, tokens) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        int(seller_id), int(buyer_id), item_name, level, slots, _num(price), tokens,
     )
 
 
 async def recent_trade_prices(level: int, limit: int = 10) -> list[float]:
-    """같은 레벨 최근 거래가 (최근 것부터)"""
+    """같은 레벨 강화 아이템 최근 거래가 (최근 것부터)"""
     rows = await pool().fetch(
-        "SELECT price FROM market_trades WHERE level = $1 ORDER BY id DESC LIMIT $2", level, limit
+        "SELECT price FROM market_trades WHERE level = $1 AND tokens = 0 ORDER BY id DESC LIMIT $2", level, limit
     )
     return [float(r["price"]) for r in rows]
+
+
+async def recent_token_prices(limit: int = 10) -> list[float]:
+    """토큰 최근 거래의 개당 가격 (최근 것부터)"""
+    rows = await pool().fetch(
+        "SELECT price / tokens AS unit FROM market_trades WHERE tokens > 0 ORDER BY id DESC LIMIT $1", limit
+    )
+    return [float(r["unit"]) for r in rows]
 
 
 # ───────────── 상점 아이템 (인벤토리) ─────────────
@@ -886,6 +898,70 @@ async def set_news_channel(guild_id, channel_id) -> None:
     await set_state(f"news_channel:{int(guild_id)}", str(int(channel_id)))
 
 
+# ───────────── 비트코인 (features/crypto.py) ─────────────
+
+async def load_coin() -> tuple[float, float, list[float]] | None:
+    """(현재가, 직전가, 최근 기록 [오래된 것 ... 최신]) 또는 처음이면 None"""
+    row = await pool().fetchrow("SELECT price, previous FROM coin_price WHERE symbol = 'BTC'")
+    if row is None:
+        return None
+    rows = await pool().fetch("SELECT price FROM coin_history ORDER BY id")
+    return float(row["price"]), float(row["previous"]), [float(r["price"]) for r in rows]
+
+
+async def save_coin(price: float, previous: float, history: list[float], keep: int = 1440) -> None:
+    """현재가 저장 + 새 기록들을 한 번에 넣고 최근 keep 개만 남긴다."""
+    async with transaction() as conn:
+        await conn.execute(
+            """
+            INSERT INTO coin_price (symbol, price, previous) VALUES ('BTC', $1, $2)
+            ON CONFLICT (symbol) DO UPDATE SET price = EXCLUDED.price, previous = EXCLUDED.previous
+            """,
+            _num(price), _num(previous),
+        )
+        if history:
+            await conn.execute(
+                "INSERT INTO coin_history (price) SELECT p FROM unnest($1::numeric[]) WITH ORDINALITY AS t(p, n) ORDER BY n",
+                [_num(p) for p in history],
+            )
+        await conn.execute(
+            "DELETE FROM coin_history WHERE id IN (SELECT id FROM coin_history ORDER BY id DESC OFFSET $1)", keep
+        )
+
+
+async def rescale_coin(factor: float) -> None:
+    """액면 조정: 가격 기록은 factor 배, 모든 보유량은 1/factor 배 (가치는 그대로)"""
+    async with transaction() as conn:
+        await conn.execute("UPDATE coin_history SET price = price * $1", _num(factor))
+        await conn.execute("UPDATE coin_holdings SET amount = amount / $1", _num(factor))
+
+
+async def get_coin_holding(user_id, conn=None) -> dict:
+    row = await (conn or pool()).fetchrow("SELECT amount, spent FROM coin_holdings WHERE user_id = $1", int(user_id))
+    if row is None:
+        return {"amount": 0.0, "spent": 0.0}
+    return {"amount": float(row["amount"]), "spent": float(row["spent"])}
+
+
+async def set_coin_holding(user_id, amount: float, spent: float, conn=None) -> None:
+    c = conn or pool()
+    if amount <= 0:
+        await c.execute("DELETE FROM coin_holdings WHERE user_id = $1", int(user_id))
+        return
+    await c.execute(
+        """
+        INSERT INTO coin_holdings (user_id, amount, spent) VALUES ($1, $2, $3)
+        ON CONFLICT (user_id) DO UPDATE SET amount = EXCLUDED.amount, spent = EXCLUDED.spent
+        """,
+        int(user_id), _num(amount), _num(spent),
+    )
+
+
+async def all_coin_holdings() -> list[dict]:
+    rows = await pool().fetch("SELECT user_id, amount, spent FROM coin_holdings")
+    return [{"user_id": r["user_id"], "amount": float(r["amount"]), "spent": float(r["spent"])} for r in rows]
+
+
 # ───────────── 끝말잇기 랭킹 ─────────────
 
 async def record_wordchain(user_id, difficulty: str, score: int, words: int) -> dict:
@@ -954,7 +1030,7 @@ RESET_TABLES = [
     "users", "loans", "enhance_items", "enhance_abilities", "inventory",
     "stocks", "price_history", "portfolio", "stock_positions", "stock_notices", "market_state",
     "warnings", "warning_logs", "suggestions", "news", "wordchain_records", "money_log",
-    "market_listings", "market_trades",
+    "market_listings", "market_trades", "coin_price", "coin_history", "coin_holdings",
 ]
 
 

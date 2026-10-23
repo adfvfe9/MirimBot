@@ -6,10 +6,50 @@ from discord import ButtonStyle, SelectOption
 from discord.ext import commands
 from discord.ui import Button, Select, View
 
+import math
+
 import database as db
 import respond
 from bot import client
+from features import abilities
 from fmt import num
+
+# ───────────── 토큰 구매가 ─────────────
+# 살 때마다 2배가 되고, 마지막으로 산(또는 정해진) 시각부터 하루에 4배씩 다시 떨어진다. (최소 100)
+# 🔻 토큰 가격 하락 가속 능력이 있으면 하루 4배 × (1 + N%) 로 더 빨리 떨어진다.
+BASE_PRICE = 100
+DAILY_DROP = 4
+
+
+def current_price(user, bonus_pct=0.0):
+    """지금 토큰 1개 가격 (정수, 올림)"""
+    stored = user["token_price"]
+    since = user.get("token_price_at")
+    if since is None or stored <= BASE_PRICE:
+        return max(BASE_PRICE, int(stored))
+    days = max(0.0, (db.now() - since).total_seconds() / 86400)
+    drop = DAILY_DROP * (1 + bonus_pct / 100)
+    return max(BASE_PRICE, math.ceil(stored / drop ** days))
+
+
+async def price_of(user_id, user=None, conn=None):
+    """(지금 가격, 하루 하락 배율)"""
+    user = user or await db.get_user(user_id, conn)
+    bonus = await abilities.total(user_id, "token_decay", conn)
+    return current_price(user, bonus), DAILY_DROP * (1 + bonus / 100)
+
+
+def cost_of(price, count):
+    """price 부터 count 개를 살 때 총 가격 (1개 살 때마다 2배)"""
+    return sum(price * (2 ** i) for i in range(count))
+
+
+def max_affordable(price, money):
+    count, total = 0, 0
+    while total + price * (2 ** count) <= money:
+        total += price * (2 ** count)
+        count += 1
+    return count, total
 
 
 class ShopDropdown(Select):
@@ -58,24 +98,28 @@ class ShopDropdown(Select):
         )
 
 
-async def purchase_tokens(user_id, count, price, total_cost):
-    """토큰 count 개 구매. 확인 창을 띄운 뒤 가격이 바뀌었거나 잔액이 부족하면 None,
-    성공하면 {"money", "tokens", "price"} (구매 후 값)."""
+async def purchase_tokens(user_id, count):
+    """토큰 count 개를 지금 가격으로 산다. (확인 창을 띄운 뒤 가격이 내려갔으면 내려간 가격으로)
+    잔액이 부족하면 None, 성공하면 {"money", "tokens", "price"(다음 가격), "cost"}."""
     async with db.user_tx(user_id) as conn:
         user = await db.get_user(user_id, conn)
-        if user["token_price"] != price or user["money"] < total_cost:
+        price, _ = await price_of(user_id, user, conn)
+        total_cost = cost_of(price, count)
+        if user["money"] < total_cost:
             return None
 
         result = {
             "money": user["money"] - total_cost,
             "tokens": user["tokens"] + count,
             "price": price * (2 ** count),
+            "cost": total_cost,
         }
         await db.update_user(
             user_id, conn,
             money=result["money"],
             tokens=result["tokens"],
             token_price=result["price"],
+            token_price_at=db.now(),
         )
         await db.log_money(user_id, "token_buy", -total_cost, f"{count}개", conn)
         return result
@@ -91,8 +135,8 @@ async def buy_token(ctx, amount: int = 1):
         return
 
     user = await db.get_user(user_id)
-    price = user["token_price"]
-    total_cost = sum([price * (2 ** i) for i in range(amount)])
+    price, drop = await price_of(user_id, user)
+    total_cost = cost_of(price, amount)
 
     if user["money"] < total_cost:
         shortfall = total_cost - user["money"]
@@ -107,7 +151,7 @@ async def buy_token(ctx, amount: int = 1):
     )
     embed.add_field(name="구매 수량", value=f"{amount} 개", inline=True)
     embed.add_field(name="총 가격", value=f"{num(total_cost)} byte", inline=True)
-    embed.set_footer(text="※ 토큰 가격은 구매 시마다 2배로 증가합니다.")
+    embed.set_footer(text=f"※ 토큰 가격은 살 때마다 2배가 되고, 하루에 {num(drop)}배씩 다시 떨어져요. (최소 {BASE_PRICE})")
 
     view = View()
 
@@ -117,13 +161,13 @@ async def buy_token(ctx, amount: int = 1):
             await respond.reply(interaction, "이 버튼은 당신의 것이 아니에요!", ephemeral=True)
             return
 
-        # 결제 및 토큰 증가
-        user_tokens = await purchase_tokens(user_id, amount, price, total_cost)
+        # 결제 및 토큰 증가 (확인을 누른 순간의 가격)
+        user_tokens = await purchase_tokens(user_id, amount)
         if user_tokens is None:
             await respond.edit(interaction,
                 embed=discord.Embed(
                     title="❌ 구매 실패",
-                    description="잔액 또는 토큰 가격이 변경되었습니다. 명령어를 다시 실행해주세요.",
+                    description="잔액이 부족합니다. 명령어를 다시 실행해주세요.",
                     color=discord.Color.red()
                 ),
                 view=None
@@ -136,7 +180,7 @@ async def buy_token(ctx, amount: int = 1):
             color=discord.Color.green()
         )
         result.add_field(name="보유 토큰", value=f"{user_tokens['tokens']} 개", inline=True)
-        result.add_field(name="소모한 금액", value=f"{num(total_cost)} byte", inline=True)
+        result.add_field(name="소모한 금액", value=f"{num(user_tokens['cost'])} byte", inline=True)
         result.add_field(name="다음 구매 가격", value=f"{num(user_tokens['price'])} byte", inline=True)
 
         await respond.edit(interaction, embed=result, view=None)
@@ -169,8 +213,12 @@ async def check_token(ctx, member: discord.Member = None):
         description=f"{member.display_name}님의 토큰 정보입니다.",
         color=discord.Color.purple()
     )
+    price, drop = await price_of(member.id, data)
     embed.add_field(name="보유 토큰", value=f"{data['tokens']} 개", inline=True)
-    embed.add_field(name="다음 구매 가격", value=f"{num(data['token_price'])} byte", inline=True)
+    embed.add_field(name="지금 구매 가격", value=f"{num(price)} byte", inline=True)
+    embed.set_footer(
+        text=f"살 때마다 2배, 하루에 {num(drop)}배씩 떨어져요 (최소 {BASE_PRICE}) · 토큰은 %리롤에 쓰고 %암시장에서 사고팔 수 있어요"
+    )
 
     await ctx.send(embed=embed)
 
@@ -182,16 +230,9 @@ async def buy_token_max(ctx):
     user = await db.get_user(user_id)
     current_money = user["money"]
 
-    start_price = user["token_price"]
-    price = start_price
-    total_cost = 0
-    max_tokens = 0
-
-    # 보유 머니로 교환 가능한 최대 수량 계산
-    while total_cost + price <= current_money:
-        total_cost += price
-        price *= 2
-        max_tokens += 1
+    start_price, _ = await price_of(user_id, user)
+    # 보유 머니로 교환 가능한 최대 수량
+    max_tokens, total_cost = max_affordable(start_price, current_money)
 
     if max_tokens == 0:
         await ctx.send(f"{ctx.author.mention} ❌ 보유 금액으로는 토큰을 구매할 수 없습니다.")
@@ -215,12 +256,12 @@ async def buy_token_max(ctx):
             return
 
         # 교환 처리
-        user_tokens = await purchase_tokens(user_id, max_tokens, start_price, total_cost)
+        user_tokens = await purchase_tokens(user_id, max_tokens)
         if user_tokens is None:
             await respond.edit(interaction,
                 embed=discord.Embed(
                     title="❌ 교환 실패",
-                    description="잔액 또는 토큰 가격이 변경되었습니다. 명령어를 다시 실행해주세요.",
+                    description="잔액이 바뀌었습니다. 명령어를 다시 실행해주세요.",
                     color=discord.Color.red()
                 ),
                 view=None
@@ -234,7 +275,7 @@ async def buy_token_max(ctx):
         )
         result.add_field(name="남은 금액", value=f"{num(user_tokens['money'])} byte", inline=True)
         result.add_field(name="보유 토큰", value=f"{user_tokens['tokens']} 개", inline=True)
-        result.add_field(name="소모한 금액", value=f"{num(total_cost)} byte", inline=True)
+        result.add_field(name="소모한 금액", value=f"{num(user_tokens['cost'])} byte", inline=True)
         result.add_field(name="다음 가격", value=f"{num(user_tokens['price'])} byte", inline=True)
 
         await respond.edit(interaction, embed=result, view=None)
@@ -389,7 +430,7 @@ async def set_token_price(ctx, member: discord.Member, new_price: int = 100):
         return
 
     user_id = member.id
-    old_price = (await db.get_user(user_id))["token_price"]
+    old_price, _ = await price_of(user_id)
 
     embed = discord.Embed(
         title="⚙️ 토큰 구매가 설정 확인",
@@ -408,7 +449,7 @@ async def set_token_price(ctx, member: discord.Member, new_price: int = 100):
             await respond.reply(interaction, "이 버튼은 당신의 명령이 아닙니다!", ephemeral=True)
             return
 
-        await db.update_user(user_id, token_price=new_price)
+        await db.update_user(user_id, token_price=new_price, token_price_at=db.now())  # 지금부터 다시 떨어진다
 
         result = discord.Embed(
             title="✅ 토큰 구매가 설정 완료",

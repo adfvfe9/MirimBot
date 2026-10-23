@@ -33,6 +33,7 @@ from bot import client, get_token
 from features import (  # noqa: F401
     abilities,
     admin,
+    crypto,
     assets,
     bank,
     economy,
@@ -63,6 +64,8 @@ async def setup_hook():
 
     await stocks.load_market_state()
     await stocks.load_stock_prices()
+    await abilities.sync_all()   # 능력 슬롯 레벨이 바뀌었으면 기존 아이템의 빈 슬롯을 채운다
+    await crypto.load()
 
     # 봇을 재시작해도 예전에 보낸 연장 알림 DM 의 [연장 완료] 버튼이 동작하게 등록
     client.add_view(renewal.RenewView())

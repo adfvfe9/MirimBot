@@ -4,7 +4,9 @@
     %리롤 <아이템>          잠그지 않은 슬롯을 전부 다시 뽑기 (토큰 1개 + 잠근 슬롯 하나당 1개)
     %내능력 [@유저]         모든 아이템의 능력을 합친 효과
 
-- +5 / +7 / +9 / +11 / +13 에 처음 도달하면 슬롯이 하나씩 열리고 능력이 공짜로 하나 붙는다.
+- +3 / +5 / +7 / +9 / +11 / +13 에 처음 도달하면 슬롯이 하나씩 열리고 능력이 공짜로 하나 붙는다.
+  (v1.3.2 에서 +5 부터 → +3 부터로 바꿨다. 예전 슬롯 번호는 그대로라 1번이 +3 슬롯이 되고,
+   비어 있는 칸은 봇이 켜질 때 sync_all 이 채운다)
 - 아이템 레벨이 높을수록 좋은 등급이 잘 나온다. 수치는 등급 범위 안에서 랜덤이다.
 - 같은 능력은 모든 아이템에서 합쳐지지만, 능력마다 상한이 있다.
 - 레벨이 떨어지면 그 위 슬롯은 꺼지기만 하고 남는다. 아이템을 팔거나 파괴되면 능력도 사라진다.
@@ -24,7 +26,7 @@ from bot import client
 from fmt import num
 
 # ───────────── 슬롯 / 등급 ─────────────
-SLOT_LEVELS = (5, 7, 9, 11, 13)          # n번 슬롯이 열리는 레벨
+SLOT_LEVELS = (3, 5, 7, 9, 11, 13)       # n번 슬롯이 열리는 레벨 (v1.3.2: +5 부터 → +3 부터, 6칸)
 TIERS = ("일반", "희귀", "영웅", "전설")
 TIER_EMOJI = ("⚪", "🔵", "🟣", "🟡")
 
@@ -35,6 +37,7 @@ TIER_ODDS = (
     (9,  (40, 35, 20, 5)),
     (7,  (55, 32, 11, 2)),
     (5,  (70, 25, 5, 0)),
+    (3,  (80, 18, 2, 0)),
 )
 
 REROLL_BASE = 1          # 리롤 토큰: 기본 1개
@@ -78,6 +81,9 @@ ABILITIES = {
     "wordchain_limit": dict(emoji="📅", name="끝말잇기 하루 한도", unit="%", decimals=1, cap=100,
                             ranges=((3, 8), (8, 15), (15, 25), (25, 40)),
                             desc="끝말잇기로 하루에 벌 수 있는 최대 금액(1.5만) 증가"),
+    "token_decay":   dict(emoji="🔻", name="토큰 가격 하락 가속", unit="%", decimals=1, cap=100,
+                          ranges=((0, 20), (20, 40), (40, 70), (70, 100)),
+                          desc="토큰 구매 가격이 하루에 떨어지는 배율(4배)에 ×(1 + N%) (최대 ×2 = 하루 8배)"),
     "quiz_token":    dict(emoji="🪙", name="퀴즈 토큰 확률", unit="%p", decimals=1, cap=25,
                           ranges=((2, 4), (4, 7), (7, 11), (11, 16)),
                           desc="퀴즈를 맞히면 토큰을 받을 확률 증가"),
@@ -176,6 +182,16 @@ async def sync_slots(user_id, item_name, level, conn=None):
     return opened
 
 
+async def sync_all():
+    """모든 강화 아이템의 빈 슬롯을 채운다. (봇 시작 때 한 번, 슬롯 레벨이 바뀌었을 때를 위해)"""
+    filled = 0
+    for item in await db.all_enhance_items():
+        async with db.user_tx(item["user_id"]) as conn:
+            filled += len(await sync_slots(item["user_id"], item["item_name"], item["level"], conn))
+    if filled:
+        print(f"[능력 슬롯] 빈 슬롯 {filled}개를 채웠습니다.")
+
+
 def opened_text(opened):
     """강화 결과에 붙일 '새 슬롯' 안내"""
     return "\n".join(f"🔓 **{o['slot']}번 슬롯 열림!** {describe(o)}" for o in opened)
@@ -271,15 +287,15 @@ class AbilityView(View):
                     label=f"{row['slot']}번 {'잠금 해제' if row['locked'] else '잠금'}",
                     emoji="🔓" if row["locked"] else "🔒",
                     style=discord.ButtonStyle.secondary,
-                    row=0,
+                    row=0 if row["slot"] <= 5 else 1,   # 한 줄에 버튼 5개까지
                 )
                 button.callback = self.make_lock(row["slot"], not row["locked"])
                 self.add_item(button)
         reroll_button = Button(label=f"리롤 (토큰 {reroll_cost(rows, level)}개)", emoji="🔄",
-                               style=discord.ButtonStyle.primary, row=1)
+                               style=discord.ButtonStyle.primary, row=2)
         reroll_button.callback = self.on_reroll
         self.add_item(reroll_button)
-        close = Button(label="닫기", emoji="❌", style=discord.ButtonStyle.secondary, row=1)
+        close = Button(label="닫기", emoji="❌", style=discord.ButtonStyle.secondary, row=2)
         close.callback = self.on_close
         self.add_item(close)
         return item_embed(self.item_name, level, rows, tokens, self.last), True

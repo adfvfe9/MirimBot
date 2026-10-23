@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS users (
     bankruptcy_date      DATE,                            -- bankruptcy_data.json (파산)
 
     tokens               BIGINT  NOT NULL DEFAULT 0,      -- token_data.json
-    token_price          NUMERIC NOT NULL DEFAULT 100,    -- 살 때마다 2배라 금방 커져서 NUMERIC
+    token_price          NUMERIC NOT NULL DEFAULT 100,    -- 살 때마다 2배라 금방 커져서 NUMERIC (하루에 4배씩 다시 떨어짐)
 
     deposit_amount       NUMERIC NOT NULL DEFAULT 0,      -- bank_system.json (적금 원금)
     deposit_start        TIMESTAMPTZ,
@@ -46,6 +46,10 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS send_date  DATE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS send_total NUMERIC NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS wordchain_date   DATE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS wordchain_earned NUMERIC NOT NULL DEFAULT 0;
+-- v1.3.2: 토큰 구매가는 이 시각부터 하루에 4배씩 떨어진다. (features/tokens.py current_price)
+-- 예전 유저는 지금부터 떨어지기 시작하게 한다.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS token_price_at TIMESTAMPTZ;
+UPDATE users SET token_price_at = now() WHERE token_price_at IS NULL AND token_price > 100;
 
 -- 미납금 자동 징수
 -- users 행이 UPDATE 될 때마다 자동으로 실행된다. (database.py 는 돈을 항상 UPDATE 로 바꾼다)
@@ -126,6 +130,8 @@ CREATE TABLE IF NOT EXISTS market_listings (
     expires_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS market_listings_seller_idx ON market_listings (seller_id);
+-- v1.3.2: 토큰도 사고판다. tokens > 0 이면 토큰 등록 (item_name '토큰', level 0, price 는 묶음 전체 가격)
+ALTER TABLE market_listings ADD COLUMN IF NOT EXISTS tokens INT NOT NULL DEFAULT 0;
 
 -- 암시장 거래 기록 (예상 가격 = 같은 레벨 최근 거래 평균)
 CREATE TABLE IF NOT EXISTS market_trades (
@@ -139,6 +145,7 @@ CREATE TABLE IF NOT EXISTS market_trades (
     sold_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS market_trades_level_idx ON market_trades (level, id);
+ALTER TABLE market_trades ADD COLUMN IF NOT EXISTS tokens INT NOT NULL DEFAULT 0;   -- 토큰 거래면 개수
 
 -- v1.3.1: ⌛ 끝말잇기 시간(wordchain_time) 능력을 📅 끝말잇기 하루 한도(wordchain_limit)로 바꿨다.
 -- 같은 등급 안에서의 위치를 그대로 옮긴다. (예: 영웅 4초 = 3~5초의 가운데 → 영웅 15~25% 의 가운데 20%)
@@ -249,6 +256,26 @@ CREATE TABLE IF NOT EXISTS market_state (             -- market_state.json
     state_ends_at  TIMESTAMPTZ NOT NULL,
     override_state TEXT,                              -- HYPER_BULL / CRASH (관리자 이벤트)
     override_end   TIMESTAMPTZ
+);
+
+
+-- ───────────── 비트코인 (features/crypto.py) ─────────────
+-- 토큰으로만 사고판다. 가격 단위도 토큰. 시세는 1행(symbol = 'BTC')
+CREATE TABLE IF NOT EXISTS coin_price (
+    symbol   TEXT PRIMARY KEY,
+    price    NUMERIC NOT NULL,
+    previous NUMERIC NOT NULL
+);
+-- 1분마다 한 줄, 최근 1440개(24시간)만 남긴다.
+CREATE TABLE IF NOT EXISTS coin_history (
+    id          BIGSERIAL PRIMARY KEY,
+    price       NUMERIC     NOT NULL,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS coin_holdings (
+    user_id BIGINT PRIMARY KEY,
+    amount  NUMERIC NOT NULL,                      -- 보유 코인 (소수점 가능)
+    spent   NUMERIC NOT NULL                       -- 지금 가진 코인에 쓴 토큰 (평균 단가 / 손익 계산용)
 );
 
 

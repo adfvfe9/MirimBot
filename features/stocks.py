@@ -282,6 +282,11 @@ def futures():
     return module
 
 
+def crypto():
+    from features import crypto as module
+    return module
+
+
 def news():
     from features import news as module
     return module
@@ -294,6 +299,12 @@ async def auto_update_stocks():
             await update_stocks()
     except Exception as e:
         print(f"[주식 갱신 오류] {type(e).__name__}: {e}")
+    # ₿ 비트코인도 같은 1분 루프에서 갱신 (가속은 %코인가속 으로 따로)
+    try:
+        async with crypto().lock:
+            await crypto().tick()
+    except Exception as e:
+        print(f"[코인 갱신 오류] {type(e).__name__}: {e}")
 
 @auto_update_stocks.before_loop
 async def before_loop():

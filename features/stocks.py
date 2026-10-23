@@ -316,6 +316,12 @@ async def auto_update_stocks():
             await mining().maybe_block()
     except Exception as e:
         print(f"[채굴 오류] {type(e).__name__}: {e}")
+    # 💼 순자산 기록 + 칭호 확인 (1시간마다)
+    try:
+        from features import assets
+        await assets.maybe_snapshot()
+    except Exception as e:
+        print(f"[자산 기록 오류] {type(e).__name__}: {e}")
 
 @auto_update_stocks.before_loop
 async def before_loop():

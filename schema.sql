@@ -347,6 +347,26 @@ CREATE TABLE IF NOT EXISTS money_log (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS money_log_source_idx ON money_log (source, created_at);
+CREATE INDEX IF NOT EXISTS money_log_user_idx ON money_log (user_id, source);   -- 칭호 진행도 계산용
+
+
+-- ───────────── 칭호 / 자산 기록 (features/titles.py, features/assets.py) ─────────────
+-- 한 번 얻은 칭호는 돈이 줄거나 파산해도 남는다. equipped: 장착한 칭호 (1인 1개)
+CREATE TABLE IF NOT EXISTS user_titles (
+    user_id     BIGINT      NOT NULL,
+    title       TEXT        NOT NULL,                  -- titles.TITLES 의 key
+    achieved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    equipped    BOOLEAN     NOT NULL DEFAULT FALSE,
+    PRIMARY KEY (user_id, title)
+);
+-- 1시간마다 모든 유저의 순자산. 최근 30일만 남긴다. (%자산그래프)
+CREATE TABLE IF NOT EXISTS asset_history (
+    user_id     BIGINT      NOT NULL,
+    recorded_at TIMESTAMPTZ NOT NULL,
+    worth       NUMERIC     NOT NULL,
+    PRIMARY KEY (user_id, recorded_at)
+);
+CREATE INDEX IF NOT EXISTS asset_history_time_idx ON asset_history (recorded_at);
 CREATE INDEX IF NOT EXISTS money_log_user_idx ON money_log (user_id, created_at);
 
 

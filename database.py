@@ -998,6 +998,116 @@ async def update_miner(user_id, conn=None, **fields) -> None:
     await c.execute(f"UPDATE miners SET {sets} WHERE user_id = $1", int(user_id), *values)
 
 
+# ───────────── 칭호 (features/titles.py) ─────────────
+
+async def title_stats(user_id) -> dict:
+    """칭호 진행도에 쓰는 돈 기록 집계. (money_log 는 v1.2.8 부터 쌓였다)
+    {"count": {source: 횟수}, "sum": {source: 합계}, "destroyed", "max_success", "rps_streak", "welfare_streak", "jackpots"}"""
+    uid = int(user_id)
+    rows = await pool().fetch(
+        "SELECT source, count(*) AS n, sum(amount) AS total FROM money_log WHERE user_id = $1 GROUP BY source", uid
+    )
+    extra = await pool().fetchrow(
+        r"""
+        SELECT
+            count(*) FILTER (WHERE source = 'enhance_try' AND memo LIKE '%→ destroy%') AS destroyed,
+            max((regexp_match(memo, '^\+(\d+) → success'))[1]::int) FILTER (WHERE source = 'enhance_try') AS max_success,
+            max((regexp_match(memo, 'streak (\d+)'))[1]::int) FILTER (WHERE source = 'rps') AS rps_streak,
+            max((regexp_match(memo, 'streak (\d+)'))[1]::int) FILTER (WHERE source = 'welfare') AS welfare_streak,
+            count(*) FILTER (WHERE source = 'gamble' AND memo LIKE '%x7.0') AS jackpots
+        FROM money_log WHERE user_id = $1
+        """,
+        uid,
+    )
+    return {
+        "count": {r["source"]: r["n"] for r in rows},
+        "sum": {r["source"]: float(r["total"]) for r in rows},
+        "destroyed": extra["destroyed"] or 0,
+        "max_success": extra["max_success"] or 0,
+        "rps_streak": extra["rps_streak"] or 0,
+        "welfare_streak": extra["welfare_streak"] or 0,
+        "jackpots": extra["jackpots"] or 0,
+    }
+
+
+async def wordchain_best(user_id) -> int:
+    return await pool().fetchval(
+        "SELECT coalesce(max(best_score), 0) FROM wordchain_records WHERE user_id = $1", int(user_id)
+    )
+
+
+async def get_titles(user_id, conn=None) -> dict:
+    """{칭호 key: {"achieved_at", "equipped"}}"""
+    rows = await (conn or pool()).fetch(
+        "SELECT title, achieved_at, equipped FROM user_titles WHERE user_id = $1", int(user_id)
+    )
+    return {r["title"]: {"achieved_at": r["achieved_at"], "equipped": r["equipped"]} for r in rows}
+
+
+async def add_titles(user_id, keys: list[str], conn=None) -> None:
+    if keys:
+        await (conn or pool()).execute(
+            "INSERT INTO user_titles (user_id, title) SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING",
+            int(user_id), list(keys),
+        )
+
+
+async def equip_title(user_id, key: str | None) -> None:
+    """key 칭호를 장착한다. None 이면 해제."""
+    async with transaction() as conn:
+        await conn.execute("UPDATE user_titles SET equipped = FALSE WHERE user_id = $1 AND equipped", int(user_id))
+        if key:
+            await conn.execute(
+                "UPDATE user_titles SET equipped = TRUE WHERE user_id = $1 AND title = $2", int(user_id), key
+            )
+
+
+async def equipped_titles() -> dict:
+    """{user_id: 장착한 칭호 key}"""
+    rows = await pool().fetch("SELECT user_id, title FROM user_titles WHERE equipped")
+    return {r["user_id"]: r["title"] for r in rows}
+
+
+async def title_counts() -> dict:
+    """{user_id: 가진 칭호 수}"""
+    rows = await pool().fetch("SELECT user_id, count(*) AS n FROM user_titles GROUP BY user_id")
+    return {r["user_id"]: r["n"] for r in rows}
+
+
+# ───────────── 자산 기록 (features/assets.py, %자산그래프) ─────────────
+
+async def save_asset_snapshot(worths: dict, at: datetime.datetime, keep_days: int = 30) -> None:
+    """{user_id: 순자산} 을 at 시각으로 저장하고 keep_days 보다 오래된 기록은 지운다."""
+    async with transaction() as conn:
+        if worths:
+            await conn.execute(
+                """
+                INSERT INTO asset_history (user_id, recorded_at, worth)
+                SELECT u, $3, w FROM unnest($1::bigint[], $2::numeric[]) AS t(u, w)
+                ON CONFLICT DO NOTHING
+                """,
+                [int(u) for u in worths], [_num(w) for w in worths.values()], at,
+            )
+        await conn.execute(
+            "DELETE FROM asset_history WHERE recorded_at < $1", at - datetime.timedelta(days=keep_days)
+        )
+
+
+async def asset_history(user_id, since: datetime.datetime) -> list[tuple]:
+    """[(시각, 순자산), ...] 오래된 것부터"""
+    rows = await pool().fetch(
+        "SELECT recorded_at, worth FROM asset_history WHERE user_id = $1 AND recorded_at >= $2 ORDER BY recorded_at",
+        int(user_id), since,
+    )
+    return [(r["recorded_at"], float(r["worth"])) for r in rows]
+
+
+async def peak_worth(user_id) -> float:
+    """기록된 순자산 최고값 (기록이 없으면 0)"""
+    value = await pool().fetchval("SELECT max(worth) FROM asset_history WHERE user_id = $1", int(user_id))
+    return _float(value)
+
+
 # ───────────── 끝말잇기 랭킹 ─────────────
 
 async def record_wordchain(user_id, difficulty: str, score: int, words: int) -> dict:
@@ -1067,6 +1177,7 @@ RESET_TABLES = [
     "stocks", "price_history", "portfolio", "stock_positions", "stock_notices", "market_state",
     "warnings", "warning_logs", "suggestions", "news", "wordchain_records", "money_log",
     "market_listings", "market_trades", "coin_price", "coin_history", "coin_holdings", "miners",
+    "user_titles", "asset_history",
 ]
 
 

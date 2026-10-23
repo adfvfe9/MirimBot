@@ -1,5 +1,7 @@
-discord.py==2.7.1
+discord.py[voice]==2.7.1
 asyncpg==0.32.0
 python-dotenv==1.2.2
 requests==2.31.0
 matplotlib==3.11.2
+yt-dlp==2026.10.21
+imageio-ffmpeg==0.6.0

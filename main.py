@@ -9,7 +9,8 @@
   features/stocks.py       주식
   features/futures.py      레버리지 (롱/숏)
   features/news.py         주식 뉴스 (30~90분마다 랜덤 뉴스)
-  features/assets.py       순자산, 자산랭킹
+  features/assets.py       순자산, 자산랭킹, 자산그래프 (1시간마다 순자산 기록)
+  features/titles.py       칭호 (업적, 진행도, 장착)
   features/gamble.py       도박, 가위바위보
   features/wordchain.py    끝말잇기 (1대1 / 다같이 / 랭킹, 스레드에서. 단어 목록: kkwords.txt)
   features/quiz.py         선착순 퀴즈 (1~2시간마다 퀴즈 채널에, 문제: quiz_math.py / quiz_gen.py / quiz_bank.py)
@@ -17,6 +18,7 @@
   features/tokens.py       토큰, 상점
   features/crypto.py       비트코인 (토큰으로 거래)
   features/mining.py       코인 채굴 (1시간마다 블록)
+  features/music.py        음악 (%재생, 유튜브 → 통화방)
   features/moderation.py   경고
   features/suggestions.py  건의
   features/admin.py        전체 초기화
@@ -45,12 +47,14 @@ from features import (  # noqa: F401
     market,
     mining,
     moderation,
+    music,
     news,
     quiz,
     renewal,
     stocks,
     futures,
     suggestions,
+    titles,
     tokens,
     wordchain,
 )

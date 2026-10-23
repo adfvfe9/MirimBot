@@ -14,7 +14,7 @@ from fmt import debt_line, num
 
 # ───────────── 도박 ─────────────
 GAMBLE_COOLDOWN = 10      # 초
-GAMBLE_MAX_BET = 100000    # 1회 최대 판돈 (%도박올인 도 이 금액까지만)
+GAMBLE_MAX_BET = 100000    # 1회 최대 판돈 (%도박올인 도 이 금액까지만, 🎲 능력만큼 늘어난다)
 
 # (배율, 확률 %) — 판돈 × 배율 을 돌려받는다. 기대값 = 0.95 (평균적으로 판돈의 5% 손해)
 # 아무리 져도 판돈만 잃는다. (빚이 생기지 않음)
@@ -25,6 +25,11 @@ GAMBLE_TABLE = [
     (3.0, 5),
     (7.0, 1),    # 잭팟
 ]
+
+
+async def max_bet(user_id, conn=None):
+    """이 사람의 1회 최대 판돈 (🎲 능력 포함)"""
+    return GAMBLE_MAX_BET * (1 + await abilities.total(user_id, "gamble_max", conn) / 100)
 
 
 async def play_gamble(user_id, amount=None):
@@ -47,12 +52,13 @@ async def play_gamble(user_id, amount=None):
                 remain = int(GAMBLE_COOLDOWN - elapsed) + 1
                 return f"⏳ 아직 도박할 수 없어요! 다시 시도하려면 **{remain}초** 기다려주세요."
 
+        limit = await max_bet(user_id, conn)
         if amount is None:
-            amount = min(current_money, GAMBLE_MAX_BET)  # 올인!
+            amount = min(current_money, limit)  # 올인!
         elif amount <= 0:
             return "❌ 1 이상의 금액을 입력해주세요."
-        elif amount > GAMBLE_MAX_BET:
-            return f"❌ 한 번에 걸 수 있는 최대 금액은 **{num(GAMBLE_MAX_BET)} byte**입니다."
+        elif amount > limit:
+            return f"❌ 한 번에 걸 수 있는 최대 금액은 **{num(limit)} byte**입니다."
         elif current_money < amount:
             return "❌ 잔액이 부족합니다."
 
@@ -84,6 +90,7 @@ async def play_gamble(user_id, amount=None):
         "refund": refund,
         "net_change": net_change,
         "balance": new_balance,
+        "max_bet": limit,
     }
 
 
@@ -172,16 +179,18 @@ async def gamble_allin(ctx):
     await ctx.send(embed=gamble_embed(
         result, "🎲 도박 올인 결과",
         f"{ctx.author.mention}님이 **{num(result['amount'])} byte**를 올인했습니다! "
-        f"(최대 {num(GAMBLE_MAX_BET)} byte)"
+        f"(최대 {num(result['max_bet'])} byte)"
     ))
 
 
 # ───────────── 가위바위보 ─────────────
-# 이기면 보상이 2배씩 커진다: 1천 → 2천 → 4천 → 8천 ... (k번째 승리 보상 = 1,000 × 2^(k-1))
+# 이기면 보상이 2배씩 커진다: 5천 → 1만 → 2만 → 4만 ... (k번째 승리 보상 = 5,000 × 2^(k-1))
 # 지면 누적 보상을 전부 잃는다. 어디서 멈춰도 기대값은 비슷해서 "고 or 스탑" 배짱 싸움이 된다.
-RPS_BASE_REWARD = 1000
-RPS_MAX_STREAK = 10       # 10연승하면 자동으로 수령하고 끝 (누적 1,023,000)
-RPS_DAILY_LIMIT = 30      # 하루 최대 판수
+# (무승부는 다시 하니까 한 판의 기대값은 RPS_BASE_REWARD 보다 조금 작다. ✊ 부활 능력이 높으면 이보다 커진다)
+# 하루 30판을 다 하는 사람이 없어서 5판으로 줄이고 보상을 5배로 (1천 → 5천)
+RPS_BASE_REWARD = 5000
+RPS_MAX_STREAK = 10       # 10연승하면 자동으로 수령하고 끝 (누적 5,115,000)
+RPS_DAILY_LIMIT = 5       # 하루 최대 판수 (✌️ 능력만큼 늘어난다)
 RPS_COOLDOWN = 60         # 판 사이 쿨타임 (초)
 
 rps_streaks = {}
@@ -193,13 +202,22 @@ def rps_reward(streak):
     return RPS_BASE_REWARD * 2 ** (streak - 1)
 
 
+async def rps_daily_limit(user_id, conn=None):
+    """이 사람의 가위바위보 하루 판수 (✌️ 능력 포함)"""
+    return RPS_DAILY_LIMIT + int(await abilities.total(user_id, "rps_games", conn))
+
+
+def rps_limit_text(limit):
+    return f"❌ 오늘은 가위바위보를 {limit}판 모두 했어요. 내일 다시 도전하세요!"
+
+
 async def start_rps_game(user_id):
     """오늘 판수를 하나 쓴다. 한도를 넘었으면 False."""
     today = db.today()
     async with db.user_tx(user_id) as conn:
         user = await db.get_user(user_id, conn)
         count = user["rps_count"] if user["rps_date"] == today else 0
-        if count >= RPS_DAILY_LIMIT:
+        if count >= await rps_daily_limit(user_id, conn):
             return False
         await db.update_user(user_id, conn, rps_date=today, rps_count=count + 1)
         return True
@@ -208,7 +226,7 @@ async def start_rps_game(user_id):
 async def rps_games_left(user_id):
     user = await db.get_user(user_id)
     count = user["rps_count"] if user["rps_date"] == db.today() else 0
-    return RPS_DAILY_LIMIT - count
+    return await rps_daily_limit(user_id) - count
 
 
 class RPSView(discord.ui.View):
@@ -317,7 +335,7 @@ class RPSView(discord.ui.View):
 
             if not await start_rps_game(self.player_id):
                 await respond.reply(interaction,
-                    f"❌ 오늘은 가위바위보를 {RPS_DAILY_LIMIT}판 모두 했어요. 내일 다시 도전하세요!",
+                    rps_limit_text(await rps_daily_limit(self.player_id)),
                     ephemeral=True
                 )
                 return
@@ -630,7 +648,7 @@ async def rps(ctx):
 
     games_left = await rps_games_left(ctx.author.id)
     if games_left <= 0:
-        await ctx.send(f"❌ 오늘은 가위바위보를 {RPS_DAILY_LIMIT}판 모두 했어요. 내일 다시 도전하세요!")
+        await ctx.send(rps_limit_text(await rps_daily_limit(ctx.author.id)))
         return
 
     view = RPSView(ctx.author.id)
@@ -640,7 +658,7 @@ async def rps(ctx):
         description=(
             "아래 버튼을 눌러 봇과 대결하세요!\n\n"
             "✌️ **가위** · ✊ **바위** · ✋ **보**\n\n"
-            f"이길 때마다 보상이 2배! (1천 → 2천 → 4천 …, 최대 {RPS_MAX_STREAK}연승)\n"
+            f"이길 때마다 보상이 2배! (5천 → 1만 → 2만 …, 최대 {RPS_MAX_STREAK}연승)\n"
             "지면 누적 보상을 전부 잃어요. 언제 멈출지가 승부!"
         ),
         color=discord.Color.blurple()

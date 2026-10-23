@@ -1,14 +1,18 @@
 """은행: 대출, 상환, 적금, 출금, 연체 처리
 
 대출
-- 한 사람이 동시에 빌릴 수 있는 원금은 최대 LOAN_LIMIT.
+- 한 사람이 동시에 빌릴 수 있는 원금은 최대 LOAN_LIMIT. (🏦 대출 한도 증가 능력만큼 늘어난다)
 - 빌린 순간 이자 10% 가 붙는다. (1만 빌리면 1.1만을 갚아야 함)
 - 24시간 안에 갚지 못하면 남은 상환액의 1.5배가 미납금(빚)이 된다.
 - 미납금은 잔액에서 0 이 될 때까지 바로 징수되고, 모자란 만큼은 남아 있다가
   나중에 돈이 들어올 때마다 (기초수급, 주식 판매 등) 자동으로 징수된다. (schema.sql 트리거)
 
 적금
-- 하루 DEPOSIT_RATE 단리, 최대 DEPOSIT_MAX_DAYS 일치까지만 이자가 붙는다. 원금은 최대 DEPOSIT_LIMIT.
+- 하루 DEPOSIT_RATE 단리, 최대 DEPOSIT_MAX_DAYS 일치까지만 이자가 붙는다. 넣을 때 (원금 + 이자)는 최대 DEPOSIT_LIMIT.
+- 넣은 날(deposit_start)은 더 넣거나 일부 빼도 바뀌지 않는다. 대신 원금을 "그날 넣었다면 얼마였을지"로 바꿔서
+  지금 가치가 정확히 그만큼 늘거나 줄게 한다. (예전에는 넣고 뺄 때마다 이자를 원금에 합치고 날짜를 오늘로 돌려서,
+  매일 조금씩 빼면 복리가 되고 30일 제한과 원금 한도도 넘어갔다)
+- 30일이 지나면 이자가 더 안 붙는다. 다 빼고 다시 넣으면 다시 시작한다. (이때도 한도 안에서만)
 """
 import datetime
 import math
@@ -21,15 +25,16 @@ from discord.ui import Button, Modal, TextInput, View
 import database as db
 import respond
 from bot import client
+from features import abilities
 from fmt import debt_line, num
 
 # ───────────── 밸런스 설정 ─────────────
-LOAN_LIMIT = 50000            # 동시에 빌릴 수 있는 원금 한도
+LOAN_LIMIT = 50000            # 동시에 빌릴 수 있는 원금 한도 (🏦 대출 한도 증가 능력만큼 늘어난다)
 LOAN_INTEREST = 0.10          # 대출 이자 10%
 LOAN_DEADLINE_HOURS = 24      # 상환 기한
 LOAN_PENALTY = 1.5            # 연체 시 남은 상환액 × 1.5 가 미납금으로
 
-DEPOSIT_RATE = 0.01           # 적금 하루 이자 1% (단리)
+DEPOSIT_RATE = 0.015          # 적금 하루 이자 1.5% (단리, 예전 1%)
 DEPOSIT_MAX_DAYS = 30         # 이자가 붙는 최대 일수
 DEPOSIT_LIMIT = 500000        # 적금 원금 한도
 
@@ -56,6 +61,17 @@ def deposit_multiplier(start, now=None):
 def deposit_value(user, now=None):
     """적금의 현재 가치 (원금 + 이자)"""
     return user["deposit_amount"] * deposit_multiplier(user["deposit_start"], now)
+
+
+def deposit_after(user, change, now=None):
+    """지금 가치를 change 만큼 바꾼 뒤의 (원금, 넣은 날). 넣은 날은 그대로 두고 원금만 바꾼다.
+    (지금 가치 + change) ÷ 지금 배율 = 넣은 날 기준 원금. 이자가 원금에 합쳐지지 않아서 복리가 생기지 않는다."""
+    now = now or db.now()
+    start = user["deposit_start"] if user["deposit_amount"] > 0 and user["deposit_start"] else now
+    value = deposit_value(user, now) + change
+    if value < 0.01:
+        return 0.0, None
+    return value / deposit_multiplier(start, now), start
 
 
 def parse_amount(value):
@@ -175,6 +191,11 @@ async def start_bank_collection_loop():
 # =========================
 
 @client.command(aliases=["은행"])
+async def loan_limit(user_id, conn=None):
+    """이 사람의 대출 한도 (🏦 능력 포함)"""
+    return LOAN_LIMIT * (1 + await abilities.total(user_id, "loan_limit", conn) / 100)
+
+
 async def bank(ctx):
     await ctx.message.delete()
 
@@ -187,7 +208,8 @@ async def bank(ctx):
     loans = await db.get_loans(user_id)
 
     total_owed = get_total_loan(loans)
-    loan_room = max(0.0, LOAN_LIMIT - total_owed / (1 + LOAN_INTEREST))
+    limit = await loan_limit(user_id)
+    loan_room = max(0.0, limit - total_owed / (1 + LOAN_INTEREST))
 
     deadline_lines = []
 
@@ -221,7 +243,7 @@ async def bank(ctx):
 
     embed.add_field(
         name="🏦 추가 대출 가능",
-        value=f"{num(loan_room)} Byte\n(한도 {num(LOAN_LIMIT)})",
+        value=f"{num(loan_room)} Byte\n(한도 {num(limit)})",
         inline=True
     )
 
@@ -367,14 +389,15 @@ class LoanModal(Modal, title="💵 대출 금액 입력"):
             user = await db.get_user(self.user_id, conn)
             loans = await db.get_loans(self.user_id, conn)
             borrowed = get_total_loan(loans) / (1 + LOAN_INTEREST)
-            room = max(0.0, LOAN_LIMIT - borrowed)
+            limit = await loan_limit(self.user_id, conn)
+            room = max(0.0, limit - borrowed)
 
             if user["unpaid_amount"] > 0:
                 error = "❌ 미납금이 있으면 대출할 수 없어요. 미납금을 먼저 갚아주세요."
             elif amount > room:
                 error = (
                     f"❌ 대출 한도를 초과했습니다.\n"
-                    f"대출 한도: {num(LOAN_LIMIT)} Byte\n"
+                    f"대출 한도: {num(limit)} Byte\n"
                     f"추가 대출 가능 금액: {num(room)} Byte"
                 )
             else:
@@ -493,22 +516,23 @@ class DepositModal(Modal, title="💰 적금 금액 입력"):
         error = None
         async with db.user_tx(self.user_id) as conn:
             user = await db.get_user(self.user_id, conn)
-            # 지금까지 붙은 이자를 원금에 합치고, 오늘부터 다시 센다.
-            new_principal = deposit_value(user) + amount
+            # 넣은 날은 그대로, 지금 가치가 amount 만큼 늘도록 원금을 맞춘다. (이자를 원금에 합치지 않는다)
+            new_value = deposit_value(user) + amount
+            principal, start = deposit_after(user, amount)
 
             if user["money"] < amount:
                 error = "❌ 잔액이 부족합니다."
-            elif new_principal > DEPOSIT_LIMIT:
+            elif new_value > DEPOSIT_LIMIT:
                 error = (
-                    f"❌ 적금 원금은 최대 {num(DEPOSIT_LIMIT)} Byte까지예요.\n"
+                    f"❌ 적금은 (이자 포함) 최대 {num(DEPOSIT_LIMIT)} Byte까지예요.\n"
                     f"더 넣을 수 있는 금액: {num(max(0, DEPOSIT_LIMIT - deposit_value(user)))} Byte"
                 )
             else:
                 await db.update_user(
                     self.user_id, conn,
                     money=user["money"] - amount,
-                    deposit_amount=new_principal,
-                    deposit_start=db.now(),
+                    deposit_amount=principal,
+                    deposit_start=start,
                 )
                 await db.log_money(self.user_id, "deposit_in", -amount, conn=conn)
 
@@ -517,8 +541,8 @@ class DepositModal(Modal, title="💰 적금 금액 입력"):
 
         await respond.reply(interaction,
             f"✅ {num(amount)} Byte 적금 완료!\n"
-            f"현재 적금 원금: {num(new_principal)} Byte\n"
-            f"(그동안 붙은 이자는 원금에 합쳐지고, 오늘부터 다시 하루 {num(DEPOSIT_RATE * 100)}%씩 붙어요)",
+            f"현재 적금: {num(new_value)} Byte\n"
+            f"(처음 넣은 날부터 {DEPOSIT_MAX_DAYS}일까지 하루 {num(DEPOSIT_RATE * 100)}%씩 붙어요. 더 넣어도 날짜는 그대로예요)",
             ephemeral=True
         )
 
@@ -562,15 +586,12 @@ class WithdrawModal(Modal, title="💳 적금 출금"):
                         error = f"❌ 출금 가능 금액은 {num(total_value)} Byte입니다."
 
             if error is None:
-                # 남은 금액(이자 포함)이 새 원금이 되고, 오늘부터 다시 센다.
+                # 넣은 날은 그대로, 남은 가치에 맞게 원금만 줄인다. (예전처럼 날짜를 오늘로 돌리면 복리가 됐다)
                 remaining = total_value - withdraw_amount
-                if remaining < 0.01:
-                    await db.update_user(self.user_id, conn, deposit_amount=0, deposit_start=None)
+                principal, start = deposit_after(user, -withdraw_amount)
+                if principal == 0:
                     remaining = 0.0
-                else:
-                    await db.update_user(
-                        self.user_id, conn, deposit_amount=remaining, deposit_start=db.now()
-                    )
+                await db.update_user(self.user_id, conn, deposit_amount=principal, deposit_start=start)
                 result = await db.receive(self.user_id, withdraw_amount, conn)
                 await db.log_money(self.user_id, "deposit_out", withdraw_amount, conn=conn)
 

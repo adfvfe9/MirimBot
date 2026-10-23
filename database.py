@@ -899,6 +899,195 @@ async def delete_tts_abbrev(guild_id, word: str) -> bool:
     return result != "DELETE 0"
 
 
+# ───────────── 일일 미션 (features/missions.py) ─────────────
+
+async def money_log_counts_today(user_id, sources, day: datetime.date) -> dict:
+    """{source: 오늘(한국 날짜) 기록 수}"""
+    start = datetime.datetime.combine(day, datetime.time(0), KST)
+    rows = await pool().fetch(
+        """
+        SELECT source, count(*) AS n FROM money_log
+        WHERE user_id = $1 AND source = ANY($2::text[]) AND created_at >= $3 AND created_at < $4
+        GROUP BY source
+        """,
+        int(user_id), list(sources), start, start + datetime.timedelta(days=1),
+    )
+    return {r["source"]: r["n"] for r in rows}
+
+
+async def mission_claims(user_id, day: datetime.date, conn=None) -> set:
+    rows = await (conn or pool()).fetch(
+        "SELECT mission FROM mission_claims WHERE user_id = $1 AND day = $2", int(user_id), day
+    )
+    return {r["mission"] for r in rows}
+
+
+async def add_mission_claim(user_id, day: datetime.date, mission: str, conn=None) -> bool:
+    """처음 받는 거면 True (이미 받았으면 False)"""
+    return await (conn or pool()).fetchval(
+        "INSERT INTO mission_claims (user_id, day, mission) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING true",
+        int(user_id), day, mission,
+    ) is not None
+
+
+# ───────────── 주식 예약 매매 (features/orders.py) ─────────────
+
+def _order(row):
+    return {**dict(row), "price": _float(row["price"])}
+
+
+async def add_order(user_id, symbol, side, quantity, price, direction, expires_at, conn=None) -> dict:
+    row = await (conn or pool()).fetchrow(
+        """
+        INSERT INTO stock_orders (user_id, symbol, side, quantity, price, direction, expires_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *
+        """,
+        int(user_id), symbol, side, quantity, _num(price), direction, expires_at,
+    )
+    return _order(row)
+
+
+async def user_orders(user_id, conn=None) -> list[dict]:
+    rows = await (conn or pool()).fetch("SELECT * FROM stock_orders WHERE user_id = $1 ORDER BY id", int(user_id))
+    return [_order(r) for r in rows]
+
+
+async def all_orders() -> list[dict]:
+    return [_order(r) for r in await pool().fetch("SELECT * FROM stock_orders ORDER BY id")]
+
+
+async def delete_order(order_id, user_id=None) -> bool:
+    """지웠으면 True. 이미 없으면 (그사이 처리 / 취소) False. user_id 를 주면 그 사람 예약만"""
+    result = await pool().execute(
+        "DELETE FROM stock_orders WHERE id = $1 AND ($2::bigint IS NULL OR user_id = $2)",
+        int(order_id), user_id and int(user_id),
+    )
+    return result != "DELETE 0"
+
+
+# ───────────── 역할 상점 (features/roleshop.py) ─────────────
+
+async def shop_roles(guild_id) -> list[dict]:
+    rows = await pool().fetch(
+        "SELECT * FROM shop_roles WHERE guild_id = $1 ORDER BY price, added_at", int(guild_id)
+    )
+    return [{**dict(r), "price": _float(r["price"])} for r in rows]
+
+
+async def get_shop_role(guild_id, role_id) -> dict | None:
+    row = await pool().fetchrow(
+        "SELECT * FROM shop_roles WHERE guild_id = $1 AND role_id = $2", int(guild_id), int(role_id)
+    )
+    return {**dict(row), "price": _float(row["price"])} if row else None
+
+
+async def upsert_shop_role(guild_id, role_id, price, days: int, description: str | None) -> None:
+    await pool().execute(
+        """
+        INSERT INTO shop_roles (guild_id, role_id, price, days, description) VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (guild_id, role_id) DO UPDATE
+        SET price = EXCLUDED.price, days = EXCLUDED.days, description = EXCLUDED.description
+        """,
+        int(guild_id), int(role_id), _num(price), days, description,
+    )
+
+
+async def set_shop_role_active(guild_id, role_id, active: bool) -> None:
+    await pool().execute(
+        "UPDATE shop_roles SET active = $3 WHERE guild_id = $1 AND role_id = $2", int(guild_id), int(role_id), active
+    )
+
+
+async def delete_shop_role(guild_id, role_id) -> None:
+    await pool().execute("DELETE FROM shop_roles WHERE guild_id = $1 AND role_id = $2", int(guild_id), int(role_id))
+
+
+async def get_role_purchase(guild_id, user_id, role_id, conn=None) -> dict | None:
+    row = await (conn or pool()).fetchrow(
+        "SELECT * FROM role_purchases WHERE guild_id = $1 AND user_id = $2 AND role_id = $3",
+        int(guild_id), int(user_id), int(role_id),
+    )
+    return dict(row) if row else None
+
+
+async def set_role_purchase(guild_id, user_id, role_id, expires_at, conn=None) -> None:
+    await (conn or pool()).execute(
+        """
+        INSERT INTO role_purchases (guild_id, user_id, role_id, expires_at) VALUES ($1, $2, $3, $4)
+        ON CONFLICT (guild_id, user_id, role_id) DO UPDATE SET expires_at = EXCLUDED.expires_at
+        """,
+        int(guild_id), int(user_id), int(role_id), expires_at,
+    )
+
+
+async def delete_role_purchase(guild_id, user_id, role_id, conn=None) -> None:
+    await (conn or pool()).execute(
+        "DELETE FROM role_purchases WHERE guild_id = $1 AND user_id = $2 AND role_id = $3",
+        int(guild_id), int(user_id), int(role_id),
+    )
+
+
+async def role_purchases_of(guild_id, user_id) -> list[dict]:
+    rows = await pool().fetch(
+        "SELECT * FROM role_purchases WHERE guild_id = $1 AND user_id = $2 ORDER BY bought_at", int(guild_id), int(user_id)
+    )
+    return [dict(r) for r in rows]
+
+
+async def expired_role_purchases(now) -> list[dict]:
+    rows = await pool().fetch("SELECT * FROM role_purchases WHERE expires_at IS NOT NULL AND expires_at <= $1", now)
+    return [dict(r) for r in rows]
+
+
+# ───────────── 학사정보 (features/school.py) ─────────────
+
+SCHOOL_COLUMNS = (
+    "edu_code", "school_code", "school_name", "school_kind", "channel_id", "post_time",
+    "post_meal", "post_schedule", "post_timetable", "grade", "class_nm", "last_posted",
+)
+
+
+async def get_school_settings(guild_id) -> dict | None:
+    row = await pool().fetchrow("SELECT * FROM school_settings WHERE guild_id = $1", int(guild_id))
+    return dict(row) if row else None
+
+
+async def update_school_settings(guild_id, current: dict, **changes) -> None:
+    """current(지금 설정, 기본값 포함)에 changes 를 덮어써서 저장한다. 행이 없으면 만든다."""
+    row = {k: changes.get(k, current[k]) for k in SCHOOL_COLUMNS}
+    cols = ", ".join(SCHOOL_COLUMNS)
+    marks = ", ".join(f"${i}" for i in range(2, len(SCHOOL_COLUMNS) + 2))
+    sets = ", ".join(f"{c} = EXCLUDED.{c}" for c in SCHOOL_COLUMNS)
+    await pool().execute(
+        f"INSERT INTO school_settings (guild_id, {cols}) VALUES ($1, {marks}) "
+        f"ON CONFLICT (guild_id) DO UPDATE SET {sets}",
+        int(guild_id), *row.values(),
+    )
+
+
+async def school_channels() -> list[dict]:
+    """알림 채널이 정해진 서버들의 설정"""
+    rows = await pool().fetch("SELECT * FROM school_settings WHERE channel_id IS NOT NULL")
+    return [dict(r) for r in rows]
+
+
+async def get_user_class(guild_id, user_id) -> dict | None:
+    row = await pool().fetchrow(
+        "SELECT grade, class_nm FROM user_classes WHERE guild_id = $1 AND user_id = $2", int(guild_id), int(user_id)
+    )
+    return dict(row) if row else None
+
+
+async def set_user_class(guild_id, user_id, grade: int, class_nm: str) -> None:
+    await pool().execute(
+        """
+        INSERT INTO user_classes (guild_id, user_id, grade, class_nm) VALUES ($1, $2, $3, $4)
+        ON CONFLICT (guild_id, user_id) DO UPDATE SET grade = EXCLUDED.grade, class_nm = EXCLUDED.class_nm
+        """,
+        int(guild_id), int(user_id), grade, class_nm,
+    )
+
+
 # ───────────── 명령어 / 버튼 기록 (features/audit.py, %로그) ─────────────
 
 async def add_command_log(user_id, guild_id, channel_id, kind: str, name: str, content: str | None,
@@ -1249,7 +1438,7 @@ RESET_TABLES = [
     "stocks", "price_history", "portfolio", "stock_positions", "stock_notices", "market_state",
     "warnings", "warning_logs", "suggestions", "news", "wordchain_records", "money_log",
     "market_listings", "market_trades", "coin_price", "coin_history", "coin_holdings", "miners",
-    "user_titles", "asset_history",
+    "user_titles", "asset_history", "mission_claims", "stock_orders",
 ]
 
 

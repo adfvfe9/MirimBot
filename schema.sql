@@ -399,6 +399,83 @@ CREATE INDEX IF NOT EXISTS command_log_time_idx ON command_log (created_at);
 CREATE INDEX IF NOT EXISTS command_log_user_idx ON command_log (user_id, created_at);
 
 
+-- ───────────── 일일 미션 (features/missions.py) ─────────────
+-- 받은 미션 보상. mission = 미션 key, 'all' = 3개 모두 완료 보너스 (미션 자체와 진행도는 저장하지 않는다)
+CREATE TABLE IF NOT EXISTS mission_claims (
+    user_id BIGINT NOT NULL,
+    day     DATE   NOT NULL,
+    mission TEXT   NOT NULL,
+    PRIMARY KEY (user_id, day, mission)
+);
+
+
+-- ───────────── 주식 예약 매매 (features/orders.py) ─────────────
+-- 처리 / 취소 / 만료되면 행을 지운다. quantity 가 NULL 이면 (판매) 그때 가진 전부
+CREATE TABLE IF NOT EXISTS stock_orders (
+    id         BIGSERIAL   PRIMARY KEY,
+    user_id    BIGINT      NOT NULL,
+    symbol     TEXT        NOT NULL,
+    side       TEXT        NOT NULL,     -- buy / sell
+    quantity   INTEGER,
+    price      NUMERIC     NOT NULL,
+    direction  TEXT        NOT NULL,     -- below (가격 이하가 되면) / above (가격 이상이 되면)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS stock_orders_user_idx ON stock_orders (user_id);
+
+
+-- ───────────── 역할 상점 (features/roleshop.py) ─────────────
+-- 서버마다 파는 역할. days = 0 이면 영구. (%초기화 로 지워지지 않는다: 산 역할은 디스코드에 그대로 있으니까)
+CREATE TABLE IF NOT EXISTS shop_roles (
+    guild_id    BIGINT  NOT NULL,
+    role_id     BIGINT  NOT NULL,
+    price       NUMERIC NOT NULL,
+    days        INTEGER NOT NULL DEFAULT 0,
+    description TEXT,
+    active      BOOLEAN NOT NULL DEFAULT TRUE,
+    added_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (guild_id, role_id)
+);
+-- 산 역할. expires_at 이 NULL 이면 영구, 지나면 봇이 역할을 회수하고 행을 지운다
+CREATE TABLE IF NOT EXISTS role_purchases (
+    guild_id   BIGINT NOT NULL,
+    user_id    BIGINT NOT NULL,
+    role_id    BIGINT NOT NULL,
+    expires_at TIMESTAMPTZ,
+    bought_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (guild_id, user_id, role_id)
+);
+CREATE INDEX IF NOT EXISTS role_purchases_expires_idx ON role_purchases (expires_at) WHERE expires_at IS NOT NULL;
+
+
+-- ───────────── 학사정보 (features/school.py) ─────────────
+-- 서버마다 학교와 아침 알림 설정. 행이 없으면 미림마이스터고, 알림 꺼짐. (%초기화 로 지워지지 않는다)
+CREATE TABLE IF NOT EXISTS school_settings (
+    guild_id       BIGINT  PRIMARY KEY,
+    edu_code       TEXT    NOT NULL,              -- 교육청 코드 (B10 = 서울)
+    school_code    TEXT    NOT NULL,
+    school_name    TEXT    NOT NULL,
+    school_kind    TEXT    NOT NULL,              -- 초등학교 / 중학교 / 고등학교 (시간표 API 가 다르다)
+    channel_id     BIGINT,                        -- 알림 채널 (NULL = 끔)
+    post_time      TEXT    NOT NULL DEFAULT '08:00',
+    post_meal      BOOLEAN NOT NULL DEFAULT TRUE,
+    post_schedule  BOOLEAN NOT NULL DEFAULT TRUE,
+    post_timetable BOOLEAN NOT NULL DEFAULT FALSE,
+    grade          INTEGER,                       -- 알림에 넣을 시간표의 반
+    class_nm       TEXT,
+    last_posted    DATE                           -- 오늘 이미 보냈는지
+);
+-- %내반: 사람마다 자기 반 (%시간표)
+CREATE TABLE IF NOT EXISTS user_classes (
+    guild_id BIGINT  NOT NULL,
+    user_id  BIGINT  NOT NULL,
+    grade    INTEGER NOT NULL,
+    class_nm TEXT    NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
+);
+
+
 -- ───────────── 봇 운영 상태 ─────────────
 -- 서버 연장 알림처럼 봇 자체가 기억해야 하는 값. (%초기화 로 지워지지 않는다)
 CREATE TABLE IF NOT EXISTS bot_state (

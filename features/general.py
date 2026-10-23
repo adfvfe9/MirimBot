@@ -1,10 +1,6 @@
-"""일반 명령어: 시간, 패치노트, 급식, 도움말, 청소, 장난 명령어"""
-import asyncio
-import os
-import re
+"""일반 명령어: 시간, 패치노트, 도움말, 청소, 장난 명령어 (급식은 school.py)"""
 
 import discord
-import requests
 from discord.ext import commands
 
 import database as db
@@ -23,9 +19,36 @@ async def timeget(ctx):
 async def patchnote(ctx):
     await ctx.message.delete()
     embed = discord.Embed(
-        title="📜 패치노트 v1.3.5.1 — 속도 개선 · 강화 수정",
-        description="v1.3.5.1 변경 사항과 v1.3 전체 요약이에요. 버전은 a.b.c.d (대격변 · 큰 기능 · 기능 추가 · 수정). 자세한 명령어는 `%도움말`에서!",
+        title="📜 패치노트 v1.3.6 — 역할 상점 · 학사정보 · 예약 매매 · 미션",
+        description="v1.3.6 변경 사항과 v1.3 전체 요약이에요. 버전은 a.b.c.d (대격변 · 큰 기능 · 기능 추가 · 수정). 자세한 명령어는 `%도움말`에서!",
         color=0xf1c40f  # 노란색
+    )
+    embed.add_field(
+        name="🛍️ [v1.3.6] 역할 상점 · 📋 미션 · 🤖 예약 매매",
+        value=(
+            "- `%역할상점` byte 로 디스코드 역할 사기 (기간제는 끝나면 회수) · `%내역할` · 관리자 `%상점관리`\n"
+            "- `%미션` 하루 3개, 깨면 3천~8천 byte · 3개 다 깨면 🪙 토큰 1개\n"
+            "- `%예약구매` / `%예약판매` 가격이 닿으면 자동으로 사고팔기 (예약 하나에 🪙 1개, 24시간) · `%예약목록`"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🏫 [v1.3.6] 학사정보",
+        value=(
+            "- `%급식 [내일]` `%시간표 [학년 반]` `%내반 2 1` `%학사일정 [월]` · 다른 학교도 돼요\n"
+            "- 관리자 `%학사설정`: 학교 · 채널 · 시간을 정하면 평일 아침마다 급식 / 일정 / 시간표를 보내요"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="⚖️ [v1.3.6] 밸런스",
+        value=(
+            "- ✊ 가위바위보: 하루 30판 → **5판**, 보상 5배 (5천 → 1만 → 2만 …)\n"
+            "- 🏦 적금 하루 이자 1% → **1.5%**. 넣고 뺄 때 이자가 원금에 합쳐지던 구멍(복리) 수정\n"
+            "- ✨ 새 능력 4종 (대출 · 도박 판돈 · 증거금 한도, 가위바위보 판수) → 18종. 돈 복사가 되는 능력은 드물게 나와요\n"
+            "- 자동 강화 진행 메시지가 멈추지 않고, DB 연결이 끊기면 한 번 더 시도해요"
+        ),
+        inline=False
     )
     embed.add_field(
         name="⚡ [v1.3.5.1] 속도 개선 · 강화 수정",
@@ -123,7 +146,7 @@ async def patchnote(ctx):
     embed.add_field(
         name="📌 [v1.3.0] 요약",
         value=(
-            "- ✨ 강화 능력 14종 (`%강화능력설정`, `%리롤`, `%내능력`) · 🕶️ `%암시장` · 🪙 퀴즈 토큰\n"
+            "- ✨ 강화 능력 (v1.3.6 기준 18종, `%강화능력설정`, `%리롤`, `%내능력`) · 🕶️ `%암시장` · 🪙 퀴즈 토큰\n"
             "- 📈 주식: 오르든 내리든 그대로 이어지고, 뉴스가 뜨는 순간 한 번에 튀어요\n"
             "- ⚖️ 레버리지 최대 10배, 진입 수수료 0.5%, 보유 비용 시간당 0.1%"
         ),
@@ -131,71 +154,6 @@ async def patchnote(ctx):
     )
     embed.set_footer(text="업데이트: 2026-10-23")
     await ctx.send(embed=embed)
-
-@client.command(aliases=['급식'])
-async def school_meal(ctx):
-    await ctx.message.delete()
-
-    api_key = os.getenv("NEIS_API_KEY")           # .env 의 나이스 API 키
-    school_code = '7011569'                       # 미림마이스터고
-    edu_office_code = 'B10'                       # 서울교육청
-    today = db.today().strftime("%Y%m%d")         # 서버가 해외에 있어도 한국 날짜 기준
-
-    if not api_key:
-        await ctx.send("급식 API 키가 설정되지 않았어요 🥲 (.env 의 NEIS_API_KEY)")
-        return
-
-    url = f"https://open.neis.go.kr/hub/mealServiceDietInfo?" \
-f"KEY={api_key}&Type=json&ATPT_OFCDC_SC_CODE={edu_office_code}&SD_SCHUL_CODE={school_code}&MLSV_YMD={today}"
-
-    try:
-        # requests 는 기다리는 동안 봇 전체를 멈추게 해서 다른 스레드에서 부른다. 나이스가 안 받으면 5초에 포기
-        response = await asyncio.to_thread(requests.get, url, timeout=5)
-        response.raise_for_status()
-        data = response.json()
-
-        if 'mealServiceDietInfo' not in data:
-            await ctx.send("오늘은 급식 정보가 없어요 🥲 (주말/공휴일일 수 있어요)")
-            return
-
-        meal_list = data['mealServiceDietInfo'][1]['row']
-
-        meals_text = []
-        for meal in meal_list:
-            meal_name = meal['MMEAL_SC_NM']  # 아침, 점심, 저녁
-            meal_info = meal['DDISH_NM']
-            meal_info = meal_info.replace('<br/>', '\n')
-            meal_info = re.sub(r'\([^)]*\)', '', meal_info)  # 괄호 안 내용 제거
-
-            # 식사 구분별 이모지
-            if '조식' in meal_name or '아침' in meal_name:
-                prefix = "🌅 **[조식]**"
-            elif '중식' in meal_name or '점심' in meal_name:
-                prefix = "🍱 **[중식]**"
-            elif '석식' in meal_name or '저녁' in meal_name:
-                prefix = "🌙 **[석식]**"
-            else:
-                prefix = f"**[{meal_name}]**"
-
-            meals_text.append(f"{prefix}\n{meal_info}")
-
-        final_meal_info = "\n\n".join(meals_text)
-
-        embed = discord.Embed(
-            title="🍴 오늘의 급식 🍴",
-            description=final_meal_info,
-            color=0x2ecc71
-        )
-        await ctx.send(embed=embed)
-
-    except requests.exceptions.RequestException as e:
-        await ctx.send("급식 API 서버에 연결할 수 없어요 🥲")
-        print(f"[급식] RequestException: {e}")
-
-    except Exception as e:
-        await ctx.send("오늘의 급식 정보를 불러오지 못했어요 🥲")
-        print(f"[급식] Exception: {e}")
-
 
 @client.command(aliases=["도움말", "가이드"])
 async def 명령어(ctx):

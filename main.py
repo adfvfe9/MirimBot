@@ -3,21 +3,25 @@
     python main.py
 
 봇 객체는 bot.py, 명령어는 features/ 폴더에 기능별로 나뉘어 있다.
-  features/general.py      시간, 패치노트, 급식, 도움말, 청소 등
+  features/general.py      시간, 패치노트, 도움말, 청소 등
+  features/school.py       급식, 시간표, 학사일정, 평일 아침 학사정보 알림 (나이스 API)
   features/health.py       %핑 (디스코드 / DB / 봇 멈춤 시간 재기)
   features/audit.py        모든 명령어 / 버튼 기록, %로그 (관리자)
   features/economy.py      머니, 송금, 머니랭킹, 위로금, 기초수급, 파산
   features/enhance.py      강화
   features/stocks.py       주식
   features/futures.py      레버리지 (롱/숏)
+  features/orders.py       주식 예약 매매 (가격이 닿으면 자동으로 사고팔기, 토큰 소모)
   features/news.py         주식 뉴스 (30~90분마다 랜덤 뉴스)
   features/assets.py       순자산, 자산랭킹, 자산그래프 (1시간마다 순자산 기록)
   features/titles.py       칭호 (업적, 진행도, 장착)
+  features/missions.py     일일 미션 (하루 3개, 다 깨면 토큰)
   features/gamble.py       도박, 가위바위보
   features/wordchain.py    끝말잇기 (1대1 / 다같이 / 랭킹, 스레드에서. 단어 목록: kkwords.txt)
   features/quiz.py         선착순 퀴즈 (1~2시간마다 퀴즈 채널에, 문제: quiz_math.py / quiz_gen.py / quiz_bank.py)
   features/bank.py         은행 (대출/상환/적금/출금)
-  features/tokens.py       토큰, 상점
+  features/tokens.py       토큰
+  features/roleshop.py     역할 상점 (%역할상점, 관리자 %상점관리)
   features/crypto.py       비트코인 (토큰으로 거래)
   features/mining.py       코인 채굴 (1시간마다 블록)
   features/music.py        음악 (%재생, 유튜브 → 통화방)
@@ -52,11 +56,15 @@ from features import (  # noqa: F401
     health,
     market,
     mining,
+    missions,
     moderation,
     music,
     news,
+    orders,
     quiz,
     renewal,
+    roleshop,
+    school,
     stocks,
     futures,
     suggestions,
@@ -90,6 +98,8 @@ async def setup_hook():
     asyncio.create_task(moderation.auto_remove_expired_roles())
     asyncio.create_task(health.watch_loop_lag())
     asyncio.create_task(audit.prune_loop())
+    asyncio.create_task(school.post_loop())
+    asyncio.create_task(roleshop.expire_loop())
 
 
 # on_message는 커맨드와 충돌 방지 필요 → process_commands 사용

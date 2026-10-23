@@ -72,6 +72,9 @@ ABILITIES = {
     "sell_fee":      dict(emoji="💸", name="주식 판매 수수료 할인", unit="%p", decimals=2, limit=None,
                           ranges=((0.1, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.9)),
                           desc="주식 판매 수수료(보통 2%, 단타 8%)를 낮춤"),
+    "margin_limit":  dict(emoji="📊", name="증거금 한도 증가", unit="%", decimals=1, limit=None,
+                          ranges=((5, 10), (10, 20), (20, 35), (35, 50)),
+                          desc="레버리지 증거금 합계 한도(10만) 증가"),
     # 🎲 놀이
     "rps_revive":    dict(emoji="✊", name="가위바위보 부활", unit="%", decimals=1, limit=None,
                           ranges=((2, 4), (4, 8), (8, 13), (13, 20)),
@@ -79,6 +82,12 @@ ABILITIES = {
     "gamble_refund": dict(emoji="🎰", name="도박 꽝 환급", unit="%", decimals=1, limit=100,
                           ranges=((1, 2), (2, 3), (3, 5), (5, 7)),
                           desc="도박이 꽝이면 판돈의 일부를 돌려받기"),
+    "gamble_max":    dict(emoji="🎲", name="도박 판돈 한도 증가", unit="%", decimals=1, limit=None,
+                          ranges=((5, 10), (10, 20), (20, 35), (35, 50)),
+                          desc="도박 1회 최대 판돈(10만) 증가 (%도박올인 포함)"),
+    "rps_games":     dict(emoji="✌️", name="가위바위보 판수 증가", unit="판", decimals=0, limit=None,
+                          ranges=((1, 1), (1, 1), (1, 2), (2, 3)),
+                          desc="가위바위보 하루 판수(5판) 증가"),
     "wordchain_limit": dict(emoji="📅", name="끝말잇기 하루 한도", unit="%", decimals=1, limit=None,
                             ranges=((3, 8), (8, 15), (15, 25), (25, 40)),
                             desc="끝말잇기로 하루에 벌 수 있는 최대 금액(1.5만) 증가"),
@@ -95,7 +104,30 @@ ABILITIES = {
     "wordchain_bonus": dict(emoji="🔤", name="끝말잇기 보상", unit="%", decimals=1, limit=None,
                             ranges=((3, 8), (8, 15), (15, 25), (25, 40)),
                             desc="끝말잇기 단어당 보상 증가 (하루 한도는 📅 능력)"),
+    "loan_limit":    dict(emoji="🏦", name="대출 한도 증가", unit="%", decimals=1, limit=None,
+                          ranges=((5, 10), (10, 20), (20, 35), (35, 50)),
+                          desc="은행 대출 한도(5만) 증가"),
 }
+
+# 능력마다 뽑힐 확률 (가중치). 많이 모이면 돈 복사가 되는 능력은 드물게, 아닌 능력은 흔하게 나온다.
+# 등급(일반~전설)은 이와 따로 아이템 레벨별 확률(TIER_ODDS)로 뽑는다.
+#   드묾: 기대값을 직접 바꾸는 것 — 꽝 환급 10% 넘으면 도박이 이득, 부활이 높으면 가위바위보 10연승이 쉬워짐,
+#         청산 보험이 높으면 레버리지가 공짜 복권, 대성공 / 하락 방지가 높으면 강화해서 팔기가 이득
+#   보통: 효과가 크지만 돈을 직접 만들지는 않는 것
+#   흔함: 한도 · 보상을 조금씩 늘리는 것
+RARITY = {1: "드묾", 3: "보통", 5: "흔함"}
+ABILITY_WEIGHT = {
+    "gamble_refund": 1, "rps_revive": 1, "liq_insurance": 1, "great_success": 1, "down_guard": 1,
+    "destroy_guard": 3, "sell_fee": 3, "quick_sell_time": 3, "leverage_up": 3, "gamble_max": 3, "rps_games": 3,
+    "welfare_bonus": 5, "wordchain_bonus": 5, "wordchain_limit": 5, "quiz_token": 5, "token_decay": 5,
+    "loan_limit": 5, "margin_limit": 5,
+}
+assert set(ABILITY_WEIGHT) == set(ABILITIES), "능력을 추가하면 ABILITY_WEIGHT 에도 넣어야 한다"
+
+
+def pick_chance(key):
+    """이 능력이 뽑힐 확률 (%)"""
+    return ABILITY_WEIGHT[key] / sum(ABILITY_WEIGHT.values()) * 100
 
 
 def slot_level(slot):
@@ -117,7 +149,7 @@ def tier_odds(level):
 def roll(level):
     """레벨에 맞는 확률로 능력 하나를 뽑는다. (능력 키, 등급, 수치)"""
     tier = random.choices(range(len(TIERS)), weights=tier_odds(level))[0]
-    key = random.choice(list(ABILITIES))
+    key = random.choices(list(ABILITY_WEIGHT), weights=list(ABILITY_WEIGHT.values()))[0]
     info = ABILITIES[key]
     low, high = info["ranges"][tier]
     if info["decimals"] == 0:

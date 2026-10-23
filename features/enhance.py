@@ -14,9 +14,11 @@
 - 낮은 레벨은 실패해도 유지, +6 부터는 떨어질 수 있고, +7 부터는 파괴될 수 있다. (최대 10%)
 - 한 번 더 누를 때마다 평균적으로 가진 가치의 3~10% 를 잃는다. 고강일수록 확률은 낮고 대박은 크다. (로또 구조)
 """
+import asyncio
 import random
 import time
 
+import asyncpg
 import discord
 from discord.ext import commands
 from discord.ui import Button, View
@@ -35,7 +37,7 @@ NAME_MAX_LEN = 20
 ANNOUNCE_LEVEL = 10       # 이 레벨 이상 성공 / 이 레벨 이상 아이템 파괴 시 채널에 공지
 AUTO_MAX_TRIES = 100      # [목표까지 자동] 한 번에 최대 시도 횟수
 AUTO_CHUNK = 10           # 자동 강화는 이만큼씩 몰아서 계산한다 (DB 한 번에)
-AUTO_EDIT_EVERY = 1.0     # 자동 강화 중 진행 상황 메시지는 이 초마다 고친다 (디스코드 수정 횟수 제한)
+AUTO_EDIT_EVERY = 1.5     # 자동 강화 중 진행 상황 메시지는 이 초마다 고친다 (디스코드 수정 횟수 제한)
 
 # 목표 레벨: (성공률 %, 실패했을 때 [유지, 한 단계 하락, 파괴] 비율 %)
 # +1 부터 노렸을 때 도달 확률: +10 약 1/6.6, +11 약 1/54, +12 약 1/920, +13 약 1/53,000
@@ -65,6 +67,9 @@ SELL_PRICE = {
     1: 10000, 2: 10200, 3: 10800, 4: 12000, 5: 14500, 6: 20000, 7: 45000,
     8: 120000, 9: 370000, 10: 1600000, 11: 12000000, 12: 170000000, 13: 8000000000,
 }
+
+# DB 연결이 중간에 끊겼을 때 나는 에러들 (네트워크 문제). 이때 트랜잭션은 통째로 취소된다
+DB_DISCONNECTED = (asyncpg.ConnectionDoesNotExistError, asyncpg.InterfaceError, ConnectionError, OSError, TimeoutError)
 
 # ───────────── 계산 ─────────────
 
@@ -454,18 +459,36 @@ class EnhanceView(View):
         await self.refresh(interaction)
         await announce(interaction.channel, interaction.user, self.item_name, r["result"], r["old"], r["new"])
 
+    async def enhance_chunk(self, max_tries):
+        """자동 강화 한 몫. DB 연결이 중간에 끊기면 (네트워크) 그 몫은 통째로 취소되니까 한 번 더 해 본다.
+        다시 할 때도 패널 레벨을 확인해서, 혹시 저장이 된 뒤에 끊긴 거라면 레벨이 달라서 멈춘다."""
+        for attempt in range(2):
+            try:
+                return await try_enhance_many(
+                    self.user_id, self.item_name, list(self.sacrifices), expect_level=self.level,
+                    target=self.target, max_tries=max_tries,
+                )
+            except DB_DISCONNECTED as e:
+                print(f"[강화] DB 연결 끊김 ({type(e).__name__}), {'다시 시도' if attempt == 0 else '포기'}")
+        return "📡 DB 연결이 잠깐 끊겨서 멈췄어요. 마지막 몫은 취소됐으니 다시 눌러주세요."
+
+    async def refresh_quietly(self, interaction):
+        """자동 강화 진행 메시지 수정. 실패해도 강화는 계속한다."""
+        try:
+            await self.refresh(interaction)
+        except (discord.HTTPException, *DB_DISCONNECTED) as e:
+            print(f"[강화] 진행 메시지 수정 실패: {type(e).__name__}")
+
     async def on_auto(self, interaction):
         """목표까지 자동 강화. AUTO_CHUNK 번씩 몰아서 계산하고, 진행 상황을 AUTO_EDIT_EVERY 초마다 메시지에 보여준다."""
         await respond.defer(interaction)
         self.sell_armed = False
         logs, total_cost, tries, stop, opened = [], 0, 0, "", []
         last_edit = time.monotonic()
+        editing = None      # 보내는 중인 진행 메시지 수정 (기다리지 않고 따로 보낸다)
 
         while tries < AUTO_MAX_TRIES and self.level is not None and self.level < self.target:
-            r = await try_enhance_many(
-                self.user_id, self.item_name, list(self.sacrifices), expect_level=self.level,
-                target=self.target, max_tries=min(AUTO_CHUNK, AUTO_MAX_TRIES - tries),
-            )
+            r = await self.enhance_chunk(min(AUTO_CHUNK, AUTO_MAX_TRIES - tries))
             if isinstance(r, str):
                 if r.startswith("⚠️"):
                     await self.load()
@@ -484,13 +507,19 @@ class EnhanceView(View):
             if r["stop"]:
                 stop = r["stop"]
                 break
-            if time.monotonic() - last_edit >= AUTO_EDIT_EVERY and self.level is not None and self.level < self.target:
+            # 진행 상황: 앞의 수정이 끝났고 AUTO_EDIT_EVERY 초가 지났을 때만. 수정이 끝나길 기다리지 않고 계속 계산한다
+            # (기다리면 디스코드가 수정을 늦출 때 강화도 같이 멈춰서, 메시지가 멈췄다가 한꺼번에 바뀌어 보였다)
+            if (time.monotonic() - last_edit >= AUTO_EDIT_EVERY and (editing is None or editing.done())
+                    and self.level is not None and self.level < self.target):
                 self.last = (
                     f"⏳ **자동 강화 중…** 지금 +{self.level} → 목표 +{self.target}\n"
                     f"시도 {tries}회, 비용 {num(total_cost)} byte\n```" + "\n".join(logs[-5:]) + "```"
                 )
-                await self.refresh(interaction)
+                editing = asyncio.create_task(self.refresh_quietly(interaction))
                 last_edit = time.monotonic()
+
+        if editing is not None:
+            await editing      # 늦게 끝난 진행 메시지가 최종 결과를 덮어쓰지 않게
 
         if self.level is not None and self.level >= self.target:
             head = f"🎯 **+{self.target} 도달!**"

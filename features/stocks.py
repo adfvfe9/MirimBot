@@ -289,6 +289,11 @@ def crypto():
     return module
 
 
+def orders():
+    from features import orders as module
+    return module
+
+
 def mining():
     from features import mining as module
     return module
@@ -312,6 +317,11 @@ async def auto_update_stocks():
             await crypto().tick()
     except Exception as e:
         print(f"[코인 갱신 오류] {type(e).__name__}: {e}")
+    # 🤖 주식 예약 매매 (방금 바뀐 가격으로)
+    try:
+        await orders().check()
+    except Exception as e:
+        print(f"[예약 매매 오류] {type(e).__name__}: {e}")
     # ⛏️ 채굴 블록 (1시간마다)
     try:
         async with crypto().lock:

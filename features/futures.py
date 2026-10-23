@@ -24,7 +24,7 @@ from fmt import debt_line, num
 
 # ───────────── 밸런스 설정 ─────────────
 MAX_LEVERAGE = 10             # 최대 배율
-MARGIN_LIMIT = 100000         # 한 사람이 동시에 걸 수 있는 증거금 합계
+MARGIN_LIMIT = 100000         # 한 사람이 동시에 걸 수 있는 증거금 합계 (📊 능력만큼 늘어난다)
 OPEN_FEE = 0.005              # 진입 수수료 (포지션 규모 기준 0.5%, 증거금과 따로 낸다)
 CLOSE_FEE = 0.005             # 청산 수수료 (포지션 규모 기준 0.5%)
 # 보유 비용: 포지션 규모 기준 시간당 0.1%. 증거금에서 계속 빠지므로 오래 들고 있을수록 청산가가 가까워진다.
@@ -158,6 +158,11 @@ async def entry_block_reason(symbol):
     return None
 
 
+async def margin_limit(user_id, conn=None):
+    """이 사람의 증거금 합계 한도 (📊 능력 포함)"""
+    return MARGIN_LIMIT * (1 + await abilities.total(user_id, "margin_limit", conn) / 100)
+
+
 async def open_position(ctx, side, stock_name, margin, leverage):
     user_id = ctx.author.id
     symbol = stocks.stock_aliases.get(stock_name.upper())
@@ -183,12 +188,13 @@ async def open_position(ctx, side, stock_name, margin, leverage):
 
     user = await db.get_user(user_id)
     used = sum(p["margin"] for p in await db.get_positions(user_id))
+    limit = await margin_limit(user_id)
     if user["money"] < total:
         await ctx.send(f"❌ 잔액이 부족합니다. (증거금 + 진입 수수료 {num(total)} byte 필요)")
         return
-    if used + margin > MARGIN_LIMIT:
+    if used + margin > limit:
         await ctx.send(
-            f"❌ 증거금 합계는 최대 **{num(MARGIN_LIMIT)} byte**까지예요. "
+            f"❌ 증거금 합계는 최대 **{num(limit)} byte**까지예요. "
             f"(지금 사용 중: {num(used)} byte)"
         )
         return
@@ -243,8 +249,8 @@ async def open_position(ctx, side, stock_name, margin, leverage):
                 pass
             elif money < total:
                 error = f"잔액이 부족합니다. (증거금 + 진입 수수료 {num(total)} byte 필요)"
-            elif used_now + margin > MARGIN_LIMIT:
-                error = f"증거금 합계 한도({num(MARGIN_LIMIT)} byte)를 넘습니다."
+            elif used_now + margin > await margin_limit(user_id, conn):
+                error = f"증거금 합계 한도({num(await margin_limit(user_id, conn))} byte)를 넘습니다."
             else:
                 fee = open_fee(preview)
                 await db.update_user(user_id, conn, money=money - margin - fee)

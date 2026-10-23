@@ -19,9 +19,16 @@ async def timeget(ctx):
 async def patchnote(ctx):
     await ctx.message.delete()
     embed = discord.Embed(
-        title="📜 패치노트 v1.3.6 — 역할 상점 · 학사정보 · 예약 매매 · 미션",
-        description="v1.3.6 변경 사항과 v1.3 전체 요약이에요. 버전은 a.b.c.d (대격변 · 큰 기능 · 기능 추가 · 수정). 자세한 명령어는 `%도움말`에서!",
+        title="📜 패치노트 v1.3.6.1 — 역할 상점 · 학사정보 · 예약 매매 · 미션",
+        description="v1.3.6.1 변경 사항과 v1.3 전체 요약이에요. 버전은 a.b.c.d (대격변 · 큰 기능 · 기능 추가 · 수정). 자세한 명령어는 `%도움말`에서!",
         color=0xf1c40f  # 노란색
+    )
+    embed.add_field(
+        name="🔧 [v1.3.6.1] 수정",
+        value=(
+            "- `%은행`이 에러가 나며 열리지 않던 문제를 고쳤어요 (v1.3.6 에서 생김)"
+        ),
+        inline=False
     )
     embed.add_field(
         name="🛍️ [v1.3.6] 역할 상점 · 📋 미션 · 🤖 예약 매매",

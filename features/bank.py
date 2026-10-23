@@ -190,12 +190,12 @@ async def start_bank_collection_loop():
 # 은행 명령어
 # =========================
 
-@client.command(aliases=["은행"])
 async def loan_limit(user_id, conn=None):
     """이 사람의 대출 한도 (🏦 능력 포함)"""
     return LOAN_LIMIT * (1 + await abilities.total(user_id, "loan_limit", conn) / 100)
 
 
+@client.command(aliases=["은행"])
 async def bank(ctx):
     await ctx.message.delete()
 

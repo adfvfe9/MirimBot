@@ -93,6 +93,8 @@ async def rescale(factor):
     history.extend(scaled)
     pending[:] = [p * factor for p in pending]
     await db.rescale_coin(factor)
+    from features import mining   # 블록 보상도 같이 조정
+    await mining.on_rescale(factor)
 
 
 async def tick(save=True):

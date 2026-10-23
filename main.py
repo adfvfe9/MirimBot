@@ -15,6 +15,8 @@
   features/quiz.py         선착순 퀴즈 (1~2시간마다 퀴즈 채널에, 문제: quiz_math.py / quiz_gen.py / quiz_bank.py)
   features/bank.py         은행 (대출/상환/적금/출금)
   features/tokens.py       토큰, 상점
+  features/crypto.py       비트코인 (토큰으로 거래)
+  features/mining.py       코인 채굴 (1시간마다 블록)
   features/moderation.py   경고
   features/suggestions.py  건의
   features/admin.py        전체 초기화
@@ -41,6 +43,7 @@ from features import (  # noqa: F401
     gamble,
     general,
     market,
+    mining,
     moderation,
     news,
     quiz,
@@ -66,6 +69,7 @@ async def setup_hook():
     await stocks.load_stock_prices()
     await abilities.sync_all()   # 능력 슬롯 레벨이 바뀌었으면 기존 아이템의 빈 슬롯을 채운다
     await crypto.load()
+    await mining.load()
 
     # 봇을 재시작해도 예전에 보낸 연장 알림 DM 의 [연장 완료] 버튼이 동작하게 등록
     client.add_view(renewal.RenewView())

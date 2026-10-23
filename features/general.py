@@ -22,9 +22,19 @@ async def timeget(ctx):
 async def patchnote(ctx):
     await ctx.message.delete()
     embed = discord.Embed(
-        title="📜 패치노트 v1.3.2 — 비트코인 · 토큰 거래",
-        description="v1.3.2 변경 사항과 v1.3 전체 요약이에요. 자세한 명령어는 `%도움말`에서!",
+        title="📜 패치노트 v1.3.3 — 코인 채굴",
+        description="v1.3.3 변경 사항과 v1.3 전체 요약이에요. 자세한 명령어는 `%도움말`에서!",
         color=0xf1c40f  # 노란색
+    )
+    embed.add_field(
+        name="⛏️ [v1.3.3] 코인 채굴 `%채굴`",
+        value=(
+            "- **1시간마다 블록 하나**: 서버 전체 블록 보상(0.1 BTC)을 켜진 채굴기 해시 비율로 나눠 가져요\n"
+            "- 채굴기 1대 5만 byte (1인 최대 3대) · `%채굴기업그레이드`로 Lv5까지 (해시 1→5, 해시당 전기세는 싸져요)\n"
+            "- 켜 두면 블록마다 전기세 2,000~6,000 byte/대. 돈이 모자라면 자동으로 꺼져요\n"
+            "- **336블록(2주)마다 반감기** · `%채굴켜기` `%채굴끄기` `%채굴랭킹`"
+        ),
+        inline=False
     )
     embed.add_field(
         name="₿ [v1.3.2] 비트코인 `%코인`",

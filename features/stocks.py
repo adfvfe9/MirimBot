@@ -287,6 +287,11 @@ def crypto():
     return module
 
 
+def mining():
+    from features import mining as module
+    return module
+
+
 def news():
     from features import news as module
     return module
@@ -305,6 +310,12 @@ async def auto_update_stocks():
             await crypto().tick()
     except Exception as e:
         print(f"[코인 갱신 오류] {type(e).__name__}: {e}")
+    # ⛏️ 채굴 블록 (1시간마다)
+    try:
+        async with crypto().lock:
+            await mining().maybe_block()
+    except Exception as e:
+        print(f"[채굴 오류] {type(e).__name__}: {e}")
 
 @auto_update_stocks.before_loop
 async def before_loop():

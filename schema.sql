@@ -277,6 +277,16 @@ CREATE TABLE IF NOT EXISTS coin_holdings (
     amount  NUMERIC NOT NULL,                      -- 보유 코인 (소수점 가능)
     spent   NUMERIC NOT NULL                       -- 지금 가진 코인에 쓴 토큰 (평균 단가 / 손익 계산용)
 );
+-- 코인 채굴 (features/mining.py). 블록 수 / 액면 조정 배율 / 마지막 블록 시각은 bot_state 에
+CREATE TABLE IF NOT EXISTS miners (
+    user_id     BIGINT  PRIMARY KEY,
+    rigs        INT[]   NOT NULL DEFAULT '{}',     -- 채굴기마다 레벨 (최대 3대)
+    running     BOOLEAN NOT NULL DEFAULT FALSE,    -- 채굴 켜짐
+    mined       NUMERIC NOT NULL DEFAULT 0,        -- 지금까지 캔 코인 (액면 조정 반영)
+    power_paid  NUMERIC NOT NULL DEFAULT 0,        -- 지금까지 낸 전기세 (byte)
+    last_reward NUMERIC NOT NULL DEFAULT 0,        -- 마지막 블록에서 받은 코인
+    note        TEXT                               -- 전기세가 없어서 꺼졌을 때 안내
+);
 
 
 -- ───────────── 끝말잇기 랭킹 ─────────────

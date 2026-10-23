@@ -246,6 +246,7 @@ async def receive(user_id, amount, conn=None) -> dict:
 #   stock_buy / stock_sell / chart
 #   gamble / rps / quiz / wordchain / token_buy
 #   market_buy / market_sell (암시장, 판매 쪽은 수수료 뺀 금액) / market_fee
+#   mining_rig (채굴기 구매 / 업그레이드) / mining_power (채굴 전기세)
 async def log_money(user_id, source: str, amount, memo: str | None = None, conn=None) -> None:
     """돈이 바뀐 기록을 남긴다. 돈을 바꾼 것과 같은 conn 으로 부르면 함께 취소/저장된다."""
     if not amount:
@@ -268,6 +269,7 @@ async def bankrupt(user_id, day: datetime.date, conn=None) -> None:
         await c.execute("DELETE FROM enhance_items WHERE user_id = $1", uid)
         await c.execute("DELETE FROM enhance_abilities WHERE user_id = $1", uid)
         await c.execute("DELETE FROM market_listings WHERE seller_id = $1", uid)  # 암시장에 맡긴 아이템도
+        await c.execute("DELETE FROM miners WHERE user_id = $1", uid)             # 채굴기도
         await update_user(
             uid, c, money=0, unpaid_amount=0, deposit_amount=0, deposit_start=None,
             bankruptcy_date=day,
@@ -934,6 +936,7 @@ async def rescale_coin(factor: float) -> None:
     async with transaction() as conn:
         await conn.execute("UPDATE coin_history SET price = price * $1", _num(factor))
         await conn.execute("UPDATE coin_holdings SET amount = amount / $1", _num(factor))
+        await conn.execute("UPDATE miners SET mined = mined / $1, last_reward = last_reward / $1", _num(factor))
 
 
 async def get_coin_holding(user_id, conn=None) -> dict:
@@ -960,6 +963,39 @@ async def set_coin_holding(user_id, amount: float, spent: float, conn=None) -> N
 async def all_coin_holdings() -> list[dict]:
     rows = await pool().fetch("SELECT user_id, amount, spent FROM coin_holdings")
     return [{"user_id": r["user_id"], "amount": float(r["amount"]), "spent": float(r["spent"])} for r in rows]
+
+
+# ───────────── 코인 채굴 (features/mining.py) ─────────────
+
+def _miner(row) -> dict:
+    return {
+        "user_id": row["user_id"], "rigs": list(row["rigs"]), "running": row["running"],
+        "mined": float(row["mined"]), "power_paid": float(row["power_paid"]),
+        "last_reward": float(row["last_reward"]), "note": row["note"],
+    }
+
+
+MINER_DEFAULT = {"rigs": [], "running": False, "mined": 0.0, "power_paid": 0.0, "last_reward": 0.0, "note": None}
+
+
+async def get_miner(user_id, conn=None) -> dict:
+    row = await (conn or pool()).fetchrow("SELECT * FROM miners WHERE user_id = $1", int(user_id))
+    return _miner(row) if row else {"user_id": int(user_id), **MINER_DEFAULT, "rigs": []}
+
+
+async def all_miners(conn=None) -> list[dict]:
+    rows = await (conn or pool()).fetch("SELECT * FROM miners WHERE cardinality(rigs) > 0")
+    return [_miner(r) for r in rows]
+
+
+async def update_miner(user_id, conn=None, **fields) -> None:
+    """miners 행 일부를 바꾼다. 행이 없으면 만든다. (mined / power_paid / last_reward 는 숫자)"""
+    columns = list(fields)
+    values = [_num(v) if c in ("mined", "power_paid", "last_reward") else v for c, v in fields.items()]
+    sets = ", ".join(f"{c} = ${i}" for i, c in enumerate(columns, start=2))
+    c = conn or pool()
+    await c.execute("INSERT INTO miners (user_id) VALUES ($1) ON CONFLICT DO NOTHING", int(user_id))
+    await c.execute(f"UPDATE miners SET {sets} WHERE user_id = $1", int(user_id), *values)
 
 
 # ───────────── 끝말잇기 랭킹 ─────────────
@@ -1030,7 +1066,7 @@ RESET_TABLES = [
     "users", "loans", "enhance_items", "enhance_abilities", "inventory",
     "stocks", "price_history", "portfolio", "stock_positions", "stock_notices", "market_state",
     "warnings", "warning_logs", "suggestions", "news", "wordchain_records", "money_log",
-    "market_listings", "market_trades", "coin_price", "coin_history", "coin_holdings",
+    "market_listings", "market_trades", "coin_price", "coin_history", "coin_holdings", "miners",
 ]
 
 

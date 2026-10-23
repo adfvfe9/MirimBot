@@ -1,6 +1,7 @@
 """아이템 강화 (피파 인생강화 스타일)
 
-    %강화 <이름> [목표]   아이템 제작(1만) / 강화 패널 열기. 목표를 쓰면 [목표까지 자동] 버튼이 생긴다.
+    %강화 <이름> [목표] [제물 ...]   아이템 제작(1만) / 강화 패널 열기. 목표를 쓰면 [목표까지 자동] 버튼이 생긴다.
+                                    제물을 쓰면 다음 한 번의 강화 성공률이 오르고 제물은 사라진다. (sacrifice_mult)
     %강화판매 <이름>      판매가에 팔기
     %강화목록 [@유저]     보유 아이템
     %강화랭킹             서버 전체 최고 강화 아이템
@@ -64,18 +65,29 @@ SELL_PRICE = {
 
 # ───────────── 계산 ─────────────
 
-def outcome_chances(level):
-    """지금 레벨에서 누를 때 결과별 확률(%): (성공, 유지, 하락, 파괴)"""
+def outcome_chances(level, mult=1.0):
+    """지금 레벨에서 누를 때 결과별 확률(%): (성공, 유지, 하락, 파괴)
+    mult: 제물로 늘어난 성공률 배율 (최대 100%). 남은 실패 확률은 원래 비율대로 유지/하락/파괴로 나눈다."""
     success, (keep, down, destroy) = ENHANCE_TABLE[level + 1]
+    success = min(100, success * mult)
     fail = 100 - success
     return success, fail * keep / 100, fail * down / 100, fail * destroy / 100
 
 
-def roll(level, bonus=None):
+def sacrifice_mult(level, sacrifice_levels):
+    """제물로 늘어나는 성공률 배율. 제물마다 (제물 판매가 ÷ 강화할 아이템 판매가) 만큼 더한다.
+    같은 레벨 제물 하나면 2배. 레벨 차이(3^차이) 대신 판매가 비율을 쓰는 이유: 판매가가 위로 갈수록
+    한 단계에 7~47배씩 뛰어서, 레벨 차이로 계산하면 +11/+12 에 싼 제물을 바치는 게 돈 복사가 된다.
+    판매가 비율이면 어떤 제물을 몇 개 바쳐도 늘어나는 기대값이 제물 값보다 작다. (개수 제한 없음)"""
+    return 1 + sum(SELL_PRICE[s] / SELL_PRICE[level] for s in sacrifice_levels)
+
+
+def roll(level, bonus=None, mult=1.0):
     """한 번 굴린다. (결과, 새 레벨 또는 None, 발동한 능력 또는 None)
-    결과: 'success' | 'keep' | 'down' | 'destroy'. bonus 는 abilities.totals 결과 (대성공 / 하락 방지 / 파괴 방지)"""
+    결과: 'success' | 'keep' | 'down' | 'destroy'. bonus 는 abilities.totals 결과 (대성공 / 하락 방지 / 파괴 방지)
+    mult 는 제물 성공률 배율."""
     bonus = bonus or {}
-    success, keep, down, destroy = outcome_chances(level)
+    success, keep, down, destroy = outcome_chances(level, mult)
     result = random.choices(
         ["success", "keep", "down", "destroy"], weights=[success, keep, down, destroy]
     )[0]
@@ -92,7 +104,8 @@ def roll(level, bonus=None):
     elif result == "down" and abilities.chance(bonus.get("down_guard", 0)):
         result, new_level, special = "keep", level, "down_guard"
     elif result == "destroy" and abilities.chance(bonus.get("destroy_guard", 0)):
-        result, new_level, special = "keep", level, "destroy_guard"
+        # 파괴 대신 한 단계 하락 (하락 방지는 다시 굴리지 않는다)
+        result, new_level, special = "down", max(1, level - 1), "destroy_guard"
     return result, new_level, special
 
 
@@ -106,36 +119,60 @@ RESULT_TEXT = {
 SPECIAL_TEXT = {
     "great_success": "💥 **대성공!** 한 번에 +2",
     "down_guard": "🍀 하락 방지 발동!",
-    "destroy_guard": "🛡️ **파괴 방지 발동!**",
+    "destroy_guard": "🛡️ **파괴 방지 발동!** (파괴 대신 하락)",
 }
 
 
 def result_line(r):
-    """'✅ 강화 성공: +3 → +4  (-1,200 byte)' + 능력 발동 / 새 슬롯"""
+    """'✅ 강화 성공: +3 → +4' + 능력 발동 / 제물"""
     new_text = "파괴" if r["new"] is None else f"+{r['new']}"
     line = f"{RESULT_TEXT[r['result']]}: +{r['old']} → {new_text}"
     if r.get("special"):
         line += f"  {SPECIAL_TEXT[r['special']]}"
+    if r.get("sacrificed"):
+        names = ", ".join(f"{n} +{lv}" for n, lv in r["sacrificed"].items())
+        line += f"\n🔥 제물 {names} → 성공률 x{r['mult']:.2f}"
     return line
 
 
-async def try_enhance(user_id, item_name):
-    """한 번 강화한다. 실패하면 안내 메시지(str), 성공하면 결과 dict."""
+def check_sacrifices(items, item_name, sacrifices):
+    """제물 이름 목록이 쓸 수 있는지. 문제가 있으면 안내(str), 괜찮으면 None. items = {이름: 레벨}"""
+    if len(set(sacrifices)) != len(sacrifices):
+        return "❌ 같은 제물을 두 번 쓸 수 없어요."
+    if item_name in sacrifices:
+        return "❌ 강화할 아이템을 제물로 쓸 수 없어요."
+    missing = [s for s in sacrifices if s not in items]
+    if missing:
+        return f"❌ 제물로 쓸 아이템이 없어요: {', '.join(missing)}"
+    return None
+
+
+async def try_enhance(user_id, item_name, sacrifices=()):
+    """한 번 강화한다. sacrifices 는 제물로 바칠 아이템 이름들 (성공 여부와 상관없이 사라진다).
+    실패하면 안내 메시지(str), 성공하면 결과 dict."""
     async with db.user_tx(user_id) as conn:
-        level = (await db.get_enhance_items(user_id, conn)).get(item_name)
+        items = await db.get_enhance_items(user_id, conn)
+        level = items.get(item_name)
         if level is None:
             return "❌ 아이템이 없습니다."
         if level >= MAX_LEVEL:
             return f"🏆 이미 최고 레벨(+{MAX_LEVEL})입니다!"
+        error = check_sacrifices(items, item_name, list(sacrifices))
+        if error:
+            return error
 
         cost = ATTEMPT_COST[level]
         money = await db.get_money(user_id, conn)
         if money < cost:
             return f"💸 돈이 부족합니다. (필요: {num(cost)} byte / 보유: {num(money)} byte)"
 
-        result, new_level, special = roll(level, await abilities.totals(user_id, conn))
+        mult = sacrifice_mult(level, [items[s] for s in sacrifices])
+        for s in sacrifices:
+            await db.delete_enhance_item(user_id, s, conn)   # 붙어 있던 능력도 같이 사라진다
+        result, new_level, special = roll(level, await abilities.totals(user_id, conn), mult)
         await db.update_user(user_id, conn, money=money - cost)
-        await db.log_money(user_id, "enhance_try", -cost, f"+{level} → {result}", conn)
+        memo = f"+{level} → {result}" + (f" (제물 {len(sacrifices)}개, x{mult:.2f})" if sacrifices else "")
+        await db.log_money(user_id, "enhance_try", -cost, memo, conn)
         opened = []
         if new_level is None:
             await db.delete_enhance_item(user_id, item_name, conn)
@@ -149,6 +186,8 @@ async def try_enhance(user_id, item_name):
         "new": new_level,
         "special": special,
         "opened": opened,
+        "sacrificed": {s: items[s] for s in sacrifices},
+        "mult": mult,
         "cost": cost,
         "balance": money - cost,
     }
@@ -216,12 +255,13 @@ async def announce(channel, user, item_name, result, old, new):
 class EnhanceView(View):
     """%강화 로 열리는 패널. 누른 결과가 같은 메시지에 계속 갱신된다."""
 
-    def __init__(self, ctx, item_name, target):
+    def __init__(self, ctx, item_name, target, sacrifices=None):
         super().__init__(timeout=180)
         self.ctx = ctx
         self.user_id = ctx.author.id
         self.item_name = item_name
         self.target = target
+        self.sacrifices = sacrifices or {}   # {제물 이름: 레벨} — 다음 한 번의 강화에 쓰이고 사라진다
         self.level = None          # None = 아직 없음(제작 전) 또는 파괴됨
         self.destroyed = False
         self.last = ""             # 마지막 결과 메시지
@@ -260,7 +300,14 @@ class EnhanceView(View):
         embed.add_field(name="보유 금액", value=f"{num(money)} byte", inline=True)
 
         if self.level < MAX_LEVEL:
-            success, keep, down, destroy = outcome_chances(self.level)
+            mult = sacrifice_mult(self.level, self.sacrifices.values())
+            if self.sacrifices:
+                embed.add_field(
+                    name=f"🔥 제물 (다음 강화 한 번에 쓰이고 사라져요) → 성공률 x{mult:.2f}",
+                    value=", ".join(f"{n} +{lv}" for n, lv in self.sacrifices.items()),
+                    inline=False
+                )
+            success, keep, down, destroy = outcome_chances(self.level, mult)
             lines = [f"✅ 성공 **{num(success)}%** → +{self.level + 1} ({num(SELL_PRICE[self.level + 1])} byte)"]
             if keep:
                 lines.append(f"⚪ 유지 {num(keep)}%")
@@ -322,10 +369,20 @@ class EnhanceView(View):
             self.last = f"🛠️ **{self.item_name} +1** 제작 완료! (-{num(CRAFT_COST)} byte)"
         await self.refresh(interaction)
 
+    async def enhance_once(self):
+        """제물이 있으면 이번 한 번에 쓰고 비운다. (제물이 그사이 없어졌으면 제물만 비우고 안내)"""
+        r = await try_enhance(self.user_id, self.item_name, list(self.sacrifices))
+        if isinstance(r, str) and self.sacrifices and "제물" in r:
+            self.sacrifices = {}
+            return r + "\n제물을 비웠어요. 다시 누르면 제물 없이 강화해요."
+        if not isinstance(r, str):
+            self.sacrifices = {}
+        return r
+
     async def on_enhance(self, interaction):
         await respond.defer(interaction)
         self.sell_armed = False
-        r = await try_enhance(self.user_id, self.item_name)
+        r = await self.enhance_once()
         if isinstance(r, str):
             self.last = r
             await self.refresh(interaction)
@@ -346,7 +403,7 @@ class EnhanceView(View):
         while tries < AUTO_MAX_TRIES:
             if self.level is None or self.level >= self.target:
                 break
-            r = await try_enhance(self.user_id, self.item_name)
+            r = await self.enhance_once()   # 제물은 첫 번째 시도에만
             if isinstance(r, str):
                 stop = r
                 break
@@ -415,23 +472,43 @@ class EnhanceView(View):
 
 
 @client.command(aliases=["강화"])
-async def enhance(ctx, item_name: str = None, target: int = None):
+async def enhance(ctx, item_name: str = None, *args: str):
+    """%강화 <이름> [목표] [제물 이름 ...]  — 목표는 숫자일 때만, 나머지는 전부 제물"""
     if item_name is None:
         await ctx.send(
             "아이템 이름을 입력해주세요!\n"
             "예: `%강화 칼` (없으면 제작, 있으면 강화)\n"
             "목표까지 자동: `%강화 칼 7`\n"
+            "제물 바치기: `%강화 칼 방패 창` (제물마다 성공률 +(제물 판매가 ÷ 칼 판매가), 같은 레벨이면 2배)\n"
             "확률표: `%강화확률`"
         )
         return
     if len(item_name) > NAME_MAX_LEN:
         await ctx.send(f"❌ 아이템 이름은 {NAME_MAX_LEN}자까지예요.")
         return
+    target = None
+    if args and args[0].isdigit():
+        target, args = int(args[0]), args[1:]
     if target is not None and not 2 <= target <= MAX_LEVEL:
         await ctx.send(f"❌ 목표 레벨은 +2 ~ +{MAX_LEVEL} 사이로 입력해주세요.")
         return
 
-    view = EnhanceView(ctx, item_name, target)
+    sacrifices = {}
+    if args:
+        items = await db.get_enhance_items(ctx.author.id)
+        if item_name not in items:
+            await ctx.send(f"❌ 제물은 이미 있는 아이템을 강화할 때만 쓸 수 있어요. (`{item_name}` 없음)")
+            return
+        if items[item_name] >= MAX_LEVEL:
+            await ctx.send(f"🏆 `{item_name}`은(는) 이미 최고 레벨이라 제물을 쓸 수 없어요.")
+            return
+        error = check_sacrifices(items, item_name, list(args))
+        if error:
+            await ctx.send(error)
+            return
+        sacrifices = {name: items[name] for name in args}
+
+    view = EnhanceView(ctx, item_name, target, sacrifices)
     await view.load()
     view.build_buttons()
     view.message = await ctx.send(embed=await view.make_embed(), view=view)
@@ -566,5 +643,8 @@ async def enhance_odds(ctx):
     embed = discord.Embed(title="🎲 강화 확률표", color=discord.Color.blurple())
     embed.add_field(name="강화 확률 / 비용 (byte)", value="```" + "\n".join(lines) + "```", inline=False)
     embed.add_field(name="판매가 (byte)", value="```" + prices + "```", inline=False)
-    embed.set_footer(text=f"제작비 {num(CRAFT_COST)} byte · 1인 최대 {MAX_ITEMS}개 · +{ANNOUNCE_LEVEL} 이상은 공지됩니다")
+    embed.set_footer(
+        text=f"제작비 {num(CRAFT_COST)} byte · 1인 최대 {MAX_ITEMS}개 · +{ANNOUNCE_LEVEL} 이상은 공지됩니다\n"
+             "🔥 제물: %강화 <이름> <제물...> → 제물마다 성공률 +(제물 판매가 ÷ 아이템 판매가), 같은 레벨이면 2배"
+    )
     await ctx.send(embed=embed)

@@ -8,8 +8,9 @@
 - 아이템 레벨이 높을수록 좋은 등급이 잘 나온다. 수치는 등급 범위 안에서 랜덤이다.
 - 같은 능력은 모든 아이템에서 합쳐지지만, 능력마다 상한이 있다.
 - 레벨이 떨어지면 그 위 슬롯은 꺼지기만 하고 남는다. 아이템을 팔거나 파괴되면 능력도 사라진다.
-- 강화 확률을 바꾸는 능력(대성공 / 하락 방지 / 파괴 방지)의 상한은 시뮬레이션으로 정했다.
+- 강화 확률을 바꾸는 능력(대성공 / 하락 방지)의 상한은 계산으로 정했다.
   판매가가 레벨마다 크게 뛰어서, 확률을 조금만 올려도 "강화해서 팔기"가 돈 복사가 된다.
+  파괴 방지는 "파괴 대신 한 단계 하락"이라 100% 가 돼도 괜찮아서 상한이 사실상 없다. (100% = 파괴 없음)
   지금 상한을 전부 채워도 어느 레벨에서든 한 번 누르는 기대값이 판매가보다 작다.
 """
 import random
@@ -48,9 +49,9 @@ ABILITIES = {
     "great_success": dict(emoji="💥", name="대성공", unit="%", decimals=1, cap=10,
                           ranges=((1, 2), (2, 3), (3, 5), (5, 7)),
                           desc=f"강화에 성공하면 확률로 +2 (결과가 +{GREAT_SUCCESS_MAX_LEVEL} 이하일 때만)"),
-    "destroy_guard": dict(emoji="🛡️", name="파괴 방지", unit="%", decimals=1, cap=20,
+    "destroy_guard": dict(emoji="🛡️", name="파괴 방지", unit="%", decimals=1, cap=100,
                           ranges=((1, 3), (3, 6), (6, 10), (10, 15)),
-                          desc="파괴될 때 확률로 레벨 유지"),
+                          desc="파괴될 때 확률로 파괴 대신 한 단계 하락"),
     "down_guard":    dict(emoji="🍀", name="하락 방지", unit="%", decimals=1, cap=15,
                           ranges=((1, 2), (2, 4), (4, 7), (7, 10)),
                           desc="레벨이 떨어질 때 확률로 레벨 유지"),
@@ -74,9 +75,9 @@ ABILITIES = {
     "gamble_refund": dict(emoji="🎰", name="도박 꽝 환급", unit="%", decimals=1, cap=8,
                           ranges=((1, 2), (2, 3), (3, 5), (5, 7)),
                           desc="도박이 꽝이면 판돈의 일부를 돌려받기"),
-    "wordchain_time": dict(emoji="⌛", name="끝말잇기 시간", unit="초", decimals=0, cap=10,
-                           ranges=((1, 2), (2, 3), (3, 5), (5, 8)),
-                           desc="끝말잇기 한 턴 입력 시간 증가"),
+    "wordchain_limit": dict(emoji="📅", name="끝말잇기 하루 한도", unit="%", decimals=1, cap=100,
+                            ranges=((3, 8), (8, 15), (15, 25), (25, 40)),
+                            desc="끝말잇기로 하루에 벌 수 있는 최대 금액(1.5만) 증가"),
     "quiz_token":    dict(emoji="🪙", name="퀴즈 토큰 확률", unit="%p", decimals=1, cap=25,
                           ranges=((2, 4), (4, 7), (7, 11), (11, 16)),
                           desc="퀴즈를 맞히면 토큰을 받을 확률 증가"),
@@ -86,7 +87,7 @@ ABILITIES = {
                           desc="기초수급 지급액 증가"),
     "wordchain_bonus": dict(emoji="🔤", name="끝말잇기 보상", unit="%", decimals=1, cap=100,
                             ranges=((3, 8), (8, 15), (15, 25), (25, 40)),
-                            desc="끝말잇기 보상과 하루 한도 증가"),
+                            desc="끝말잇기 단어당 보상 증가 (하루 한도는 📅 능력)"),
 }
 
 

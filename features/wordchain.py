@@ -249,14 +249,13 @@ playing: set[int] = set()   # 지금 끝말잇기 중이거나 대기방에 있�
 
 
 async def daily_max(user_id, conn=None) -> float:
-    """하루 끝말잇기 보상 한도 (🔤 끝말잇기 보상 능력만큼 늘어난다)"""
-    return DAILY_MAX * (1 + await abilities.total(user_id, "wordchain_bonus", conn) / 100)
+    """하루 끝말잇기 보상 한도 (📅 끝말잇기 하루 한도 능력만큼 늘어난다)"""
+    return DAILY_MAX * (1 + await abilities.total(user_id, "wordchain_limit", conn) / 100)
 
 
-async def player_bonus(user_id):
-    """(보상 배율, 한 턴 제한 시간) — 🔤 끝말잇기 보상 / ⌛ 끝말잇기 시간 능력"""
-    bonus = await abilities.totals(user_id)
-    return 1 + bonus.get("wordchain_bonus", 0) / 100, TURN_SECONDS + bonus.get("wordchain_time", 0)
+async def reward_bonus(user_id) -> float:
+    """단어당 보상 배율 (🔤 끝말잇기 보상 능력)"""
+    return 1 + await abilities.total(user_id, "wordchain_bonus") / 100
 
 
 async def remaining_today(user_id) -> float:
@@ -542,10 +541,8 @@ def add_bot_word(embed, word, mission, seconds=TURN_SECONDS):
 async def play_solo(channel, user, remaining, difficulty="normal", practice=False):
     d = DIFFICULTIES[difficulty]
     ranked = difficulty in RANKED and not practice
-    reward_mult, seconds = await player_bonus(user.id)
-    mult = d["mult"] * reward_mult
-    if ranked:
-        seconds = TURN_SECONDS  # 랭킹 판은 공평하게 ⌛ 끝말잇기 시간 능력을 쓰지 않는다
+    mult = d["mult"] * await reward_bonus(user.id)
+    seconds = TURN_SECONDS
     used: set[str] = set()
     count = 0
     earned = 0
@@ -832,8 +829,7 @@ async def play_multi(channel, players):
     random.shuffle(players)
     alive = list(players)
     remaining = {p.id: await remaining_today(p.id) for p in players}
-    # 🔤 끝말잇기 보상 능력만 적용 (⌛ 시간 능력은 친구끼리 겨루는 판이라 쓰지 않는다)
-    reward_mult = {p.id: (await player_bonus(p.id))[0] for p in players}
+    reward_mult = {p.id: await reward_bonus(p.id) for p in players}   # 🔤 끝말잇기 보상 능력
     earned = {p.id: 0 for p in players}
     counts = {p.id: 0 for p in players}
     out = []   # 탈락한 순서

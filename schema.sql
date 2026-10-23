@@ -140,6 +140,30 @@ CREATE TABLE IF NOT EXISTS market_trades (
 );
 CREATE INDEX IF NOT EXISTS market_trades_level_idx ON market_trades (level, id);
 
+-- v1.3.1: ⌛ 끝말잇기 시간(wordchain_time) 능력을 📅 끝말잇기 하루 한도(wordchain_limit)로 바꿨다.
+-- 같은 등급 안에서의 위치를 그대로 옮긴다. (예: 영웅 4초 = 3~5초의 가운데 → 영웅 15~25% 의 가운데 20%)
+-- 이미 바뀌었으면 아무 일도 안 한다.
+UPDATE enhance_abilities SET ability = 'wordchain_limit', value = ROUND(CASE tier
+        WHEN 0 THEN 3  + (value - 1) / 1 * 5
+        WHEN 1 THEN 8  + (value - 2) / 1 * 7
+        WHEN 2 THEN 15 + (value - 3) / 2 * 10
+        ELSE        25 + (value - 5) / 3 * 15
+    END, 1)
+WHERE ability = 'wordchain_time';
+
+UPDATE market_listings SET abilities = (
+    SELECT jsonb_agg(CASE WHEN e->>'ability' = 'wordchain_time' THEN e || jsonb_build_object(
+        'ability', 'wordchain_limit',
+        'value', ROUND(CASE (e->>'tier')::int
+            WHEN 0 THEN 3  + ((e->>'value')::numeric - 1) / 1 * 5
+            WHEN 1 THEN 8  + ((e->>'value')::numeric - 2) / 1 * 7
+            WHEN 2 THEN 15 + ((e->>'value')::numeric - 3) / 2 * 10
+            ELSE        25 + ((e->>'value')::numeric - 5) / 3 * 15
+        END, 1)) ELSE e END)
+    FROM jsonb_array_elements(abilities) e
+)
+WHERE abilities @> '[{"ability": "wordchain_time"}]';
+
 CREATE TABLE IF NOT EXISTS inventory (                -- items.json (상점에서 산 아이템)
     user_id   BIGINT NOT NULL,
     item_name TEXT   NOT NULL,

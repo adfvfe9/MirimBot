@@ -861,6 +861,33 @@ async def is_suggestion_admin(user_id) -> bool:
     )
 
 
+# ───────────── TTS 줄임말 (features/tts.py, %줄임말설정) ─────────────
+
+async def tts_abbrevs(guild_id) -> list:
+    """서버의 줄임말 [{word, reading, set_by}] (글자 순)"""
+    rows = await pool().fetch(
+        "SELECT word, reading, set_by FROM tts_abbrevs WHERE guild_id = $1 ORDER BY word", int(guild_id)
+    )
+    return [dict(r) for r in rows]
+
+
+async def set_tts_abbrev(guild_id, word: str, reading: str, user_id) -> None:
+    await pool().execute(
+        """
+        INSERT INTO tts_abbrevs (guild_id, word, reading, set_by) VALUES ($1, $2, $3, $4)
+        ON CONFLICT (guild_id, word) DO UPDATE SET reading = EXCLUDED.reading, set_by = EXCLUDED.set_by
+        """,
+        int(guild_id), word, reading, int(user_id),
+    )
+
+
+async def delete_tts_abbrev(guild_id, word: str) -> bool:
+    result = await pool().execute(
+        "DELETE FROM tts_abbrevs WHERE guild_id = $1 AND word = $2", int(guild_id), word
+    )
+    return result != "DELETE 0"
+
+
 # ───────────── 봇 운영 상태 (key-value) ─────────────
 
 async def get_state(key: str) -> str | None:

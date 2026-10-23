@@ -19,6 +19,8 @@
   features/crypto.py       비트코인 (토큰으로 거래)
   features/mining.py       코인 채굴 (1시간마다 블록)
   features/music.py        음악 (%재생, 유튜브 → 통화방)
+  features/tts.py          TTS (%읽어, 채팅을 통화방에서 읽기 · %나가)
+  features/voice.py        통화방 들어가기 / 나가기, 음악과 TTS 소리 섞기
   features/moderation.py   경고
   features/suggestions.py  건의
   features/admin.py        전체 초기화
@@ -56,6 +58,7 @@ from features import (  # noqa: F401
     suggestions,
     titles,
     tokens,
+    tts,
     wordchain,
 )
 

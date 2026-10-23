@@ -370,6 +370,17 @@ CREATE INDEX IF NOT EXISTS asset_history_time_idx ON asset_history (recorded_at)
 CREATE INDEX IF NOT EXISTS money_log_user_idx ON money_log (user_id, created_at);
 
 
+-- ───────────── TTS ─────────────
+-- 서버마다 글자 / 초성 / 기호를 어떻게 읽을지 (%줄임말설정). 게임 데이터가 아니라서 %초기화 로 지워지지 않는다
+CREATE TABLE IF NOT EXISTS tts_abbrevs (
+    guild_id BIGINT NOT NULL,
+    word     TEXT   NOT NULL,     -- 소문자로 저장 (영어는 대소문자 구분 없이 바꾼다)
+    reading  TEXT   NOT NULL,     -- 빈 글이면 안 읽는다
+    set_by   BIGINT NOT NULL,
+    PRIMARY KEY (guild_id, word)
+);
+
+
 -- ───────────── 봇 운영 상태 ─────────────
 -- 서버 연장 알림처럼 봇 자체가 기억해야 하는 값. (%초기화 로 지워지지 않는다)
 CREATE TABLE IF NOT EXISTS bot_state (

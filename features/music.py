@@ -3,7 +3,7 @@
     %재생 <유튜브 링크 | 제목>   호출한 사람이 있는 통화방에 들어가서 재생 (재생 중이면 대기열에 추가)
     %스킵                       지금 곡 넘기기
     %일시정지 / %다시재생
-    %정지                       재생을 멈추고 대기열을 비운 뒤 나가기 (%나가기)
+    %정지                       재생을 멈추고 대기열 비우기 (TTS 를 안 쓰고 있으면 나간다)
     %대기열                     지금 곡과 다음 곡들
     %지금곡                     지금 곡 정보 + 버튼 (⏯️ ⏭️ ⏹️)
     %볼륨 [0~100]
@@ -13,7 +13,8 @@
   (서버에 ffmpeg 가 있으면 그걸 먼저 쓴다)
 - 유튜브 재생 주소는 몇 시간 뒤 만료돼서, 대기열에는 영상 주소만 넣고 재생할 때 다시 받아온다.
 - 조작(스킵 / 정지 등)은 봇과 같은 통화방에 있는 사람만 할 수 있다.
-- 대기열이 끝나고 5분 동안 아무것도 안 틀거나, 통화방에 봇만 남으면 나간다.
+- 대기열이 끝나고 5분 동안 아무것도 안 틀거나 (TTS 를 쓰는 중이면 남는다), 통화방에 봇만 남으면 나간다.
+- 소리는 voice.py 의 Mixer 로 내보내서 TTS(tts.py) 와 동시에 들린다. 통화방 나가기는 %나가 (tts.py)
 """
 import asyncio
 import functools
@@ -26,6 +27,7 @@ from discord.ui import Button, View
 
 import respond
 from bot import client
+from features import voice
 
 QUEUE_MAX = 50
 MAX_DURATION = 3 * 60 * 60     # 3시간보다 긴 영상은 안 받는다 (라이브 방송 포함)
@@ -44,6 +46,7 @@ FFMPEG_BEFORE = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"   # 
 FFMPEG_OPTIONS = "-vn"
 
 
+@functools.cache
 def ffmpeg_path():
     found = shutil.which("ffmpeg")
     if found:
@@ -102,6 +105,14 @@ class Player:
     def voice(self):
         return self.guild.voice_client
 
+    @property
+    def mixer(self):
+        return voice.mixer_of(self.guild)
+
+    @property
+    def paused(self):
+        return self.mixer.music_paused
+
     async def play_next(self):
         if self.voice is None or not self.voice.is_connected():
             return
@@ -114,20 +125,16 @@ class Player:
         if info is None or not info.get("url"):
             await self.say(f"⚠️ **{track.title}** 을(를) 재생할 수 없어서 넘겼어요.")
             return await self.play_next()
-        source = discord.PCMVolumeTransformer(
-            discord.FFmpegPCMAudio(info["url"], executable=ffmpeg_path(),
-                                   before_options=FFMPEG_BEFORE, options=FFMPEG_OPTIONS),
-            volume=self.volume,
-        )
+        if self.voice is None:      # 노래를 받는 사이에 나갔다
+            return
+        source = discord.FFmpegPCMAudio(info["url"], executable=ffmpeg_path(),
+                                        before_options=FFMPEG_BEFORE, options=FFMPEG_OPTIONS)
         self.current = track
         self.cancel_idle_timer()
-
-        def after(error):
-            if error:
-                print(f"[음악] 재생 오류: {error}")
-            asyncio.run_coroutine_threadsafe(self.play_next(), client.loop)
-
-        self.voice.play(source, after=after)
+        mixer = self.mixer
+        mixer.music_volume = self.volume
+        mixer.on_music_end = lambda: asyncio.create_task(self.play_next())
+        mixer.set_music(source)
         await self.say(embed=now_playing_embed(self), view=ControlView(self))
 
     async def say(self, content=None, **kwargs):
@@ -148,16 +155,32 @@ class Player:
 
     async def leave_when_idle(self):
         await asyncio.sleep(IDLE_SECONDS)
-        if self.voice and not self.voice.is_playing() and not self.voice.is_paused():
+        if self.voice and self.current is None and not voice.busy(self.guild):
             await self.say(f"💤 {IDLE_SECONDS // 60}분 동안 재생할 노래가 없어서 나갈게요.")
-            await self.stop()
+            await voice.leave(self.guild)
 
-    async def stop(self):
+    def pause(self):
+        self.mixer.music_paused = True
+
+    def resume(self):
+        self.mixer.music_paused = False
+        self.mixer.kick()
+
+    def skip(self):
+        self.mixer.stop_music(notify=True)    # 끝까지 들은 것처럼 → 다음 곡
+
+    def reset(self):
         self.queue.clear()
         self.current = None
         self.cancel_idle_timer()
-        if self.voice:
-            await self.voice.disconnect(force=True)
+
+    async def stop(self):
+        """음악만 멈춘다. 통화방에서 다른 것(TTS)을 안 쓰고 있으면 나간다"""
+        self.reset()
+        if mixer := voice.mixers.get(self.guild.id):
+            mixer.stop_music()
+        if self.voice and not voice.busy(self.guild):
+            await voice.leave(self.guild)
 
 
 players = {}
@@ -167,6 +190,26 @@ def get_player(guild):
     if guild.id not in players:
         players[guild.id] = Player(guild)
     return players[guild.id]
+
+
+def music_in_use(guild):
+    player = players.get(guild.id)
+    return bool(player and (player.current or player.queue))
+
+
+def on_leave(guild):
+    if player := players.get(guild.id):
+        player.reset()
+
+
+async def on_alone(guild):
+    if music_in_use(guild):
+        await players[guild.id].say("👋 통화방에 아무도 없어서 나갈게요.")
+
+
+voice.in_use.append(music_in_use)
+voice.on_leave.append(on_leave)
+voice.alone_hooks.append(on_alone)
 
 
 def now_playing_embed(player):
@@ -185,11 +228,6 @@ def now_playing_embed(player):
     return embed
 
 
-def same_channel(member, player):
-    """조작하는 사람이 봇과 같은 통화방에 있는지"""
-    return bool(player.voice and member.voice and member.voice.channel == player.voice.channel)
-
-
 class ControlView(View):
     def __init__(self, player):
         super().__init__(timeout=None)
@@ -200,31 +238,31 @@ class ControlView(View):
             self.add_item(button)
 
     async def interaction_check(self, interaction):
-        if not same_channel(interaction.user, self.player):
+        if not voice.same_channel(interaction.user, self.player.guild):
             await respond.reply(interaction, "🎧 봇과 같은 통화방에 있어야 조작할 수 있어요.", ephemeral=True)
             return False
         return True
 
     async def pause_resume(self, interaction):
-        voice = self.player.voice
-        if voice.is_paused():
-            voice.resume()
-            await respond.reply(interaction, f"▶️ {interaction.user.display_name}님이 다시 재생했어요.")
-        elif voice.is_playing():
-            voice.pause()
-            await respond.reply(interaction, f"⏸️ {interaction.user.display_name}님이 일시정지했어요.")
-        else:
+        player = self.player
+        if player.current is None:
             await respond.reply(interaction, "재생 중인 노래가 없어요.", ephemeral=True)
+        elif player.paused:
+            player.resume()
+            await respond.reply(interaction, f"▶️ {interaction.user.display_name}님이 다시 재생했어요.")
+        else:
+            player.pause()
+            await respond.reply(interaction, f"⏸️ {interaction.user.display_name}님이 일시정지했어요.")
 
     async def skip(self, interaction):
-        if self.player.voice.is_playing() or self.player.voice.is_paused():
+        if self.player.current:
             await respond.reply(interaction, f"⏭️ {interaction.user.display_name}님이 넘겼어요.")
-            self.player.voice.stop()     # after 콜백이 다음 곡을 튼다
+            self.player.skip()
         else:
             await respond.reply(interaction, "재생 중인 노래가 없어요.", ephemeral=True)
 
     async def stop(self, interaction):
-        await respond.reply(interaction, f"⏹️ {interaction.user.display_name}님이 재생을 멈췄어요. 안녕!")
+        await respond.reply(interaction, f"⏹️ {interaction.user.display_name}님이 재생을 멈췄어요.")
         await self.player.stop()
 
 
@@ -238,7 +276,7 @@ async def check_control(ctx):
     if player.voice is None:
         await ctx.send("🎧 지금 재생 중이 아니에요. `%재생 <제목>`으로 틀어보세요!")
         return None
-    if not same_channel(ctx.author, player):
+    if not voice.same_channel(ctx.author, ctx.guild):
         await ctx.send("🎧 봇과 같은 통화방에 있어야 조작할 수 있어요.")
         return None
     return player
@@ -256,11 +294,9 @@ async def music_play(ctx, *, query: str = None):
         return
     player = get_player(ctx.guild)
     target = ctx.author.voice.channel
-    if player.voice and player.voice.channel != target:
-        if player.voice.is_playing() or player.voice.is_paused() or player.queue:
-            await ctx.send(f"🎧 지금 **{player.voice.channel.name}**에서 재생 중이에요. 그 통화방으로 와주세요!")
-            return
-        await player.voice.move_to(target)
+    if player.voice and player.voice.channel != target and voice.busy(ctx.guild):
+        await ctx.send(f"🎧 지금 **{player.voice.channel.name}**에서 쓰는 중이에요. 그 통화방으로 와주세요!")
+        return
     if len(player.queue) >= QUEUE_MAX:
         await ctx.send(f"❌ 대기열은 {QUEUE_MAX}곡까지예요.")
         return
@@ -274,16 +310,13 @@ async def music_play(ctx, *, query: str = None):
         await ctx.send(f"❌ 라이브 방송이나 {MAX_DURATION // 3600}시간이 넘는 영상은 재생할 수 없어요.")
         return
 
-    if player.voice is None:
-        try:
-            await target.connect(self_deaf=True)
-        except (discord.ClientException, asyncio.TimeoutError) as e:
-            await ctx.send(f"❌ 통화방에 들어가지 못했어요. ({type(e).__name__})")
-            return
+    if error := await voice.join(target):
+        await ctx.send(f"❌ 통화방에 들어가지 못했어요. ({error})")
+        return
     player.channel = ctx.channel
     track = Track(info, ctx.author)
     player.queue.append(track)
-    if player.voice.is_playing() or player.voice.is_paused():
+    if player.current:
         await ctx.send(f"➕ 대기열 {len(player.queue)}번에 추가: **{track.title}** ({fmt_time(track.duration)})")
     else:
         await player.play_next()
@@ -294,36 +327,39 @@ async def music_skip(ctx):
     player = await check_control(ctx)
     if player is None:
         return
-    if not (player.voice.is_playing() or player.voice.is_paused()):
+    if player.current is None:
         await ctx.send("재생 중인 노래가 없어요.")
         return
-    await ctx.send(f"⏭️ **{player.current.title if player.current else '지금 곡'}** 을(를) 넘겼어요.")
-    player.voice.stop()
+    await ctx.send(f"⏭️ **{player.current.title}** 을(를) 넘겼어요.")
+    player.skip()
 
 
 @client.command(aliases=["일시정지", "pause"])
 async def music_pause(ctx):
     player = await check_control(ctx)
-    if player and player.voice.is_playing():
-        player.voice.pause()
+    if player and player.current and not player.paused:
+        player.pause()
         await ctx.send("⏸️ 일시정지했어요. `%다시재생`으로 이어서 들을 수 있어요.")
 
 
 @client.command(aliases=["다시재생", "resume"])
 async def music_resume(ctx):
     player = await check_control(ctx)
-    if player and player.voice.is_paused():
-        player.voice.resume()
+    if player and player.current and player.paused:
+        player.resume()
         await ctx.send("▶️ 다시 재생해요.")
 
 
-@client.command(aliases=["정지", "나가기", "stop"])
+@client.command(aliases=["정지", "stop"])
 async def music_stop(ctx):
     player = await check_control(ctx)
     if player is None:
         return
     await player.stop()
-    await ctx.send("⏹️ 재생을 멈추고 나왔어요.")
+    if player.voice:
+        await ctx.send("⏹️ 노래를 멈추고 대기열을 비웠어요. (TTS 는 계속 읽어요. 나가려면 `%나가`)")
+    else:
+        await ctx.send("⏹️ 재생을 멈추고 나왔어요.")
 
 
 @client.command(aliases=["대기열", "queue", "q"])
@@ -369,24 +405,6 @@ async def music_volume(ctx, value: int = None):
         await ctx.send("❌ 0~100 사이로 입력해주세요.")
         return
     player.volume = value / 100
-    if player.voice.source and isinstance(player.voice.source, discord.PCMVolumeTransformer):
-        player.voice.source.volume = player.volume
+    player.mixer.music_volume = player.volume
     await ctx.send(f"🔊 볼륨을 {value}%로 바꿨어요.")
 
-
-@client.listen("on_voice_state_update")
-async def leave_when_alone(member, before, after):
-    """통화방에 봇만 남으면 나간다. 봇이 강제로 끊기면 상태를 정리한다."""
-    guild = member.guild
-    player = players.get(guild.id)
-    if player is None:
-        return
-    if member.id == client.user.id and after.channel is None:   # 봇이 나가졌다
-        player.queue.clear()
-        player.current = None
-        player.cancel_idle_timer()
-        return
-    voice = player.voice
-    if voice and before.channel == voice.channel and not any(not m.bot for m in voice.channel.members):
-        await player.say("👋 통화방에 아무도 없어서 나갈게요.")
-        await player.stop()

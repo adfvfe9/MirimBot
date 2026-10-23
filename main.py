@@ -4,6 +4,8 @@
 
 봇 객체는 bot.py, 명령어는 features/ 폴더에 기능별로 나뉘어 있다.
   features/general.py      시간, 패치노트, 급식, 도움말, 청소 등
+  features/health.py       %핑 (디스코드 / DB / 봇 멈춤 시간 재기)
+  features/audit.py        모든 명령어 / 버튼 기록, %로그 (관리자)
   features/economy.py      머니, 송금, 머니랭킹, 위로금, 기초수급, 파산
   features/enhance.py      강화
   features/stocks.py       주식
@@ -41,11 +43,13 @@ from features import (  # noqa: F401
     admin,
     crypto,
     assets,
+    audit,
     bank,
     economy,
     enhance,
     gamble,
     general,
+    health,
     market,
     mining,
     moderation,
@@ -84,6 +88,8 @@ async def setup_hook():
     # 백그라운드 작업 (on_ready 는 재접속할 때마다 다시 불리므로 여기서 한 번만 시작)
     asyncio.create_task(stocks.market_cycle())
     asyncio.create_task(moderation.auto_remove_expired_roles())
+    asyncio.create_task(health.watch_loop_lag())
+    asyncio.create_task(audit.prune_loop())
 
 
 # on_message는 커맨드와 충돌 방지 필요 → process_commands 사용

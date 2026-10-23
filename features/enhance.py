@@ -15,6 +15,7 @@
 - 한 번 더 누를 때마다 평균적으로 가진 가치의 3~10% 를 잃는다. 고강일수록 확률은 낮고 대박은 크다. (로또 구조)
 """
 import random
+import time
 
 import discord
 from discord.ext import commands
@@ -33,6 +34,8 @@ MAX_LEVEL = 13
 NAME_MAX_LEN = 20
 ANNOUNCE_LEVEL = 10       # 이 레벨 이상 성공 / 이 레벨 이상 아이템 파괴 시 채널에 공지
 AUTO_MAX_TRIES = 100      # [목표까지 자동] 한 번에 최대 시도 횟수
+AUTO_CHUNK = 10           # 자동 강화는 이만큼씩 몰아서 계산한다 (DB 한 번에)
+AUTO_EDIT_EVERY = 1.0     # 자동 강화 중 진행 상황 메시지는 이 초마다 고친다 (디스코드 수정 횟수 제한)
 
 # 목표 레벨: (성공률 %, 실패했을 때 [유지, 한 단계 하락, 파괴] 비율 %)
 # +1 부터 노렸을 때 도달 확률: +10 약 1/6.6, +11 약 1/54, +12 약 1/920, +13 약 1/53,000
@@ -147,50 +150,84 @@ def check_sacrifices(items, item_name, sacrifices):
     return None
 
 
-async def try_enhance(user_id, item_name, sacrifices=()):
-    """한 번 강화한다. sacrifices 는 제물로 바칠 아이템 이름들 (성공 여부와 상관없이 사라진다).
-    실패하면 안내 메시지(str), 성공하면 결과 dict."""
+def changed_text(level):
+    return f"⚠️ 그사이 다른 곳에서 레벨이 바뀌어서 (지금 +{level}) 아무것도 하지 않았어요. 화면을 새로 고쳤어요."
+
+
+async def try_enhance_many(user_id, item_name, sacrifices=(), expect_level=None, target=MAX_LEVEL, max_tries=1):
+    """target 에 닿거나, 파괴되거나, 돈이 모자라거나, max_tries 번이 될 때까지 강화한다.
+    한 트랜잭션 안에서 계산을 몰아서 하고 DB 에는 마지막에 한 번만 쓴다. (한 번씩 하면 시도마다 DB 왕복이 10번쯤 든다)
+    - sacrifices: 제물로 바칠 아이템 이름들. 첫 번째 시도에만 쓰이고 사라진다.
+    - expect_level: 패널에 보이는 레벨. DB 레벨과 다르면 (다른 패널 / 연타로 그사이 바뀌었으면) 강화하지 않는다.
+      그래야 자동 강화가 목표를 넘기거나, 화면과 다른 레벨 · 비용으로 강화되는 일이 없다.
+    - 능력 효과는 레벨이 바뀔 때마다 다시 계산한다 (레벨이 슬롯 레벨 밑으로 내려가면 그 슬롯은 꺼진다).
+      처음 도달해서 슬롯이 열리면 그때 능력을 붙이고, 다음 시도부터 그 능력도 센다.
+    첫 시도부터 못 하면 안내(str), 아니면 {"steps": [시도 결과...], "level", "balance", "stop": 멈춘 이유 또는 None}"""
     async with db.user_tx(user_id) as conn:
         items = await db.get_enhance_items(user_id, conn)
         level = items.get(item_name)
         if level is None:
             return "❌ 아이템이 없습니다."
+        if expect_level is not None and level != expect_level:
+            return changed_text(level)
         if level >= MAX_LEVEL:
             return f"🏆 이미 최고 레벨(+{MAX_LEVEL})입니다!"
         error = check_sacrifices(items, item_name, list(sacrifices))
         if error:
             return error
-
-        cost = ATTEMPT_COST[level]
         money = await db.get_money(user_id, conn)
-        if money < cost:
-            return f"💸 돈이 부족합니다. (필요: {num(cost)} byte / 보유: {num(money)} byte)"
+        if money < ATTEMPT_COST[level]:
+            return f"💸 돈이 부족합니다. (필요: {num(ATTEMPT_COST[level])} byte / 보유: {num(money)} byte)"
 
         mult = sacrifice_mult(level, [items[s] for s in sacrifices])
+        sacrificed = {s: items.pop(s) for s in sacrifices}
         for s in sacrifices:
             await db.delete_enhance_item(user_id, s, conn)   # 붙어 있던 능력도 같이 사라진다
-        result, new_level, special = roll(level, await abilities.totals(user_id, conn), mult)
-        await db.update_user(user_id, conn, money=money - cost)
-        memo = f"+{level} → {result}" + (f" (제물 {len(sacrifices)}개, x{mult:.2f})" if sacrifices else "")
-        await db.log_money(user_id, "enhance_try", -cost, memo, conn)
-        opened = []
-        if new_level is None:
+        rows = await db.get_abilities(user_id, conn)       # 제물의 능력은 이미 빠졌다
+        slots = sum(1 for r in rows if r["item_name"] == item_name)
+
+        steps, logs, stop = [], [], None
+        while len(steps) < max_tries and level is not None and level < min(target, MAX_LEVEL):
+            cost = ATTEMPT_COST[level]
+            if money < cost:
+                stop = f"💸 돈이 부족합니다. (필요: {num(cost)} byte / 보유: {num(money)} byte)"
+                break
+            first = not steps
+            result, new_level, special = roll(level, abilities.combine(items, rows), mult if first else 1.0)
+            money -= cost
+            memo = f"+{level} → {result}" + (f" (제물 {len(sacrifices)}개, x{mult:.2f})" if first and sacrifices else "")
+            logs.append((user_id, "enhance_try", -cost, memo))
+            opened = []
+            if new_level is not None and abilities.open_slot_count(new_level) > slots:
+                opened = await abilities.sync_slots(user_id, item_name, new_level, conn)  # +3/+5/... 처음 도달하면 슬롯 열림
+                rows += [{"item_name": item_name, "locked": False, **o} for o in opened]
+                slots += len(opened)
+            steps.append({
+                "result": result, "old": level, "new": new_level, "special": special, "opened": opened,
+                "sacrificed": sacrificed if first else {}, "mult": mult if first else 1.0, "cost": cost,
+            })
+            level = new_level
+            if level is None:
+                items.pop(item_name)
+            else:
+                items[item_name] = level
+
+        await db.update_user(user_id, conn, money=money)
+        await db.log_money_many(logs, conn)
+        if level is None:
             await db.delete_enhance_item(user_id, item_name, conn)
         else:
-            await db.set_enhance_level(user_id, item_name, new_level, conn)
-            opened = await abilities.sync_slots(user_id, item_name, new_level, conn)  # +3/+5/... 처음 도달하면 슬롯 열림
+            await db.set_enhance_level(user_id, item_name, level, conn)
 
-    return {
-        "result": result,
-        "old": level,
-        "new": new_level,
-        "special": special,
-        "opened": opened,
-        "sacrificed": {s: items[s] for s in sacrifices},
-        "mult": mult,
-        "cost": cost,
-        "balance": money - cost,
-    }
+    return {"steps": steps, "level": level, "balance": money, "stop": stop}
+
+
+async def try_enhance(user_id, item_name, sacrifices=(), expect_level=None):
+    """한 번 강화한다. 실패하면 안내 메시지(str), 성공하면 그 한 번의 결과 dict (+ balance)."""
+    r = await try_enhance_many(user_id, item_name, sacrifices, expect_level, max_tries=1)
+    if isinstance(r, str):
+        return r
+    return {**r["steps"][0], "balance": r["balance"]}
 
 
 async def craft(user_id, item_name):
@@ -210,9 +247,13 @@ async def craft(user_id, item_name):
     return None
 
 
-async def sell(user_id, item_name):
-    """판매. 아이템이 없으면 None, 있으면 (레벨, 판매가, receive 결과)."""
+async def sell(user_id, item_name, expect_level=None):
+    """판매. 아이템이 없으면 None, expect_level 과 레벨이 다르면 안내(str), 팔면 (레벨, 판매가, receive 결과)."""
     async with db.user_tx(user_id) as conn:
+        if expect_level is not None:
+            level = (await db.get_enhance_items(user_id, conn)).get(item_name)
+            if level is not None and level != expect_level:
+                return changed_text(level)
         level = await db.delete_enhance_item(user_id, item_name, conn)
         if level is None:
             return None
@@ -267,6 +308,7 @@ class EnhanceView(View):
         self.last = ""             # 마지막 결과 메시지
         self.sell_armed = False    # 판매 버튼 한 번 누르면 확인 상태
         self.message = None
+        self.busy = False          # 버튼 하나를 처리하는 중 (그동안 다른 버튼은 막는다)
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.user_id:
@@ -332,7 +374,7 @@ class EnhanceView(View):
 
         def add(label, style, callback, emoji=None, disabled=False):
             button = Button(label=label, style=style, emoji=emoji, disabled=disabled)
-            button.callback = callback
+            button.callback = self.one_at_a_time(callback)
             self.add_item(button)
 
         if self.level is None:
@@ -355,9 +397,23 @@ class EnhanceView(View):
         await respond.defer(interaction)
         self.build_buttons()
         embed = await self.make_embed()
-        await interaction.edit_original_response(embed=embed, view=self)
+        await respond.edit(interaction, embed=embed, view=self)
 
     # ── 버튼 ──
+
+    def one_at_a_time(self, callback):
+        """앞에서 누른 버튼을 처리하는 동안 (자동 강화 중 포함) 누른 버튼은 막는다.
+        연타하거나 화면이 바뀌기 전에 옛 버튼을 누르면 두 처리가 섞여서 엉뚱한 레벨로 강화될 수 있었다."""
+        async def run(interaction):
+            if self.busy:
+                await respond.reply(interaction, "⏳ 앞에서 누른 것을 처리하는 중이에요. 끝나면 다시 눌러주세요.", ephemeral=True)
+                return
+            self.busy = True
+            try:
+                await callback(interaction)
+            finally:
+                self.busy = False
+        return run
 
     async def on_craft(self, interaction):
         await respond.defer(interaction)
@@ -371,7 +427,10 @@ class EnhanceView(View):
 
     async def enhance_once(self):
         """제물이 있으면 이번 한 번에 쓰고 비운다. (제물이 그사이 없어졌으면 제물만 비우고 안내)"""
-        r = await try_enhance(self.user_id, self.item_name, list(self.sacrifices))
+        r = await try_enhance(self.user_id, self.item_name, list(self.sacrifices), expect_level=self.level)
+        if isinstance(r, str) and r.startswith("⚠️"):
+            await self.load()         # 다른 곳에서 바뀐 레벨로 화면을 맞춘다
+            return r
         if isinstance(r, str) and self.sacrifices and "제물" in r:
             self.sacrifices = {}
             return r + "\n제물을 비웠어요. 다시 누르면 제물 없이 강화해요."
@@ -396,23 +455,42 @@ class EnhanceView(View):
         await announce(interaction.channel, interaction.user, self.item_name, r["result"], r["old"], r["new"])
 
     async def on_auto(self, interaction):
+        """목표까지 자동 강화. AUTO_CHUNK 번씩 몰아서 계산하고, 진행 상황을 AUTO_EDIT_EVERY 초마다 메시지에 보여준다."""
         await respond.defer(interaction)
         self.sell_armed = False
         logs, total_cost, tries, stop, opened = [], 0, 0, "", []
+        last_edit = time.monotonic()
 
-        while tries < AUTO_MAX_TRIES:
-            if self.level is None or self.level >= self.target:
-                break
-            r = await self.enhance_once()   # 제물은 첫 번째 시도에만
+        while tries < AUTO_MAX_TRIES and self.level is not None and self.level < self.target:
+            r = await try_enhance_many(
+                self.user_id, self.item_name, list(self.sacrifices), expect_level=self.level,
+                target=self.target, max_tries=min(AUTO_CHUNK, AUTO_MAX_TRIES - tries),
+            )
             if isinstance(r, str):
+                if r.startswith("⚠️"):
+                    await self.load()
                 stop = r
                 break
-            tries += 1
-            total_cost += r["cost"]
-            opened += r["opened"]
-            self.apply(r)
-            logs.append(result_line(r).replace("**", ""))
-            await announce(interaction.channel, interaction.user, self.item_name, r["result"], r["old"], r["new"])
+            self.sacrifices = {}           # 제물은 첫 번째 시도에만
+            for step in r["steps"]:
+                tries += 1
+                total_cost += step["cost"]
+                opened += step["opened"]
+                logs.append(result_line(step).replace("**", ""))
+                await announce(interaction.channel, interaction.user, self.item_name, step["result"], step["old"], step["new"])
+            self.level = r["level"]
+            if self.level is None:
+                self.destroyed = True
+            if r["stop"]:
+                stop = r["stop"]
+                break
+            if time.monotonic() - last_edit >= AUTO_EDIT_EVERY and self.level is not None and self.level < self.target:
+                self.last = (
+                    f"⏳ **자동 강화 중…** 지금 +{self.level} → 목표 +{self.target}\n"
+                    f"시도 {tries}회, 비용 {num(total_cost)} byte\n```" + "\n".join(logs[-5:]) + "```"
+                )
+                await self.refresh(interaction)
+                last_edit = time.monotonic()
 
         if self.level is not None and self.level >= self.target:
             head = f"🎯 **+{self.target} 도달!**"
@@ -438,8 +516,13 @@ class EnhanceView(View):
             await self.refresh(interaction)
             return
 
-        sold = await sell(self.user_id, self.item_name)
+        sold = await sell(self.user_id, self.item_name, expect_level=self.level)
         self.sell_armed = False
+        if isinstance(sold, str):
+            await self.load()
+            self.last = sold
+            await self.refresh(interaction)
+            return
         if sold is None:
             self.last = "❌ 이미 없는 아이템입니다."
             self.level = None
@@ -451,7 +534,7 @@ class EnhanceView(View):
         self.build_buttons()
         embed = await self.make_embed()
         embed.title = "💰 판매 완료" if sold else embed.title
-        await interaction.edit_original_response(embed=embed, view=None)
+        await respond.edit(interaction, embed=embed, view=None)
         self.stop()
 
     async def on_close(self, interaction):

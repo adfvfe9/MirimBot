@@ -1,6 +1,7 @@
 """주식: 시장 상태, 1분 시세 갱신, 구매/판매, 주식확인, 그래프, 주식랭킹"""
 import asyncio
 import datetime
+import functools
 import io
 import math
 import os
@@ -10,6 +11,7 @@ import discord
 import matplotlib.pyplot as plt
 from discord import ButtonStyle, File
 from discord.ext import commands, tasks
+from concurrent.futures import ThreadPoolExecutor
 from discord.ui import Button, View
 from matplotlib import font_manager
 
@@ -1242,6 +1244,16 @@ def chart_cost(minutes):
     return -(-extra // 60) * CHART_HOUR_PRICE
 
 
+# 그래프 그리기는 오래 걸려서 (큰 그래프는 1초 넘게) 이벤트 루프에서 하면 그동안 봇 전체가 멈춘다.
+# 그래서 그래프 전용 스레드 하나에서 차례로 그린다. (plt 는 여러 스레드에서 동시에 쓰면 안 돼서 하나만)
+# 주가 · 코인 · 자산 그래프, 수학 퀴즈 그림이 모두 이걸 쓴다.
+_plot_thread = ThreadPoolExecutor(max_workers=1, thread_name_prefix="plot")
+
+
+async def in_plot_thread(fn, *args):
+    return await asyncio.get_running_loop().run_in_executor(_plot_thread, functools.partial(fn, *args))
+
+
 def draw_chart(series, minutes, title):
     """series: {종목: [가격...]} → 최근 minutes 분 그래프 PNG"""
     plt.figure(figsize=(10, 4) if len(series) == 1 else (12, 6))
@@ -1305,7 +1317,7 @@ async def stock_chart(ctx, *args):
             await db.log_money(ctx.author.id, "chart", -cost, f"{minutes}분", conn)
 
     title = f"{stock_key or '모든 주식'} 최근 {minutes}분 주가"
-    buf = draw_chart(series, minutes, title)
+    buf = await in_plot_thread(draw_chart, series, minutes, title)
     filename = f"{stock_key or 'all_stock'}_chart.png".replace("#", "sharp").replace("+", "plus")
     paid = f" · {num(cost)} byte 지불" if cost else ""
     await ctx.send(content=f"📈 {title}{paid}", file=File(buf, filename=filename))

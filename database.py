@@ -46,10 +46,12 @@ async def connect(dsn: str | None = None) -> None:
     if _pool is not None:
         return
     # statement_cache_size=0: Neon 의 -pooler 주소(pgbouncer)에서도 동작하게 한다.
+    # min_size: 연결을 미리 열어 둔다. 새 연결은 맺는 데 (TLS 등) 시간이 걸려서,
+    #           여러 명이 동시에 명령어를 쓸 때 그때그때 맺으면 그만큼 느려진다.
     _pool = await asyncpg.create_pool(
         dsn or os.environ["DATABASE_URL"],
-        min_size=1,
-        max_size=5,
+        min_size=3,
+        max_size=10,
         statement_cache_size=0,
     )
     async with _pool.acquire() as conn:
@@ -255,6 +257,15 @@ async def log_money(user_id, source: str, amount, memo: str | None = None, conn=
         "INSERT INTO money_log (user_id, source, amount, memo) VALUES ($1, $2, $3, $4)",
         int(user_id), source, _num(amount), memo,
     )
+
+
+async def log_money_many(rows, conn=None) -> None:
+    """log_money 여러 개를 한 번에. rows = [(user_id, source, amount, memo), ...] (자동 강화)"""
+    rows = [(int(u), s, _num(a), m) for u, s, a, m in rows if a]
+    if rows:
+        await (conn or pool()).executemany(
+            "INSERT INTO money_log (user_id, source, amount, memo) VALUES ($1, $2, $3, $4)", rows
+        )
 
 
 async def bankrupt(user_id, day: datetime.date, conn=None) -> None:
@@ -886,6 +897,40 @@ async def delete_tts_abbrev(guild_id, word: str) -> bool:
         "DELETE FROM tts_abbrevs WHERE guild_id = $1 AND word = $2", int(guild_id), word
     )
     return result != "DELETE 0"
+
+
+# ───────────── 명령어 / 버튼 기록 (features/audit.py, %로그) ─────────────
+
+async def add_command_log(user_id, guild_id, channel_id, kind: str, name: str, content: str | None,
+                          result: str | None = None, ms: int | None = None) -> None:
+    await pool().execute(
+        """
+        INSERT INTO command_log (user_id, guild_id, channel_id, kind, name, content, result, ms)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        """,
+        int(user_id), guild_id and int(guild_id), channel_id and int(channel_id), kind, name, content, result, ms,
+    )
+
+
+async def command_logs(guild_id=None, user_id=None, text: str | None = None, names=None, limit: int = 20) -> list[dict]:
+    """최근 기록부터. text 는 이름이나 내용에 들어간 글자, names 는 이 이름들 중 하나 (관리자 명령어 보기)"""
+    rows = await pool().fetch(
+        """
+        SELECT * FROM command_log
+        WHERE ($1::bigint IS NULL OR guild_id = $1)
+          AND ($2::bigint IS NULL OR user_id = $2)
+          AND ($3::text IS NULL OR name ILIKE '%' || $3 || '%' OR content ILIKE '%' || $3 || '%')
+          AND ($4::text[] IS NULL OR name = ANY($4))
+        ORDER BY created_at DESC, id DESC LIMIT $5
+        """,
+        guild_id and int(guild_id), user_id and int(user_id), text, names, limit,
+    )
+    return [dict(r) for r in rows]
+
+
+async def prune_command_log(before: datetime.datetime) -> int:
+    result = await pool().execute("DELETE FROM command_log WHERE created_at < $1", before)
+    return int(result.split()[-1])
 
 
 # ───────────── 봇 운영 상태 (key-value) ─────────────

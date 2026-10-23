@@ -220,7 +220,7 @@ async def asset_chart(ctx, *args):
         return
 
     names = ", ".join(series)
-    buf = draw_worth_chart(series, f"{names} 순자산 (최근 {days}일)")
+    buf = await stocks.in_plot_thread(draw_worth_chart, series, f"{names} 순자산 (최근 {days}일)")
     lines = []
     for name, points in series.items():
         first, last = points[0][1], points[-1][1]

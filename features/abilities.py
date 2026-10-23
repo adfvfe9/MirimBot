@@ -156,9 +156,14 @@ def chance(percent):
 
 async def totals(user_id, conn=None):
     """{능력 키: 합친 수치 (limit 이 있으면 그 안으로)}. 켜진 슬롯(아이템 레벨 >= 슬롯 레벨)만 센다."""
-    levels = await db.get_enhance_items(user_id, conn)
+    return combine(await db.get_enhance_items(user_id, conn), await db.get_abilities(user_id, conn))
+
+
+def combine(levels, rows):
+    """totals 의 계산 부분. levels = {아이템 이름: 레벨}, rows = 능력 슬롯 목록.
+    자동 강화는 DB 를 다시 읽지 않고 레벨만 바꿔 가며 이걸로 다시 계산한다."""
     result = {}
-    for row in await db.get_abilities(user_id, conn):
+    for row in rows:
         level = levels.get(row["item_name"])
         if level is None or level < slot_level(row["slot"]) or row["ability"] not in ABILITIES:
             continue

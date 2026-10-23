@@ -32,7 +32,7 @@ from discord.ext import commands, tasks
 
 import database as db
 from bot import client
-from features import abilities, quiz_bank, quiz_gen, quiz_math, wordchain
+from features import abilities, quiz_bank, quiz_gen, quiz_math, stocks, wordchain
 from fmt import debt_line, num
 
 # ───────────── 밸런스 설정 ─────────────
@@ -221,7 +221,7 @@ async def make_quiz(subject=None, level=None):
     subject = subject or random.choices(list(SUBJECTS), weights=[w for _, w in SUBJECTS.values()])[0]
     level = level or random.choices(list(LEVELS), weights=[v["weight"] for v in LEVELS.values()])[0]
     if subject == "수학":
-        return await asyncio.to_thread(from_math, level)   # 그래프 그리기는 조금 걸려서 따로
+        return await stocks.in_plot_thread(from_math, level)   # 그래프 그리기는 조금 걸려서 따로 (그래프 스레드)
     if subject == "국어":
         return await make_korean(level)
     return from_generated_or_bank(subject, level)

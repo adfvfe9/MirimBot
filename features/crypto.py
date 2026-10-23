@@ -363,7 +363,7 @@ async def coin_chart(ctx, minutes: int = CHART_FREE_MINUTES):
                 return
             await db.update_user(ctx.author.id, conn, money=money - cost)
             await db.log_money(ctx.author.id, "chart", -cost, f"코인 {minutes}분", conn)
-    buf = stocks.draw_chart({"BTC (토큰)": list(history)}, minutes, f"비트코인 최근 {minutes}분")
+    buf = await stocks.in_plot_thread(stocks.draw_chart, {"BTC (토큰)": list(history)}, minutes, f"비트코인 최근 {minutes}분")
     paid = f" · {num(cost)} byte 지불" if cost else ""
     await ctx.send(content=f"₿ 비트코인 최근 {minutes}분{paid}", file=discord.File(buf, filename="btc_chart.png"))
 

@@ -381,6 +381,24 @@ CREATE TABLE IF NOT EXISTS tts_abbrevs (
 );
 
 
+-- ───────────── 명령어 / 버튼 기록 (features/audit.py, %로그) ─────────────
+-- 누가 언제 어떤 명령어를 쓰고 어떤 버튼을 눌렀는지. 관리자 명령어 확인용이라 %초기화 로 지워지지 않는다. (90일 보관)
+CREATE TABLE IF NOT EXISTS command_log (
+    id         BIGSERIAL   PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    user_id    BIGINT      NOT NULL,
+    guild_id   BIGINT,
+    channel_id BIGINT,
+    kind       TEXT        NOT NULL,     -- command / button / select / modal
+    name       TEXT        NOT NULL,     -- 친 명령어(별칭 그대로) / 버튼 이름
+    content    TEXT,                     -- 친 메시지 그대로 / 버튼이 달린 메시지 제목, 고른 값, 입력한 값
+    result     TEXT,                     -- 명령어만: ok 또는 에러 종류
+    ms         INTEGER                   -- 명령어만: 걸린 시간
+);
+CREATE INDEX IF NOT EXISTS command_log_time_idx ON command_log (created_at);
+CREATE INDEX IF NOT EXISTS command_log_user_idx ON command_log (user_id, created_at);
+
+
 -- ───────────── 봇 운영 상태 ─────────────
 -- 서버 연장 알림처럼 봇 자체가 기억해야 하는 값. (%초기화 로 지워지지 않는다)
 CREATE TABLE IF NOT EXISTS bot_state (

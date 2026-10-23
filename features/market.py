@@ -327,8 +327,11 @@ class MarketView(View):
         add("판매", "💰", discord.ButtonStyle.primary, self.on_sell)
         add("내 판매", "📦", discord.ButtonStyle.secondary, self.on_mine)
 
-    async def refresh(self, interaction=None):
-        await self.load()
+    async def refresh(self, interaction=None, reload=True):
+        """reload=False 면 DB 를 다시 읽지 않고 이미 불러온 목록으로 그린다 (페이지 넘기기 / 고르기).
+        구매는 어차피 DB 에서 다시 확인하니까, 그사이 팔린 물건을 골라도 '이미 팔렸다'고 나온다."""
+        if reload:
+            await self.load()
         self.build()
         if interaction is not None:
             await respond.edit(interaction, embed=self.make_embed(), view=self)
@@ -342,17 +345,17 @@ class MarketView(View):
         await respond.defer(interaction)
         self.selected = int(interaction.data["values"][0])
         self.notice = ""
-        await self.refresh(interaction)
+        await self.refresh(interaction, reload=False)
 
     async def on_prev(self, interaction):
         await respond.defer(interaction)
         self.page -= 1
-        await self.refresh(interaction)
+        await self.refresh(interaction, reload=False)
 
     async def on_next(self, interaction):
         await respond.defer(interaction)
         self.page += 1
-        await self.refresh(interaction)
+        await self.refresh(interaction, reload=False)
 
     async def on_buy(self, interaction):
         await respond.defer(interaction)

@@ -1,4 +1,5 @@
 """일반 명령어: 시간, 패치노트, 급식, 도움말, 청소, 장난 명령어"""
+import asyncio
 import os
 import re
 
@@ -22,9 +23,19 @@ async def timeget(ctx):
 async def patchnote(ctx):
     await ctx.message.delete()
     embed = discord.Embed(
-        title="📜 패치노트 v1.3.5 — TTS (채팅 읽어주기)",
-        description="v1.3.5 변경 사항과 v1.3 전체 요약이에요. 버전은 a.b.c.d (대격변 · 큰 기능 · 기능 추가 · 수정). 자세한 명령어는 `%도움말`에서!",
+        title="📜 패치노트 v1.3.5.1 — 속도 개선 · 강화 수정",
+        description="v1.3.5.1 변경 사항과 v1.3 전체 요약이에요. 버전은 a.b.c.d (대격변 · 큰 기능 · 기능 추가 · 수정). 자세한 명령어는 `%도움말`에서!",
         color=0xf1c40f  # 노란색
+    )
+    embed.add_field(
+        name="⚡ [v1.3.5.1] 속도 개선 · 강화 수정",
+        value=(
+            "- 버튼을 누르면 화면이 바로 바뀌어요 (디스코드 요청 2번 → 1번). 그래프 · 급식이 다른 명령어를 멈추지 않아요\n"
+            "- 자동 강화를 몰아서 계산해서 훨씬 빨라졌고, 진행 상황이 메시지에 실시간으로 보여요\n"
+            "- 강화 패널을 연타하거나 같은 아이템 패널 두 개를 쓰면 목표를 넘겨 강화되던 문제 수정\n"
+            "- `%핑` 디스코드 · DB · 봇 멈춤 시간 재기 · 관리자용 `%로그` (모든 명령어 / 버튼 기록)"
+        ),
+        inline=False
     )
     embed.add_field(
         name="🗣️ [v1.3.5] TTS `%읽어`",
@@ -138,7 +149,8 @@ async def school_meal(ctx):
 f"KEY={api_key}&Type=json&ATPT_OFCDC_SC_CODE={edu_office_code}&SD_SCHUL_CODE={school_code}&MLSV_YMD={today}"
 
     try:
-        response = requests.get(url)
+        # requests 는 기다리는 동안 봇 전체를 멈추게 해서 다른 스레드에서 부른다. 나이스가 안 받으면 5초에 포기
+        response = await asyncio.to_thread(requests.get, url, timeout=5)
         response.raise_for_status()
         data = response.json()
 

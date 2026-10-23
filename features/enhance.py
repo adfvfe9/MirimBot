@@ -10,7 +10,7 @@
     %강화수정 <이름> <레벨> [@유저]   (관리자) 아이템 레벨 바꾸기
 
 - 아이템은 +1 로 시작해서 최대 +13.
-- +5 / +7 / +9 / +11 / +13 에 처음 도달하면 능력 슬롯이 열린다. (features/abilities.py)
+- +3 / +5 / +7 / +9 / +11 / +13 에 처음 도달하면 능력 슬롯이 열린다. (features/abilities.py)
 - 낮은 레벨은 실패해도 유지, +6 부터는 떨어질 수 있고, +7 부터는 파괴될 수 있다. (최대 10%)
 - 한 번 더 누를 때마다 평균적으로 가진 가치의 3~10% 를 잃는다. 고강일수록 확률은 낮고 대박은 크다. (로또 구조)
 """
@@ -178,7 +178,7 @@ async def try_enhance(user_id, item_name, sacrifices=()):
             await db.delete_enhance_item(user_id, item_name, conn)
         else:
             await db.set_enhance_level(user_id, item_name, new_level, conn)
-            opened = await abilities.sync_slots(user_id, item_name, new_level, conn)  # +5/+7/... 처음 도달하면 슬롯 열림
+            opened = await abilities.sync_slots(user_id, item_name, new_level, conn)  # +3/+5/... 처음 도달하면 슬롯 열림
 
     return {
         "result": result,

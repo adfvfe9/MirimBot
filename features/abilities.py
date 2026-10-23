@@ -8,12 +8,11 @@
   (v1.3.2 에서 +5 부터 → +3 부터로 바꿨다. 예전 슬롯 번호는 그대로라 1번이 +3 슬롯이 되고,
    비어 있는 칸은 봇이 켜질 때 sync_all 이 채운다)
 - 아이템 레벨이 높을수록 좋은 등급이 잘 나온다. 수치는 등급 범위 안에서 랜덤이다.
-- 같은 능력은 모든 아이템에서 합쳐지지만, 능력마다 상한이 있다.
+- 같은 능력은 모든 아이템에서 합쳐지고, 상한이 없다. (강화에 돈이 많이 들어서 전부 풀었다)
+  더 커지면 말이 안 되는 것만 한계가 있다: 꽝 환급 / 청산 보험 100%, 단타 시간 단축 30분.
 - 레벨이 떨어지면 그 위 슬롯은 꺼지기만 하고 남는다. 아이템을 팔거나 파괴되면 능력도 사라진다.
-- 강화 확률을 바꾸는 능력(대성공 / 하락 방지)의 상한은 계산으로 정했다.
-  판매가가 레벨마다 크게 뛰어서, 확률을 조금만 올려도 "강화해서 팔기"가 돈 복사가 된다.
-  파괴 방지는 "파괴 대신 한 단계 하락"이라 100% 가 돼도 괜찮아서 상한이 사실상 없다. (100% = 파괴 없음)
-  지금 상한을 전부 채워도 어느 레벨에서든 한 번 누르는 기대값이 판매가보다 작다.
+- 주의: 예전에는 대성공 10% / 하락 방지 15% 상한을 계산으로 정했었다. 이보다 높게 모으면
+  "강화해서 팔기"의 기대값이 판매가보다 커질 수 있다. (대성공은 결과 +6 이하에서만 그대로)
 """
 import random
 
@@ -46,59 +45,61 @@ REROLL_PER_LOCK = 1      # 잠근 슬롯 하나당 +1개
 GREAT_SUCCESS_MAX_LEVEL = 6   # 대성공(+2)은 결과가 이 레벨 이하일 때만 (높은 레벨까지 열면 돈 복사가 된다)
 
 # ───────────── 능력 ─────────────
-# ranges: 등급별 (최소, 최대). cap: 모든 아이템을 합쳤을 때 상한. decimals: 뽑힌 수치의 소수 자리
+# ranges: 등급별 (최소, 최대). decimals: 뽑힌 수치의 소수 자리
+# limit: 합친 수치의 한계. 밸런스 상한은 없앴고(강화에 돈이 많이 들어서), 더 커지면 말이 안 되는 것만 남겼다.
+#   (꽝 환급 / 청산 보험 100% = 잃은 만큼 다 돌려받기, 단타 시간 단축 30분 = 단타 수수료 없음)
 ABILITIES = {
     # 🔨 강화
-    "great_success": dict(emoji="💥", name="대성공", unit="%", decimals=1, cap=10,
+    "great_success": dict(emoji="💥", name="대성공", unit="%", decimals=1, limit=None,
                           ranges=((1, 2), (2, 3), (3, 5), (5, 7)),
                           desc=f"강화에 성공하면 확률로 +2 (결과가 +{GREAT_SUCCESS_MAX_LEVEL} 이하일 때만)"),
-    "destroy_guard": dict(emoji="🛡️", name="파괴 방지", unit="%", decimals=1, cap=100,
+    "destroy_guard": dict(emoji="🛡️", name="파괴 방지", unit="%", decimals=1, limit=None,
                           ranges=((1, 3), (3, 6), (6, 10), (10, 15)),
                           desc="파괴될 때 확률로 파괴 대신 한 단계 하락"),
-    "down_guard":    dict(emoji="🍀", name="하락 방지", unit="%", decimals=1, cap=15,
+    "down_guard":    dict(emoji="🍀", name="하락 방지", unit="%", decimals=1, limit=None,
                           ranges=((1, 2), (2, 4), (4, 7), (7, 10)),
                           desc="레벨이 떨어질 때 확률로 레벨 유지"),
     # 📈 주식 / 레버리지
-    "leverage_up":   dict(emoji="🚀", name="배율 한계 돌파", unit="배", decimals=0, cap=5,
+    "leverage_up":   dict(emoji="🚀", name="배율 한계 돌파", unit="배", decimals=0, limit=None,
                           ranges=((1, 1), (1, 2), (2, 3), (3, 5)),
                           desc="레버리지 최대 배율 증가"),
-    "liq_insurance": dict(emoji="🧯", name="청산 보험", unit="%", decimals=1, cap=10,
+    "liq_insurance": dict(emoji="🧯", name="청산 보험", unit="%", decimals=1, limit=100,
                           ranges=((1, 2), (2, 4), (4, 7), (7, 10)),
                           desc="강제청산 때 증거금의 일부를 돌려받기"),
-    "quick_sell_time": dict(emoji="⏱️", name="단타 시간 단축", unit="분", decimals=0, cap=20,
+    "quick_sell_time": dict(emoji="⏱️", name="단타 시간 단축", unit="분", decimals=0, limit=30,
                             ranges=((2, 4), (4, 8), (8, 12), (12, 18)),
                             desc="주식 단타 수수료가 붙는 시간(30분) 단축"),
-    "sell_fee":      dict(emoji="💸", name="주식 판매 수수료 할인", unit="%p", decimals=2, cap=1,
+    "sell_fee":      dict(emoji="💸", name="주식 판매 수수료 할인", unit="%p", decimals=2, limit=None,
                           ranges=((0.1, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.9)),
                           desc="주식 판매 수수료(보통 2%, 단타 8%)를 낮춤"),
     # 🎲 놀이
-    "rps_revive":    dict(emoji="✊", name="가위바위보 부활", unit="%", decimals=1, cap=25,
+    "rps_revive":    dict(emoji="✊", name="가위바위보 부활", unit="%", decimals=1, limit=None,
                           ranges=((2, 4), (4, 8), (8, 13), (13, 20)),
                           desc="가위바위보에서 지면 확률로 무효"),
-    "gamble_refund": dict(emoji="🎰", name="도박 꽝 환급", unit="%", decimals=1, cap=8,
+    "gamble_refund": dict(emoji="🎰", name="도박 꽝 환급", unit="%", decimals=1, limit=100,
                           ranges=((1, 2), (2, 3), (3, 5), (5, 7)),
                           desc="도박이 꽝이면 판돈의 일부를 돌려받기"),
-    "wordchain_limit": dict(emoji="📅", name="끝말잇기 하루 한도", unit="%", decimals=1, cap=100,
+    "wordchain_limit": dict(emoji="📅", name="끝말잇기 하루 한도", unit="%", decimals=1, limit=None,
                             ranges=((3, 8), (8, 15), (15, 25), (25, 40)),
                             desc="끝말잇기로 하루에 벌 수 있는 최대 금액(1.5만) 증가"),
-    "token_decay":   dict(emoji="🔻", name="토큰 가격 하락 가속", unit="%", decimals=1, cap=100,
+    "token_decay":   dict(emoji="🔻", name="토큰 가격 하락 가속", unit="%", decimals=1, limit=None,
                           ranges=((0, 20), (20, 40), (40, 70), (70, 100)),
-                          desc="토큰 구매 가격이 하루에 떨어지는 배율(4배)에 ×(1 + N%) (최대 ×2 = 하루 8배)"),
-    "quiz_token":    dict(emoji="🪙", name="퀴즈 토큰 확률", unit="%p", decimals=1, cap=25,
+                          desc="토큰 구매 가격이 하루에 떨어지는 배율(4배)에 ×(1 + N%) "),
+    "quiz_token":    dict(emoji="🪙", name="퀴즈 토큰 확률", unit="%p", decimals=1, limit=None,
                           ranges=((2, 4), (4, 7), (7, 11), (11, 16)),
                           desc="퀴즈를 맞히면 토큰을 받을 확률 증가"),
     # 💰 돈
-    "welfare_bonus": dict(emoji="🍚", name="기초수급 보상", unit="%", decimals=1, cap=100,
+    "welfare_bonus": dict(emoji="🍚", name="기초수급 보상", unit="%", decimals=1, limit=None,
                           ranges=((3, 8), (8, 15), (15, 25), (25, 40)),
                           desc="기초수급 지급액 증가"),
-    "wordchain_bonus": dict(emoji="🔤", name="끝말잇기 보상", unit="%", decimals=1, cap=100,
+    "wordchain_bonus": dict(emoji="🔤", name="끝말잇기 보상", unit="%", decimals=1, limit=None,
                             ranges=((3, 8), (8, 15), (15, 25), (25, 40)),
                             desc="끝말잇기 단어당 보상 증가 (하루 한도는 📅 능력)"),
 }
 
 
 def slot_level(slot):
-    """slot 번 슬롯이 열리는 레벨 (1번 = +5)"""
+    """slot 번 슬롯이 열리는 레벨 (1번 = +3)"""
     return SLOT_LEVELS[slot - 1]
 
 
@@ -154,7 +155,7 @@ def chance(percent):
 # ───────────── 합산 ─────────────
 
 async def totals(user_id, conn=None):
-    """{능력 키: 합친 수치 (상한 적용)}. 켜진 슬롯(아이템 레벨 >= 슬롯 레벨)만 센다."""
+    """{능력 키: 합친 수치 (limit 이 있으면 그 안으로)}. 켜진 슬롯(아이템 레벨 >= 슬롯 레벨)만 센다."""
     levels = await db.get_enhance_items(user_id, conn)
     result = {}
     for row in await db.get_abilities(user_id, conn):
@@ -162,7 +163,8 @@ async def totals(user_id, conn=None):
         if level is None or level < slot_level(row["slot"]) or row["ability"] not in ABILITIES:
             continue
         result[row["ability"]] = result.get(row["ability"], 0) + row["value"]
-    return {key: min(value, ABILITIES[key]["cap"]) for key, value in result.items()}
+    return {key: value if ABILITIES[key]["limit"] is None else min(value, ABILITIES[key]["limit"])
+            for key, value in result.items()}
 
 
 async def total(user_id, key, conn=None):
@@ -366,17 +368,15 @@ async def my_abilities(ctx, member: discord.Member = None):
     summed = await totals(member.id)
     embed = discord.Embed(title=f"✨ {member.display_name}님의 능력", color=discord.Color.purple())
     if not summed:
-        embed.description = "아직 켜진 능력이 없어요. 강화 아이템을 +5까지 올리면 첫 슬롯이 열려요!"
+        embed.description = "아직 켜진 능력이 없어요. 강화 아이템을 +3까지 올리면 첫 슬롯이 열려요!"
     else:
         lines = []
         for key, info in ABILITIES.items():
             if key not in summed:
                 continue
-            capped = " **(상한)**" if summed[key] >= info["cap"] else ""
-            lines.append(
-                f"{info['emoji']} {info['name']} **{format_value(key, summed[key])}**{capped}"
-                f" / 상한 {format_value(key, info['cap'])} — {info['desc']}"
-            )
+            limit = info["limit"]
+            maxed = f" **(최대 {format_value(key, limit)})**" if limit is not None and summed[key] >= limit else ""
+            lines.append(f"{info['emoji']} {info['name']} **{format_value(key, summed[key])}**{maxed} — {info['desc']}")
         embed.description = "\n".join(lines)
     embed.set_footer(text="같은 능력은 모든 아이템에서 합쳐져요 · 꺼진 슬롯(레벨 부족)은 빠져요")
     await ctx.send(embed=embed)

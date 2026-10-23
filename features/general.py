@@ -22,9 +22,18 @@ async def timeget(ctx):
 async def patchnote(ctx):
     await ctx.message.delete()
     embed = discord.Embed(
-        title="📜 패치노트 v1.3.3 — 코인 채굴",
-        description="v1.3.3 변경 사항과 v1.3 전체 요약이에요. 자세한 명령어는 `%도움말`에서!",
+        title="📜 패치노트 v1.3.3.1 — 능력 상한 해제",
+        description="v1.3.3.1 변경 사항과 v1.3 전체 요약이에요. 버전은 a.b.c.d (대격변 · 큰 기능 · 기능 추가 · 수정)로 바뀌었어요. 자세한 명령어는 `%도움말`에서!",
         color=0xf1c40f  # 노란색
+    )
+    embed.add_field(
+        name="✨ [v1.3.3.1] 강화 능력 상한 해제",
+        value=(
+            "- 강화에 돈이 많이 들어서 **모든 능력의 상한을 풀었어요.** 같은 능력은 모을수록 끝없이 쌓여요\n"
+            "- 숫자가 넘으면 말이 안 되는 것만 한계가 있어요: 🎰 꽝 환급 · 🧯 청산 보험 100%, ⏱️ 단타 시간 단축 30분\n"
+            "- 💥 대성공은 여전히 결과가 +6 이하일 때만 · `%내능력`에서 합친 효과 확인"
+        ),
+        inline=False
     )
     embed.add_field(
         name="⛏️ [v1.3.3] 코인 채굴 `%채굴`",

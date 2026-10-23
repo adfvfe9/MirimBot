@@ -62,7 +62,7 @@ async def play_gamble(user_id, amount=None):
         payout = amount * multiplier
         refund = 0.0
         if multiplier == 0:
-            # 🎰 도박 꽝 환급 (상한 8%: 기대값이 0.95 + 0.5 × 8% = 0.99 라 도박은 여전히 손해)
+            # 🎰 도박 꽝 환급 (기대값 0.95 + 0.5 × 환급%. 10%를 넘으면 도박이 이득이 된다)
             refund = amount * await abilities.total(user_id, "gamble_refund", conn) / 100
             payout = refund
         net_change = payout - amount

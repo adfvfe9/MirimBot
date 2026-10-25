@@ -521,10 +521,12 @@ async def s_game_unregister(i: discord.Interaction, 게임: str):
     await run(i, games.game_unregister, 게임)
 
 
-@command("전적", "등록한 계정과 최근 랭크 경기")
-@app_commands.describe(유저="볼 사람 (안 고르면 나)")
-async def s_game_record(i: discord.Interaction, 유저: discord.Member = None):
-    await run(i, games.game_record, 유저)
+@command("전적", "롤 · 발로 최근 10판 (일반 · 칼바람 등 전부)")
+@app_commands.describe(유저="볼 사람 (안 고르면 나, 계정을 등록한 사람)", 라이엇아이디="등록 안 한 계정은 닉네임#태그로", 게임="한 게임만 보기")
+@app_commands.choices(게임=GAME_CHOICES)
+async def s_game_record(i: discord.Interaction, 유저: discord.Member = None, 라이엇아이디: str = None, 게임: str = None):
+    who = 라이엇아이디 or (유저.mention if 유저 else "")
+    await run(i, games.game_record, query=f"{who} {게임 or ''}".strip() or None)
 
 
 @command("베팅", "친구 다음 랭크 판에 byte 걸기 (맞힌 사람끼리 나눠 가져요)")

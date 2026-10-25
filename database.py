@@ -1206,13 +1206,6 @@ async def add_game_match(m: dict) -> bool:
     ) is not None
 
 
-async def game_matches_of(user_id, limit=10) -> list[dict]:
-    rows = await pool().fetch(
-        "SELECT * FROM game_matches WHERE user_id = $1 ORDER BY started_at DESC LIMIT $2", int(user_id), limit
-    )
-    return [dict(r) for r in rows]
-
-
 async def game_matches_since(start) -> list[dict]:
     rows = await pool().fetch("SELECT * FROM game_matches WHERE started_at >= $1 ORDER BY started_at", start)
     return [dict(r) for r in rows]

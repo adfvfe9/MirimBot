@@ -3,7 +3,7 @@
     %롤등록 <닉네임#태그>          내 롤 계정 등록 (본인 것만)
     %발로등록 <닉네임#태그>        내 발로란트 계정 등록
     %게임등록해제 <롤 | 발로>
-    %전적 [@유저]                 등록한 계정과 최근 랭크 경기
+    %전적 [@유저 | 닉네임#태그] [롤 | 발로]   최근 10판 (일반 · 칼바람 등 전부, 등록 안 한 계정도)
     %베팅 @친구 [롤 | 발로] <승 | 패> <금액>   친구 다음 랭크 판에 걸기
     %베팅목록                     지금 걸려 있는 판돈
 
@@ -12,6 +12,7 @@
   등록할 때의 마지막 경기는 알리지 않는다. (등록 전 경기가 한꺼번에 뜨지 않게)
 - 롤은 라이엇 공식 API (RIOT_API_KEY, 개인용 키), 발로란트는 공식 API 를 개인 키로 못 써서 비공식 HenrikDev API (HENRIK_API_KEY).
   챔피언 · 요원 · 맵 이름은 한국어 (Data Dragon / valorant-api.com) 로 바꿔 보여준다.
+- %전적은 알림과 달리 모든 큐를 API 에서 바로 가져온다. (같은 사람은 RECORD_CACHE 초 동안 저장해 둔 걸 쓴다)
 베팅 (판돈 나누기)
 - 걸 때 돈이 빠진다. 건 뒤에 '시작한' 친구의 다음 랭크 판으로 정산한다. (이미 하고 있는 판에 결과를 보고 거는 것을 막는다)
 - 자기 판에는 못 건다. (일부러 지는 것을 막는다) 한 친구 · 한 게임에 한 사람당 하나만.
@@ -21,6 +22,7 @@
 import asyncio
 import datetime
 import os
+import re
 import time
 from urllib.parse import quote
 
@@ -38,11 +40,25 @@ BET_MIN = 100
 BET_MAX = 100_000
 BET_FEE = 0.05
 BET_EXPIRE = datetime.timedelta(hours=24)
+RECORD_COUNT = 10           # %전적: 게임마다 최근 몇 판
+RECORD_CACHE = 60           # %전적: 같은 계정을 다시 보면 이 초 동안은 저장해 둔 결과
 
 GAMES = {"lol": "롤", "val": "발로"}
 GAME_WORDS = {"롤": "lol", "lol": "lol", "리그오브레전드": "lol", "발로": "val", "발로란트": "val", "val": "val", "valorant": "val"}
 SIDE_WORDS = {"승": "win", "이김": "win", "win": "win", "패": "lose", "짐": "lose", "lose": "lose"}
-LOL_QUEUES = {420: "솔랭", 440: "자랭"}
+LOL_QUEUES = {420: "솔랭", 440: "자랭"}       # 알림 · 베팅은 이것만
+LOL_QUEUE_NAMES = {
+    **LOL_QUEUES, 400: "일반", 430: "일반", 480: "신속 대전", 490: "빠른 대전", 450: "칼바람", 720: "칼바람 격전",
+    700: "격전", 900: "우르프", 1010: "우르프", 1900: "우르프", 1020: "단일 챔피언", 1300: "돌격 넥서스",
+    1700: "아레나", 1710: "아레나", 1740: "아레나", 0: "사용자 설정",
+    **dict.fromkeys((830, 840, 850, 870, 880, 890), "AI 대전"),
+}
+LOL_MODE_NAMES = {"CLASSIC": "일반", "ARAM": "칼바람", "CHERRY": "아레나", "URF": "우르프"}   # 위에 없는 큐
+VAL_QUEUES = {
+    "competitive": "경쟁전", "unrated": "일반", "swiftplay": "신속플레이", "spikerush": "스파이크 돌격",
+    "deathmatch": "데스매치", "hurm": "팀 데스매치", "ggteam": "단계별 대결전", "premier": "프리미어",
+    "newmap": "새 맵", "snowball": "눈싸움 대전", "": "사용자 설정",
+}
 RESULT_TEXT = {"win": "승리", "lose": "패배", "draw": "무승부", "remake": "다시하기"}
 
 RIOT = "https://asia.api.riotgames.com"
@@ -120,27 +136,44 @@ async def lol_lookup(name, tag):
     return {"puuid": acc["puuid"], "riot_id": f"{acc['gameName']}#{acc['tagLine']}", "region": None}
 
 
-async def lol_ranked_ids(puuid, count=5):
-    return await get(f"{RIOT}/lol/match/v5/matches/by-puuid/{puuid}/ids", riot_headers(), {"type": "ranked", "count": count}) or []
+async def lol_match_ids(puuid, count=5, ranked=True):
+    params = {"count": count, **({"type": "ranked"} if ranked else {})}
+    return await get(f"{RIOT}/lol/match/v5/matches/by-puuid/{puuid}/ids", riot_headers(), params) or []
 
 
-async def lol_match(match_id):
-    """참가자별 결과 {puuid: 결과 dict} (랭크가 아니면 None)"""
-    m = await get(f"{RIOT}/lol/match/v5/matches/{match_id}", riot_headers())
-    if m is None or m["info"]["queueId"] not in LOL_QUEUES:
-        return None
-    info = m["info"]
-    started = datetime.datetime.fromtimestamp(info["gameStartTimestamp"] / 1000, datetime.timezone.utc)
-    result = {}
-    for p in info["participants"]:
-        outcome = "remake" if p.get("gameEndedInEarlySurrender") else ("win" if p["win"] else "lose")
-        result[p["puuid"]] = {
-            "game": "lol", "match_id": match_id, "started_at": started, "queue": LOL_QUEUES[info["queueId"]],
-            "result": outcome, "character": _names["champ"].get(p["championName"], p["championName"]),
-            "kills": p["kills"], "deaths": p["deaths"], "assists": p["assists"],
-            "detail": f"{info['gameDuration'] // 60}분",
-        }
-    return result
+_lol_matches = {}       # match_id → (랭크인지, 참가자별 결과). 끝난 경기는 안 바뀌니 기억해 둔다
+
+
+async def lol_match(match_id, ranked_only=True):
+    """참가자별 결과 {puuid: 결과 dict} (ranked_only 인데 랭크가 아니면 None)"""
+    if match_id not in _lol_matches:
+        m = await get(f"{RIOT}/lol/match/v5/matches/{match_id}", riot_headers())
+        if m is None:
+            return None
+        info = m["info"]
+        queue = LOL_QUEUE_NAMES.get(info["queueId"]) or LOL_MODE_NAMES.get(info["gameMode"], info["gameMode"])
+        started = datetime.datetime.fromtimestamp(info["gameStartTimestamp"] / 1000, datetime.timezone.utc)
+        result = {}
+        for p in info["participants"]:
+            detail = f"{info['gameDuration'] // 60}분"
+            if p.get("placement"):          # 아레나: 4등까지 승리
+                won, detail = p["placement"] <= 4, f"{p['placement']}등 · {detail}"
+            else:
+                won = p["win"]
+            result[p["puuid"]] = {
+                "game": "lol", "match_id": match_id, "started_at": started, "queue": queue,
+                "result": "remake" if p.get("gameEndedInEarlySurrender") else ("win" if won else "lose"),
+                "character": _names["champ"].get(p["championName"], p["championName"]),
+                "kills": p["kills"], "deaths": p["deaths"], "assists": p["assists"], "detail": detail,
+            }
+        ranked = info["queueId"] in LOL_QUEUES
+        if _names["champ"]:         # 한국어 이름을 못 받았을 땐 기억하지 않는다 (영어 이름이 남지 않게)
+            if len(_lol_matches) >= 500:
+                _lol_matches.pop(next(iter(_lol_matches)))
+            _lol_matches[match_id] = (ranked, result)
+    else:
+        ranked, result = _lol_matches[match_id]
+    return None if ranked_only and not ranked else result
 
 
 # ── 발로란트 (HenrikDev) ──
@@ -153,10 +186,10 @@ async def val_lookup(name, tag):
     return {"puuid": d["puuid"], "riot_id": f"{d['name']}#{d['tag']}", "region": d.get("region") or "kr"}
 
 
-async def val_matches(region, puuid, size=1):
-    """최근 경쟁전 [{match_id, started_at, players: {puuid: 결과}}] (최근 것부터)"""
+async def val_matches(region, puuid, size=1, mode="competitive"):
+    """최근 경기 [{match_id, started_at, players: {puuid: 결과}}] (최근 것부터, mode=None 이면 모든 모드)"""
     data = await get(f"{HENRIK}/valorant/v4/by-puuid/matches/{region}/pc/{puuid}", henrik_headers(),
-                     {"mode": "competitive", "size": size})
+                     {"size": size, **({"mode": mode} if mode else {})})
     out = []
     for m in (data or {}).get("data") or []:
         meta = m["metadata"]
@@ -166,16 +199,19 @@ async def val_matches(region, puuid, size=1):
         rounds = {t["team_id"]: t["rounds"] for t in m["teams"]}
         started = datetime.datetime.fromisoformat(meta["started_at"].replace("Z", "+00:00"))
         map_name = _names["map"].get(meta["map"]["id"], meta["map"]["name"])
+        q = meta.get("queue") or {}
+        queue = VAL_QUEUES.get(q.get("id"), q.get("name") or "?")
         players = {}
         for p in m["players"]:
             team = p["team_id"]
             outcome = "draw" if not any(won.values()) else ("win" if won.get(team) else "lose")
             r = rounds.get(team) or {}
+            score = "" if q.get("mode_type") == "Deathmatch" else f" {r.get('won', '?')}:{r.get('lost', '?')}"   # 데스매치는 라운드가 킬 수
             players[p["puuid"]] = {
-                "game": "val", "match_id": meta["match_id"], "started_at": started, "queue": "경쟁전",
+                "game": "val", "match_id": meta["match_id"], "started_at": started, "queue": queue,
                 "result": outcome, "character": _names["agent"].get(p["agent"]["id"], p["agent"]["name"]),
                 "kills": p["stats"]["kills"], "deaths": p["stats"]["deaths"], "assists": p["stats"]["assists"],
-                "detail": f"{map_name} {r.get('won', '?')}:{r.get('lost', '?')}",
+                "detail": map_name + score,
             }
         out.append({"match_id": meta["match_id"], "started_at": started, "players": players})
     return out
@@ -187,10 +223,30 @@ async def lookup(game, name, tag):
 
 async def latest_match_id(game, acc):
     if game == "lol":
-        ids = await lol_ranked_ids(acc["puuid"], 1)
+        ids = await lol_match_ids(acc["puuid"], 1)
         return ids[0] if ids else None
     ms = await val_matches(acc["region"], acc["puuid"], 1)
     return ms[0]["match_id"] if ms else None
+
+
+_recent = {}        # (game, puuid) → (시각, 결과 목록)
+
+
+async def recent_matches(game, acc):
+    """%전적: 모든 큐의 최근 RECORD_COUNT 판 (최근 것부터)"""
+    key = (game, acc["puuid"])
+    hit = _recent.get(key)
+    if hit and time.monotonic() - hit[0] < RECORD_CACHE:
+        return hit[1]
+    if game == "lol":
+        ids = await lol_match_ids(acc["puuid"], RECORD_COUNT, ranked=False)
+        parts = await asyncio.gather(*(lol_match(i, ranked_only=False) for i in ids))
+        out = [p[acc["puuid"]] for p in parts if p and acc["puuid"] in p]
+    else:
+        ms = await val_matches(acc["region"], acc["puuid"], RECORD_COUNT, mode=None)
+        out = [m["players"][acc["puuid"]] for m in ms if acc["puuid"] in m["players"]]
+    _recent[key] = (time.monotonic(), out)
+    return out
 
 
 # ───────────── 베팅 정산 ─────────────
@@ -282,7 +338,7 @@ async def check_account(acc):
     """이 계정의 새 랭크 판을 처리한다"""
     last = acc["last_match_id"]
     if acc["game"] == "lol":
-        ids = await lol_ranked_ids(acc["puuid"], 5)
+        ids = await lol_match_ids(acc["puuid"], 5)
         if not ids or ids[0] == last:
             return
         new = ids[:ids.index(last)] if last in ids else ids[:1]
@@ -379,29 +435,90 @@ async def game_unregister(ctx, game_word: str = None):
         await ctx.send(f"❌ {GAMES[game]} 계정이 등록돼 있지 않아요.")
 
 
-@client.command(aliases=["전적"])
-async def game_record(ctx, member: discord.Member = None):
-    member = member or ctx.author
-    accounts = [a for a in await db.game_accounts() if a["user_id"] == member.id]
-    embed = discord.Embed(title=f"🎮 {member.display_name}님의 랭크 전적", color=0x5865f2)
-    if not accounts:
-        embed.description = "등록한 계정이 없어요. `%롤등록 닉네임#태그` / `%발로등록 닉네임#태그`"
-        await ctx.send(embed=embed)
+def record_field(game, matches):
+    """%전적 한 게임 칸: (제목, 내용)"""
+    icon = {"win": "🟦", "lose": "🟥", "draw": "⬜", "remake": "⬜"}
+    wins = sum(m["result"] == "win" for m in matches)
+    losses = sum(m["result"] == "lose" for m in matches)
+    k, d, a = (sum(m[s] for m in matches) for s in ("kills", "deaths", "assists"))
+    title = f"{GAMES[game]} 최근 {len(matches)}판 · {wins}승 {losses}패 · KDA {(k + a) / max(d, 1):.2f}"
+    counts = {}
+    for m in matches:
+        counts[m["character"]] = counts.get(m["character"], 0) + 1
+    most = " · ".join(f"{c} {n}" for c, n in sorted(counts.items(), key=lambda x: -x[1])[:3])
+    footer = f"-# 많이 한 {'챔피언' if game == 'lol' else '요원'}: {most}"
+    lines = []
+    for m in matches:
+        line = (f"{icon[m['result']]} `{m['started_at'].astimezone(db.KST):%m/%d %H:%M}` {m['queue']} "
+                f"**{RESULT_TEXT[m['result']]}** · {m['character']} {m['kills']}/{m['deaths']}/{m['assists']} · {m['detail']}")
+        if sum(len(x) + 1 for x in lines) + len(line) + len(footer) + 1 > 1024:
+            break
+        lines.append(line)
+    return title, "\n".join(lines + [footer])
+
+
+@client.command(aliases=["전적", "최근전적"])
+async def game_record(ctx, *, query: str = None):
+    usage = "사용법: `%전적 [@유저 | 닉네임#태그] [롤 | 발로]` 예) `%전적` `%전적 @철수 롤` `%전적 Hide on bush#KR1`"
+    words = (query or "").split()
+    game = None
+    for i in (-1, 0):           # 게임은 앞이나 뒤에
+        if words and words[i].lower() in GAME_WORDS:
+            game = GAME_WORDS[words.pop(i).lower()]
+            break
+    rest = " ".join(words)
+    mention = re.fullmatch(r"<@!?(\d+)>", rest)
+    wanted = [game] if game else list(GAMES)
+    accounts = []
+    try:
+        async with ctx.typing():
+            await load_names()
+            if not rest or mention:
+                member = ctx.guild.get_member(int(mention[1])) if mention and ctx.guild else (None if mention else ctx.author)
+                if member is None:
+                    await ctx.send("❌ 그 사람을 이 서버에서 찾지 못했어요.")
+                    return
+                title = f"🎮 {member.display_name}님의 최근 전적"
+                accounts = [a for a in await db.game_accounts() if a["user_id"] == member.id and a["game"] in wanted]
+                if not accounts:
+                    which = GAMES[game] if game else "롤 · 발로"
+                    await ctx.send(f"❌ {member.display_name}님은 {which} 계정을 등록하지 않았어요. "
+                                   f"`%전적 닉네임#태그`로 등록 없이도 볼 수 있어요.")
+                    return
+            elif (parsed := split_riot_id(rest)) is not None:
+                for g in wanted:
+                    acc = await lookup(g, *parsed)
+                    if acc:
+                        accounts.append({**acc, "game": g})
+                if not accounts:
+                    await ctx.send(f"❌ `{rest}` 계정을 찾지 못했어요. 닉네임과 태그(#뒤)를 확인해주세요.")
+                    return
+                title = f"🎮 {accounts[0]['riot_id']} 최근 전적"
+            else:
+                await ctx.send(usage)
+                return
+            results = []
+            for acc in accounts:
+                try:
+                    results.append((acc, await recent_matches(acc["game"], acc), None))
+                except ApiError as e:
+                    results.append((acc, [], e))
+    except ApiError as e:
+        await ctx.send(f"🥲 {e}")
         return
-    embed.description = " · ".join(f"{GAMES[a['game']]} **{a['riot_id']}**" for a in accounts)
-    matches = await db.game_matches_of(member.id, 10)
-    if matches:
-        icon = {"win": "🟦", "lose": "🟥", "draw": "⬜", "remake": "⬜"}
-        lines = [
-            f"{icon[m['result']]} `{m['started_at'].astimezone(db.KST):%m/%d %H:%M}` {GAMES[m['game']]} {m['queue']} "
-            f"**{RESULT_TEXT[m['result']]}** · {m['character']} {m['kills']}/{m['deaths']}/{m['assists']}"
-            for m in matches
-        ]
-        wins = sum(m["result"] == "win" for m in matches)
-        losses = sum(m["result"] == "lose" for m in matches)
-        embed.add_field(name=f"최근 {len(matches)}판 ({wins}승 {losses}패)", value="\n".join(lines)[:1024], inline=False)
-    else:
-        embed.add_field(name="최근 랭크", value="등록한 뒤 끝난 랭크 판이 아직 없어요.", inline=False)
+    embed = discord.Embed(title=title, color=0x5865f2,
+                          description=" · ".join(f"{GAMES[a['game']]} **{a['riot_id']}**" for a in accounts))
+    for acc, matches, error in results:
+        if error:
+            embed.add_field(name=GAMES[acc["game"]], value=f"🥲 {error}", inline=False)
+        elif matches:
+            name, value = record_field(acc["game"], matches)
+            embed.add_field(name=name, value=value, inline=False)
+        elif game or not rest or mention:      # 고른 게임 / 등록한 게임인데 판이 없음 (닉네임으로 둘 다 볼 땐 안 한 게임은 숨김)
+            embed.add_field(name=GAMES[acc["game"]], value="최근 경기가 없어요.", inline=False)
+    if not embed.fields:
+        embed.add_field(name="최근 경기", value="최근 경기가 없어요.", inline=False)
+    embed.set_footer(text="알림 · 베팅은 랭크 게임만 · 일반 · 칼바람 등은 전적에만 나와요")
     await ctx.send(embed=embed)
 
 

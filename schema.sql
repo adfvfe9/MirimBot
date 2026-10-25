@@ -399,6 +399,66 @@ CREATE INDEX IF NOT EXISTS command_log_time_idx ON command_log (created_at);
 CREATE INDEX IF NOT EXISTS command_log_user_idx ON command_log (user_id, created_at);
 
 
+-- ───────────── 롤 · 발로란트 연동 (features/games.py) ─────────────
+-- 본인이 직접 등록한 Riot ID. game = 'lol' / 'val'. last_match_id = 마지막으로 알린 랭크 경기 (%초기화 로 지워지지 않는다)
+CREATE TABLE IF NOT EXISTS game_accounts (
+    user_id       BIGINT      NOT NULL,
+    game          TEXT        NOT NULL,
+    puuid         TEXT        NOT NULL,
+    riot_id       TEXT        NOT NULL,     -- 닉네임#태그
+    region        TEXT,                     -- 발로: kr / ap ...
+    last_match_id TEXT,
+    registered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, game)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS game_accounts_puuid_idx ON game_accounts (game, puuid);
+-- 알린 랭크 경기 결과 (%전적, 오늘의 미림봇). result = win / lose / draw / remake
+CREATE TABLE IF NOT EXISTS game_matches (
+    game       TEXT        NOT NULL,
+    match_id   TEXT        NOT NULL,
+    user_id    BIGINT      NOT NULL,
+    started_at TIMESTAMPTZ NOT NULL,
+    queue      TEXT        NOT NULL,
+    result     TEXT        NOT NULL,
+    character  TEXT,
+    kills      INTEGER,
+    deaths     INTEGER,
+    assists    INTEGER,
+    detail     TEXT,
+    PRIMARY KEY (game, match_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS game_matches_time_idx ON game_matches (started_at);
+-- 친구 다음 랭크 판에 건 돈. 건 뒤에 시작한 판으로 판돈 나누기 정산. status = open / settled / refunded
+CREATE TABLE IF NOT EXISTS game_bets (
+    id         BIGSERIAL   PRIMARY KEY,
+    guild_id   BIGINT,
+    bettor_id  BIGINT      NOT NULL,
+    target_id  BIGINT      NOT NULL,
+    game       TEXT        NOT NULL,
+    side       TEXT        NOT NULL,       -- win / lose
+    amount     NUMERIC     NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    status     TEXT        NOT NULL DEFAULT 'open',
+    match_id   TEXT,
+    payout     NUMERIC
+);
+CREATE INDEX IF NOT EXISTS game_bets_open_idx ON game_bets (target_id, game) WHERE status = 'open';
+
+
+-- ───────────── 오늘의 미림봇 · 자랑 알림 (features/digest.py) ─────────────
+-- 잭팟 · 큰 수익 · 강제청산 · 가위바위보 연승 · 칭호 획득. 하루 소식(오늘의 미림봇)이 센다. 14일 지나면 지운다
+-- (강제청산은 돈이 따로 오가지 않아서 money_log 에 남지 않으므로 여기에 남긴다)
+CREATE TABLE IF NOT EXISTS brag_log (
+    id         BIGSERIAL   PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    user_id    BIGINT      NOT NULL,
+    kind       TEXT        NOT NULL,     -- jackpot / big_win / liquidation / rps / title
+    amount     NUMERIC,
+    text       TEXT        NOT NULL
+);
+CREATE INDEX IF NOT EXISTS brag_log_time_idx ON brag_log (created_at);
+
+
 -- ───────────── 일일 미션 (features/missions.py) ─────────────
 -- 받은 미션 보상. mission = 미션 key, 'all' = 3개 모두 완료 보너스 (미션 자체와 진행도는 저장하지 않는다)
 CREATE TABLE IF NOT EXISTS mission_claims (

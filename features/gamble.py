@@ -8,7 +8,7 @@ import discord
 import database as db
 import respond
 from bot import client
-from features import abilities
+from features import abilities, digest
 from fmt import debt_line, num
 
 
@@ -82,6 +82,9 @@ async def play_gamble(user_id, amount=None):
             gamble_last_at=now,
         )
         await db.log_money(user_id, "gamble", net_change, f"bet {amount} x{multiplier}", conn)
+
+    if multiplier >= 7:
+        digest.jackpot(user_id, amount, payout)     # 🎰 소식 채널에 자랑
 
     return {
         "amount": amount,
@@ -584,6 +587,8 @@ class RPSView(discord.ui.View):
         # 보상 지급 및 저장 (미납금이 있으면 자동 징수)
         result = await db.receive(self.player_id, reward)
         await db.log_money(self.player_id, "rps", reward, f"streak {self.streak}")
+        if reward > 0:
+            digest.rps_streak(self.player_id, self.streak, reward)
 
         for button in self.children:
             button.disabled = True

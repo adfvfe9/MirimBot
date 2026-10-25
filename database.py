@@ -1152,6 +1152,193 @@ async def recent_news(limit: int = 5) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# ───────────── 롤 · 발로란트 연동 (features/games.py) ─────────────
+
+async def get_game_account(user_id, game) -> dict | None:
+    row = await pool().fetchrow("SELECT * FROM game_accounts WHERE user_id = $1 AND game = $2", int(user_id), game)
+    return dict(row) if row else None
+
+
+async def game_accounts(game=None) -> list[dict]:
+    rows = await pool().fetch(
+        "SELECT * FROM game_accounts WHERE ($1::text IS NULL OR game = $1) ORDER BY registered_at", game
+    )
+    return [dict(r) for r in rows]
+
+
+async def game_account_by_puuid(game, puuid) -> dict | None:
+    row = await pool().fetchrow("SELECT * FROM game_accounts WHERE game = $1 AND puuid = $2", game, puuid)
+    return dict(row) if row else None
+
+
+async def set_game_account(user_id, game, puuid, riot_id, region, last_match_id) -> None:
+    await pool().execute(
+        """
+        INSERT INTO game_accounts (user_id, game, puuid, riot_id, region, last_match_id) VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (user_id, game) DO UPDATE
+        SET puuid = EXCLUDED.puuid, riot_id = EXCLUDED.riot_id, region = EXCLUDED.region,
+            last_match_id = EXCLUDED.last_match_id, registered_at = now()
+        """,
+        int(user_id), game, puuid, riot_id, region, last_match_id,
+    )
+
+
+async def delete_game_account(user_id, game) -> bool:
+    result = await pool().execute("DELETE FROM game_accounts WHERE user_id = $1 AND game = $2", int(user_id), game)
+    return result != "DELETE 0"
+
+
+async def set_last_match(user_id, game, match_id) -> None:
+    await pool().execute(
+        "UPDATE game_accounts SET last_match_id = $3 WHERE user_id = $1 AND game = $2", int(user_id), game, match_id
+    )
+
+
+async def add_game_match(m: dict) -> bool:
+    """처음 넣으면 True (이미 있으면 False)"""
+    return await pool().fetchval(
+        """
+        INSERT INTO game_matches (game, match_id, user_id, started_at, queue, result, character, kills, deaths, assists, detail)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT DO NOTHING RETURNING true
+        """,
+        m["game"], m["match_id"], int(m["user_id"]), m["started_at"], m["queue"], m["result"],
+        m.get("character"), m.get("kills"), m.get("deaths"), m.get("assists"), m.get("detail"),
+    ) is not None
+
+
+async def game_matches_of(user_id, limit=10) -> list[dict]:
+    rows = await pool().fetch(
+        "SELECT * FROM game_matches WHERE user_id = $1 ORDER BY started_at DESC LIMIT $2", int(user_id), limit
+    )
+    return [dict(r) for r in rows]
+
+
+async def game_matches_since(start) -> list[dict]:
+    rows = await pool().fetch("SELECT * FROM game_matches WHERE started_at >= $1 ORDER BY started_at", start)
+    return [dict(r) for r in rows]
+
+
+def _bet(row):
+    d = dict(row)
+    d["amount"] = _float(d["amount"])
+    d["payout"] = None if d["payout"] is None else _float(d["payout"])
+    return d
+
+
+async def add_bet(guild_id, bettor_id, target_id, game, side, amount, conn=None) -> dict:
+    row = await (conn or pool()).fetchrow(
+        """
+        INSERT INTO game_bets (guild_id, bettor_id, target_id, game, side, amount)
+        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
+        """,
+        guild_id and int(guild_id), int(bettor_id), int(target_id), game, side, _num(amount),
+    )
+    return _bet(row)
+
+
+async def open_bets(target_id=None, game=None, bettor_id=None, conn=None) -> list[dict]:
+    rows = await (conn or pool()).fetch(
+        """
+        SELECT * FROM game_bets WHERE status = 'open'
+          AND ($1::bigint IS NULL OR target_id = $1) AND ($2::text IS NULL OR game = $2)
+          AND ($3::bigint IS NULL OR bettor_id = $3)
+        ORDER BY id
+        """,
+        target_id and int(target_id), game, bettor_id and int(bettor_id),
+    )
+    return [_bet(r) for r in rows]
+
+
+async def close_bet(bet_id, status, match_id, payout, conn) -> bool:
+    """아직 open 이면 닫고 True (이미 정산됐으면 False — 두 번 정산 방지)"""
+    return await conn.fetchval(
+        """
+        UPDATE game_bets SET status = $2, match_id = $3, payout = $4
+        WHERE id = $1 AND status = 'open' RETURNING true
+        """,
+        int(bet_id), status, match_id, _num(payout),
+    ) is not None
+
+
+# ───────────── 오늘의 미림봇 (features/digest.py) ─────────────
+
+async def add_brag(user_id, kind: str, text: str, amount=None) -> None:
+    await pool().execute(
+        "INSERT INTO brag_log (user_id, kind, amount, text) VALUES ($1, $2, $3, $4)",
+        int(user_id), kind, None if amount is None else _num(amount), text,
+    )
+
+
+async def brags_since(start) -> list[dict]:
+    rows = await pool().fetch("SELECT * FROM brag_log WHERE created_at >= $1 ORDER BY id", start)
+    return [{**dict(r), "amount": None if r["amount"] is None else _float(r["amount"])} for r in rows]
+
+
+async def prune_brags(before) -> None:
+    await pool().execute("DELETE FROM brag_log WHERE created_at < $1", before)
+
+
+async def active_users_since(start) -> set:
+    """이 시각 이후 명령어(% 또는 /)를 쓴 사람들"""
+    rows = await pool().fetch(
+        "SELECT DISTINCT user_id FROM command_log WHERE created_at >= $1 AND kind IN ('command', 'slash')", start
+    )
+    return {r["user_id"] for r in rows}
+
+
+async def worth_baseline(start) -> dict:
+    """{user_id: start 직전(없으면 직후) 1시간 기록의 순자산}"""
+    rows = await pool().fetch(
+        """
+        SELECT DISTINCT ON (user_id) user_id, worth FROM asset_history
+        WHERE recorded_at <= $1 ORDER BY user_id, recorded_at DESC
+        """,
+        start,
+    )
+    result = {r["user_id"]: _float(r["worth"]) for r in rows}
+    later = await pool().fetch(
+        """
+        SELECT DISTINCT ON (user_id) user_id, worth FROM asset_history
+        WHERE recorded_at > $1 ORDER BY user_id, recorded_at
+        """,
+        start,
+    )
+    for r in later:
+        result.setdefault(r["user_id"], _float(r["worth"]))
+    return result
+
+
+async def money_log_since(start, sources) -> list[dict]:
+    rows = await pool().fetch(
+        "SELECT user_id, source, amount, memo FROM money_log WHERE created_at >= $1 AND source = ANY($2::text[])",
+        start, list(sources),
+    )
+    return [{**dict(r), "amount": _float(r["amount"])} for r in rows]
+
+
+async def first_prices_since(start) -> dict:
+    """{종목: start 이후 첫 가격}"""
+    rows = await pool().fetch(
+        "SELECT DISTINCT ON (symbol) symbol, price FROM price_history WHERE recorded_at >= $1 ORDER BY symbol, id", start
+    )
+    return {r["symbol"]: _float(r["price"]) for r in rows}
+
+
+async def mission_clears(day) -> list[int]:
+    rows = await pool().fetch("SELECT user_id FROM mission_claims WHERE day = $1 AND mission = 'all'", day)
+    return [r["user_id"] for r in rows]
+
+
+async def welfare_streaks(since_day) -> list[dict]:
+    """since_day 이후에 기초수급을 받은 사람들의 연속 일수 (큰 순)"""
+    rows = await pool().fetch(
+        "SELECT user_id, welfare_streak FROM users WHERE welfare_last_date >= $1 AND welfare_streak > 0 "
+        "ORDER BY welfare_streak DESC",
+        since_day,
+    )
+    return [dict(r) for r in rows]
+
+
 async def get_news_channels() -> list[int]:
     rows = await pool().fetch("SELECT value FROM bot_state WHERE key LIKE 'news_channel:%'")
     return [int(r["value"]) for r in rows]
@@ -1438,7 +1625,7 @@ RESET_TABLES = [
     "stocks", "price_history", "portfolio", "stock_positions", "stock_notices", "market_state",
     "warnings", "warning_logs", "suggestions", "news", "wordchain_records", "money_log",
     "market_listings", "market_trades", "coin_price", "coin_history", "coin_holdings", "miners",
-    "user_titles", "asset_history", "mission_claims", "stock_orders",
+    "user_titles", "asset_history", "mission_claims", "stock_orders", "brag_log", "game_bets",
 ]
 
 

@@ -128,6 +128,8 @@ async def check(user_id, worth=None):
     if new:
         await db.add_titles(user_id, new)
         owned = await db.get_titles(user_id)
+        from features import digest
+        digest.new_titles(user_id, [BY_KEY[k] for k in new])    # 🏅 소식 채널에 자랑
     return stats, owned, new
 
 

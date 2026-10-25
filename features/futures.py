@@ -19,7 +19,7 @@ from discord.ui import Button, View
 import database as db
 import respond
 from bot import client
-from features import abilities, stocks
+from features import abilities, digest, stocks
 from fmt import debt_line, num
 
 # ───────────── 밸런스 설정 ─────────────
@@ -120,6 +120,7 @@ async def check_liquidations(positions=None):
                 conn,
             )
         print(f"[강제청산] 유저 {pos['user_id']} {pos['symbol']} {pos['side']} x{pos['leverage']}")
+        digest.liquidation(pos["user_id"], pos, pos["margin"] - refund)
         count += 1
     return count
 
@@ -402,6 +403,8 @@ async def close_position(ctx, target: str = None):
             await db.log_money(user_id, "futures_close", payout, f"{position_memo(pos)} hold_fee {hold:.2f}", conn)
         total_payout += payout
         total_collected += result["collected"]
+        if payout - pos["margin"] > 0:
+            digest.leverage_win(user_id, pos, payout - pos["margin"])
         lines.append(
             f"#{pos['id']} {pos['symbol']} {SIDE_TEXT[pos['side']]} {pos['leverage']}배: "
             f"손익 {num(p, sign=True)} · 보유 비용 -{num(hold)} → 받은 돈 {num(payout)} byte"

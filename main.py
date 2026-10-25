@@ -15,6 +15,9 @@
   features/orders.py       주식 예약 매매 (가격이 닿으면 자동으로 사고팔기, 토큰 소모)
   features/news.py         주식 뉴스 (30~90분마다 랜덤 뉴스)
   features/assets.py       순자산, 자산랭킹, 자산그래프 (1시간마다 순자산 기록)
+  features/activity.py     활동 보상 (통화방에 있으면 1분마다, 채팅하면 글자 수만큼 byte)
+  features/games.py        롤 · 발로란트 연동 (랭크 경기 알림, 친구 다음 판에 베팅)
+  features/digest.py       오늘의 미림봇 (매일 밤 9시 소식), 자랑 알림 (잭팟 · 큰 수익 · 강제청산 · 연승 · 칭호)
   features/titles.py       칭호 (업적, 진행도, 장착)
   features/missions.py     일일 미션 (하루 3개, 다 깨면 토큰)
   features/gamble.py       도박, 가위바위보
@@ -45,14 +48,17 @@ from bot import client, get_token
 # import 하는 순간 각 파일의 명령어가 봇에 등록된다.
 from features import (  # noqa: F401
     abilities,
+    activity,
     admin,
     crypto,
+    digest,
     assets,
     audit,
     bank,
     economy,
     enhance,
     gamble,
+    games,
     general,
     health,
     market,
@@ -102,6 +108,9 @@ async def setup_hook():
     asyncio.create_task(audit.prune_loop())
     asyncio.create_task(school.post_loop())
     asyncio.create_task(roleshop.expire_loop())
+    asyncio.create_task(digest.post_loop())
+    asyncio.create_task(activity.loop())
+    asyncio.create_task(games.loop())
 
     await slash.sync()     # 슬래시 명령어 목록이 바뀌었으면 디스코드에 등록
 

@@ -23,7 +23,7 @@ from discord import app_commands
 import database as db
 from bot import client
 from features import (
-    abilities, admin, assets, audit, bank, crypto, economy, enhance, futures, gamble, general, health,
+    abilities, admin, assets, audit, bank, crypto, digest, economy, enhance, futures, gamble, games, general, health,
     market, mining, missions, moderation, music, news, orders, quiz, roleshop, school, stocks,
     suggestions, titles, tokens, tts, wordchain,
 )
@@ -498,6 +498,47 @@ async def s_wordchain_rank(i: discord.Interaction, 난이도: str = None):
     await run(i, wordchain.wordchain_rank, 난이도)
 
 
+# ───────────── 롤 · 발로란트 ─────────────
+
+GAME_CHOICES = [app_commands.Choice(name="롤", value="롤"), app_commands.Choice(name="발로란트", value="발로")]
+
+
+@command("롤등록", "내 롤 계정 등록 (랭크 결과가 소식 채널에 떠요)")
+@app_commands.describe(라이엇아이디="닉네임#태그 예) Hide on bush#KR1")
+async def s_lol_register(i: discord.Interaction, 라이엇아이디: str):
+    await run(i, games.lol_register, riot_id=라이엇아이디)
+
+
+@command("발로등록", "내 발로란트 계정 등록 (경쟁전 결과가 소식 채널에 떠요)")
+@app_commands.describe(라이엇아이디="닉네임#태그")
+async def s_val_register(i: discord.Interaction, 라이엇아이디: str):
+    await run(i, games.val_register, riot_id=라이엇아이디)
+
+
+@command("게임등록해제", "롤 / 발로란트 계정 등록 해제")
+@app_commands.choices(게임=GAME_CHOICES)
+async def s_game_unregister(i: discord.Interaction, 게임: str):
+    await run(i, games.game_unregister, 게임)
+
+
+@command("전적", "등록한 계정과 최근 랭크 경기")
+@app_commands.describe(유저="볼 사람 (안 고르면 나)")
+async def s_game_record(i: discord.Interaction, 유저: discord.Member = None):
+    await run(i, games.game_record, 유저)
+
+
+@command("베팅", "친구 다음 랭크 판에 byte 걸기 (맞힌 사람끼리 나눠 가져요)")
+@app_commands.describe(친구="걸 친구", 결과="이길까 질까", 금액="100 ~ 10만", 게임="친구가 둘 다 등록했으면 골라요")
+@app_commands.choices(결과=[app_commands.Choice(name="승", value="승"), app_commands.Choice(name="패", value="패")], 게임=GAME_CHOICES)
+async def s_game_bet(i: discord.Interaction, 친구: discord.Member, 결과: str, 금액: app_commands.Range[int, 100, 100_000], 게임: str = None):
+    await run(i, games.game_bet, 친구, *([게임] if 게임 else []), 결과, str(금액))
+
+
+@command("베팅목록", "지금 걸려 있는 판돈")
+async def s_game_bet_list(i: discord.Interaction):
+    await run(i, games.game_bet_list)
+
+
 # ───────────── 자랑 · 상점 ─────────────
 
 @command("칭호", "칭호 28개와 진행도")
@@ -756,6 +797,17 @@ async def a_school(i: discord.Interaction):
 @admin_command("뉴스채널", "주식 뉴스를 올릴 채널")
 async def a_news_channel(i: discord.Interaction, 채널: discord.TextChannel):
     await run(i, news.set_news_channel, 채널.id)
+
+
+@admin_command("소식채널", "오늘의 미림봇 · 자랑 알림을 올릴 채널 (안 정하면 주식 뉴스 채널)")
+@app_commands.describe(채널="올릴 채널", 끄기="알림 끄기")
+async def a_digest_channel(i: discord.Interaction, 채널: discord.TextChannel = None, 끄기: bool = False):
+    await run(i, digest.digest_channel, "끄기" if 끄기 else (str(채널.id) if 채널 else None))
+
+
+@admin_command("소식미리보기", "오늘의 미림봇 미리 보기")
+async def a_digest_preview(i: discord.Interaction):
+    await run(i, digest.digest_preview)
 
 
 @admin_command("뉴스발행", "지금 바로 주식 뉴스 내기")

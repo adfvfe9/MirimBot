@@ -4,6 +4,7 @@
 
 봇 객체는 bot.py, 명령어는 features/ 폴더에 기능별로 나뉘어 있다.
   features/general.py      시간, 패치노트, 도움말, 청소 등
+  features/slash.py        슬래시(/) 명령어: 같은 이름의 %명령어를 불러 쓴다, /관리 (관리자)
   features/school.py       급식, 시간표, 학사일정, 평일 아침 학사정보 알림 (나이스 API)
   features/health.py       %핑 (디스코드 / DB / 봇 멈춤 시간 재기)
   features/audit.py        모든 명령어 / 버튼 기록, %로그 (관리자)
@@ -65,6 +66,7 @@ from features import (  # noqa: F401
     renewal,
     roleshop,
     school,
+    slash,
     stocks,
     futures,
     suggestions,
@@ -101,6 +103,8 @@ async def setup_hook():
     asyncio.create_task(school.post_loop())
     asyncio.create_task(roleshop.expire_loop())
 
+    await slash.sync()     # 슬래시 명령어 목록이 바뀌었으면 디스코드에 등록
+
 
 # on_message는 커맨드와 충돌 방지 필요 → process_commands 사용
 @client.event
@@ -128,7 +132,7 @@ async def on_ready():
 
     await client.change_presence(
         status=discord.Status.online,
-        activity=discord.Game('\'%도움말\'을 입력해보세요')
+        activity=discord.Game('\'/도움말\'을 입력해보세요')
     )
 
     if not stocks.auto_update_stocks.is_running():

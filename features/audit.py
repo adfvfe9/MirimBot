@@ -3,6 +3,7 @@
     %로그 [@유저] [찾을 말 | 관리자] [개수]     (관리자만) 최근 기록 보기
 
 - 모든 명령어: 친 메시지 그대로, 성공했는지 (에러면 에러 종류), 걸린 시간
+- 모든 /명령어: 입력한 값 그대로
 - 모든 버튼 / 메뉴 / 입력창: 누른 버튼 이름 (또는 고른 값, 입력한 값) + 버튼이 달린 메시지 제목
 - 돈이 바뀐 기록은 따로 money_log 에 있다. 여기는 "누가 무엇을 눌렀나" 를 보는 곳.
 - 기록은 명령어를 느리게 하지 않게 따로(백그라운드로) 저장하고, 90일이 지나면 지운다.
@@ -103,9 +104,22 @@ def message_title(message):
     return (message.content or "")[:60] or None
 
 
+def slash_text(data):
+    """/명령어 입력을 '/관리 로그 유저:123 개수:5' 처럼 한 줄로 (하위 명령어는 이름을 이어 붙인다)"""
+    parts = ["/" + data.get("name", "?")]
+    options = data.get("options", [])
+    while options and options[0].get("type") in (1, 2):        # 1 = 하위 명령어, 2 = 하위 명령어 묶음
+        parts.append(options[0]["name"])
+        options = options[0].get("options", [])
+    return " ".join(parts), " ".join(f"{o['name']}:{o.get('value')}" for o in options)
+
+
 def describe(interaction):
     """(kind, name, content) 또는 None"""
     data = interaction.data or {}
+    if interaction.type == discord.InteractionType.application_command:
+        name, args = slash_text(data)
+        return "slash", name, f"{name} {args}".strip()
     title = message_title(interaction.message)
     if interaction.type == discord.InteractionType.component:
         component = find_component(interaction.message, data.get("custom_id"))
@@ -173,18 +187,21 @@ def admin_command_names():
     for command in client.walk_commands():
         if command.checks:
             names += [command.name, *command.aliases]
+    group = client.tree.get_command("관리")          # 슬래시 관리자 명령어 (/관리 …)
+    if group is not None:
+        names += [f"/관리 {c.name}" for c in group.commands]
     return names
 
 
-KIND_ICON = {"command": "⌨️", "button": "🔘", "select": "📋", "modal": "📝"}
+KIND_ICON = {"command": "⌨️", "slash": "⌨️", "button": "🔘", "select": "📋", "modal": "📝"}
 
 
 def log_line(row):
     at = row["created_at"].astimezone(db.KST).strftime("%m-%d %H:%M:%S")
     icon = KIND_ICON.get(row["kind"], "•")
-    if row["kind"] == "command":
+    if row["kind"] in ("command", "slash"):
         body = f"`{(row['content'] or '%' + row['name'])[:120]}`"
-        result = "" if row["result"] == "ok" else f" ❌ {row['result']}"
+        result = "" if row["result"] in ("ok", None) else f" ❌ {row['result']}"
         timing = f" · {row['ms']}ms" if row["ms"] is not None else ""
         tail = result + timing
     else:

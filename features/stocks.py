@@ -494,7 +494,7 @@ async def stock(ctx):
         value=f"<t:{timestamp}:R>",  # ✅ 여기에 쓰면 디스코드가 해석함
         inline=False
     )
-    embed.set_footer(text="📰 뉴스 진행 중: 🔥 호재 · 🧊 악재 · 💥 부도 위기  (%뉴스)")
+    embed.set_footer(text="📰 뉴스 진행 중: 🔥 호재 · 🧊 악재 · ❓ 루머 · 💥 부도 위기  (%뉴스)")
 
     await ctx.send(embed=embed)
 
@@ -990,7 +990,7 @@ async def buy_half_stock(ctx, stock_name: str):
         inline=False
     )
     embed.set_footer(
-        text=f"확인을 누르는 순간의 가격으로 거래돼요. 산 뒤 {QUICK_SELL_MINUTES}분 안에 팔면 단타 수수료 "
+        text=f"확인 전에 주가가 바뀌면 취소돼요 (다시 실행해주세요). 산 뒤 {QUICK_SELL_MINUTES}분 안에 팔면 단타 수수료 "
              f"{num(QUICK_SELL_FEE * 100)}%가 붙어요."
     )
 

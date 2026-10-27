@@ -9,6 +9,8 @@
 - 진행도는 돈 기록(money_log, v1.2.8 부터)과 지금 상태로 계산한다. 그래서 v1.2.8 이전 기록은 세지 않는다.
 - %칭호 를 볼 때와 1시간마다(자산 기록 때) 새로 채운 칭호를 자동으로 준다.
 """
+import asyncio
+
 import discord
 from discord.ui import Button, Select, View
 
@@ -86,16 +88,19 @@ async def badge(user_id):
 async def compute_stats(user_id, worth=None):
     from features import assets, crypto, mining   # 서로 import 하지 않게 여기서
 
-    s = await db.title_stats(user_id)
+    async def known(value):
+        return value
+
+    # 서로 상관없는 조회라 한꺼번에 보낸다 (차례로 보내면 DB 왕복 10번 넘게 기다린다)
+    s, user, items, holding, miner, worth, peak, best = await asyncio.gather(
+        db.title_stats(user_id), db.get_user(user_id), db.get_enhance_items(user_id),
+        db.get_coin_holding(user_id), db.get_miner(user_id),
+        assets.net_worth(user_id) if worth is None else known(worth),
+        db.peak_worth(user_id), db.wordchain_best(user_id),
+    )
     count, total = s["count"], s["sum"]
-    user = await db.get_user(user_id)
-    items = await db.get_enhance_items(user_id)
-    holding = await db.get_coin_holding(user_id)
-    miner = await db.get_miner(user_id)
-    if worth is None:
-        worth = await assets.net_worth(user_id)
     return {
-        "peak_worth": max(worth, await db.peak_worth(user_id)),
+        "peak_worth": max(worth, peak),
         "enhance_tries": count.get("enhance_try", 0),
         # 성공 기록의 "+N → success" 는 N+1 이 된 것. 지금 가진 아이템 레벨도 같이 본다
         "max_level": max([s["max_success"] + 1 if s["max_success"] else 0, *items.values()]),
@@ -111,7 +116,7 @@ async def compute_stats(user_id, worth=None):
         "mined": miner["mined"] / mining.scale,   # 처음 액면 기준 (액면 조정이 있어도 같은 기준)
         "quiz_wins": count.get("quiz", 0),
         "wordchain_earned": total.get("wordchain", 0),
-        "wordchain_best": await db.wordchain_best(user_id),
+        "wordchain_best": best,
         "welfare_streak": s["welfare_streak"],
         "sent": -total.get("transfer_send", 0),
         "tokens": user["tokens"],
@@ -122,8 +127,7 @@ async def compute_stats(user_id, worth=None):
 async def check(user_id, worth=None):
     """조건을 채운 칭호를 준다. (stats, 가진 칭호 dict, 이번에 새로 얻은 key 목록)
     worth: 이미 계산한 순자산이 있으면 넘긴다 (1시간 기록 때)"""
-    stats = await compute_stats(user_id, worth)
-    owned = await db.get_titles(user_id)
+    stats, owned = await asyncio.gather(compute_stats(user_id, worth), db.get_titles(user_id))
     new = [t["key"] for t in TITLES if t["key"] not in owned and stats[t["stat"]] >= t["goal"]]
     if new:
         await db.add_titles(user_id, new)

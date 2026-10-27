@@ -57,13 +57,14 @@ def breakdown(user, holdings, positions, loans, items):
 
 
 async def user_breakdown(user_id):
-    return breakdown(
-        await db.get_user(user_id),
-        await db.get_portfolio(user_id),
-        await db.get_positions(user_id),
-        await db.get_loans(user_id),
-        await db.get_enhance_items(user_id),
-    )
+    # 서로 상관없는 조회라 한꺼번에 보낸다 (차례로 보내면 DB 왕복 5번을 기다린다)
+    return breakdown(*await asyncio.gather(
+        db.get_user(user_id),
+        db.get_portfolio(user_id),
+        db.get_positions(user_id),
+        db.get_loans(user_id),
+        db.get_enhance_items(user_id),
+    ))
 
 
 async def net_worth(user_id):
@@ -72,14 +73,15 @@ async def net_worth(user_id):
 
 async def all_net_worths():
     """{user_id: 순자산} 모든 유저"""
-    users = await db.all_users()
-    portfolios = await db.all_portfolios()
+    users, portfolios, all_positions, all_loans, all_items = await asyncio.gather(
+        db.all_users(), db.all_portfolios(), db.all_positions(), db.all_open_loans(), db.all_enhance_items(),
+    )
     positions, loans, items = {}, {}, {}
-    for p in await db.all_positions():
+    for p in all_positions:
         positions.setdefault(p["user_id"], []).append(p)
-    for loan in await db.all_open_loans():
+    for loan in all_loans:
         loans.setdefault(loan["user_id"], []).append(loan)
-    for item in await db.all_enhance_items():
+    for item in all_items:
         items.setdefault(item["user_id"], {})[item["item_name"]] = item["level"]
     return {
         u["user_id"]: breakdown(
@@ -128,8 +130,7 @@ async def check_titles(worths):
 async def assets(ctx, member: discord.Member = None):
     await ctx.message.delete()
     member = member or ctx.author
-    parts = await user_breakdown(member.id)
-    badge = await titles().badge(member.id)
+    parts, badge = await asyncio.gather(user_breakdown(member.id), titles().badge(member.id))
 
     embed = discord.Embed(
         title=f"💼 {badge}{member.display_name}님의 자산",
@@ -148,12 +149,11 @@ async def assets(ctx, member: discord.Member = None):
 async def asset_rank(ctx):
     await ctx.message.delete()
 
-    worths = await all_net_worths()
+    worths, equipped = await asyncio.gather(all_net_worths(), db.equipped_titles())
     if not worths:
         await ctx.send("❌ 데이터가 없습니다.")
         return
     ranking = sorted(worths.items(), key=lambda x: x[1], reverse=True)
-    equipped = await db.equipped_titles()
 
     embed = discord.Embed(
         title="🏆 순자산 랭킹 TOP 10",

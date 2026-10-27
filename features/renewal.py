@@ -32,7 +32,11 @@ async def mark_renewed():
 
 async def get_owner() -> discord.User:
     app = await client.application_info()
-    return app.team.owner if app.team else app.owner
+    if app.team is None:
+        return app.owner
+    # 팀 소유 봇이면 team.owner 가 TeamMember 라서 DM 을 못 보낸다 → 같은 ID 의 User 로 바꾼다
+    owner_id = app.team.owner_id
+    return client.get_user(owner_id) or await client.fetch_user(owner_id)
 
 
 def kst(dt):

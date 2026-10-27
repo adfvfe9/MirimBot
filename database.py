@@ -23,6 +23,7 @@ main.py 는 SQL 을 직접 쓰지 않고 이 파일의 함수만 호출한다.
 """
 from __future__ import annotations
 
+import contextvars
 import datetime
 import json
 import os
@@ -45,14 +46,17 @@ async def connect(dsn: str | None = None) -> None:
     global _pool
     if _pool is not None:
         return
-    # statement_cache_size=0: Neon 의 -pooler 주소(pgbouncer)에서도 동작하게 한다.
+    # Neon 의 -pooler 주소(pgbouncer)가 들어 있어도 직접 연결 주소로 바꿔 쓴다.
+    #   풀러에서는 쿼리 저장(statement cache)을 꺼야 해서 쿼리마다 DB 왕복이 2번(준비 + 실행)이 된다.
+    #   봇 하나가 연결 몇 개만 쓰니 풀러가 필요 없다.
     # min_size: 연결을 미리 열어 둔다. 새 연결은 맺는 데 (TLS 등) 시간이 걸려서,
     #           여러 명이 동시에 명령어를 쓸 때 그때그때 맺으면 그만큼 느려진다.
+    # max_inactive_connection_lifetime=0: 한동안 안 쓴 연결도 닫지 않는다. (다시 맺느라 느려지지 않게)
     _pool = await asyncpg.create_pool(
-        dsn or os.environ["DATABASE_URL"],
+        (dsn or os.environ["DATABASE_URL"]).replace("-pooler.", ".", 1),
         min_size=3,
         max_size=10,
-        statement_cache_size=0,
+        max_inactive_connection_lifetime=0,
     )
     async with _pool.acquire() as conn:
         await conn.execute(SCHEMA_PATH.read_text(encoding="utf-8"))
@@ -84,17 +88,22 @@ async def user_tx(*user_ids):
     """트랜잭션을 열고 해당 유저 행들을 잠근다. (모듈 설명 참고)
     송금처럼 두 명을 다룰 때는 user_tx(보내는사람, 받는사람) 으로 둘 다 잠근다."""
     ids = sorted({int(u) for u in user_ids})
+    # 항상 같은 순서(user_id 오름차순)로 잠가야 서로 기다리다 멈추는(deadlock) 일이 없다.
+    lock = "SELECT 1 FROM users WHERE user_id = ANY($1::bigint[]) ORDER BY user_id FOR UPDATE"
     async with transaction() as conn:
-        await conn.execute(
-            "INSERT INTO users (user_id) SELECT unnest($1::bigint[]) ON CONFLICT DO NOTHING",
-            ids,
-        )
-        # 항상 같은 순서(user_id 오름차순)로 잠가야 서로 기다리다 멈추는(deadlock) 일이 없다.
-        await conn.execute(
-            "SELECT 1 FROM users WHERE user_id = ANY($1::bigint[]) ORDER BY user_id FOR UPDATE",
-            ids,
-        )
-        yield conn
+        # 보통은 행이 이미 있어서 잠그기 한 번으로 끝난다. 처음 보는 유저만 행을 만들고 다시 잠근다.
+        if len(await conn.fetch(lock, ids)) < len(ids):
+            await conn.execute("INSERT INTO users (user_id) SELECT unnest($1::bigint[]) ON CONFLICT DO NOTHING", ids)
+            await conn.execute(lock, ids)
+        token = _locked.set((conn, frozenset(ids)))
+        try:
+            yield conn
+        finally:
+            _locked.reset(token)
+
+
+# user_tx 안에서 (그 conn, 행이 있는 유저들). _ensure_user 가 이미 있는 행을 또 만들려고 하지 않게
+_locked = contextvars.ContextVar("locked_users", default=(None, frozenset()))
 
 
 # ───────────── 시간 / 숫자 헬퍼 ─────────────
@@ -174,6 +183,9 @@ async def _ensure_user(c, user_id) -> None:
     """유저 행이 없으면 기본값으로 만든다.
     돈을 바꿀 때는 항상 "행 만들기 → UPDATE" 순서로 한다. (INSERT ... ON CONFLICT DO UPDATE 를 쓰면
     schema.sql 의 미납금 트리거와 엇갈려서 돈을 빼는 값이 사라질 수 있다)"""
+    conn, ids = _locked.get()
+    if c is conn and int(user_id) in ids:
+        return      # user_tx 가 이미 만들고 잠근 행
     await c.execute("INSERT INTO users (user_id) VALUES ($1) ON CONFLICT DO NOTHING", int(user_id))
 
 
@@ -386,6 +398,20 @@ async def get_abilities(user_id, conn=None) -> list[dict]:
     rows = await (conn or pool()).fetch(
         "SELECT item_name, slot, ability, tier, value, locked FROM enhance_abilities "
         "WHERE user_id = $1 ORDER BY item_name, slot",
+        int(user_id),
+    )
+    return [{**dict(r), "value": float(r["value"])} for r in rows]
+
+
+async def get_ability_levels(user_id, conn=None) -> list[dict]:
+    """능력 합계용: 능력 슬롯마다 그 아이템의 지금 레벨까지 한 번에 [{item_name, slot, ability, value, level}]
+    (아이템 / 능력을 따로 읽으면 DB 왕복이 2번이라 합쳤다. 암시장에 올린 아이템은 enhance_items 에 없어서 빠진다)"""
+    rows = await (conn or pool()).fetch(
+        """
+        SELECT a.item_name, a.slot, a.ability, a.value, i.level
+        FROM enhance_abilities a JOIN enhance_items i ON i.user_id = a.user_id AND i.item_name = a.item_name
+        WHERE a.user_id = $1
+        """,
         int(user_id),
     )
     return [{**dict(r), "value": float(r["value"])} for r in rows]

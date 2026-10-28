@@ -9,11 +9,12 @@
     %관리 코인가속 [분]             (관리자) 코인만 [분] 만큼 빨리 진행 (%관리 주식가속 과 따로)
 
 - 가격 단위는 토큰이다. 1분마다 주식과 같이 갱신된다. (stocks.auto_update_stocks 루프가 tick 을 부른다)
-- 평소 흔들림 하루 약 25% + 4~8시간마다 코인 뉴스로 ±5~20% 점프. 주식보다 훨씬 거칠다.
-- 그냥 들고 있으면 평균 본전이 되게 만들었다 (흔들림 보정 -σ²/2, 점프는 +x% / -x% 같은 확률).
-  토큰은 리롤 재료라, 코인으로 토큰이 저절로 불어나면 리롤이 공짜가 된다.
-  시뮬레이션: 그냥 보유 / 급락 뒤 사기 / 급등 뒤 사기 모두 수수료만큼 손해. (하루 최저가와 최고가 차이는 보통 1.7배)
-  처음 생각한 하루 80% 는 일주일이면 보통 90% 를 잃을 만큼 거칠어서 낮췄다.
+- 평소 흔들림 하루 약 18% + 4~8시간마다 코인 뉴스로 ±3~12% 점프. 주식보다 거칠다.
+- 오를 때와 내릴 때가 반반이라, 그냥 들고 있으면 '보통' 본전이다. (로그 가격이 방향 없이 걷는다: 흔들림 보정 없음,
+  뉴스는 ×e^x / ×e^-x 라서 +x 뒤 -x 면 제자리) 30일 시뮬레이션: 중앙값 1.06배, 반토막 이하 30%, 6배 이상 10%.
+  하루 최저가와 최고가 차이는 보통 1.4배.
+  예전(v1.3.9 전)에는 '평균' 본전에 맞추느라 흔들림마다 -σ²/2 를 빼고 뉴스를 ×(1±x) 로 해서, 보통은 계속 떨어졌다.
+  (하루 25% · 뉴스 ±5~20% 에서 30일 중앙값 0.12배, 실제로 닷새 만에 10 → 1.4 토큰) 가격이 하나뿐이라 모두가 그 '보통'을 겪는다.
 - 수수료: 살 때 1%, 팔 때 1%. 팔면 토큰은 정수만 받고, 딱 그만큼의 코인만 팔려서 남는 끝자리는 코인으로 남는다.
 - 가격이 0.1 밑으로 내려가면 ×100, 1000 위로 올라가면 ÷100 액면 조정을 한다. 보유량도 반대로 바뀌어서 가치는 그대로.
 - 레버리지는 일부러 없다. (손실은 막히고 이익은 끝이 없어서 구조적으로 이득이 나기 쉽다)
@@ -34,10 +35,10 @@ from fmt import Amount, num, resolve_amount
 
 # ───────────── 밸런스 설정 ─────────────
 START_PRICE = 10.0
-DAILY_VOL = 0.25
+DAILY_VOL = 0.18
 SIGMA = DAILY_VOL / math.sqrt(1440)      # 1분 흔들림
 NEWS_MINUTES = (240, 480)                # 코인 뉴스 간격
-JUMP = (0.05, 0.20)                      # 뉴스 점프 크기 (+/- 같은 확률)
+JUMP = (0.03, 0.12)                      # 뉴스 점프 크기 (로그, 오를 때 ×e^x · 내릴 때 ×e^-x 같은 확률)
 FEE = 0.01
 SPLIT_LOW, SPLIT_HIGH, SPLIT_FACTOR = 0.1, 1000.0, 100
 HISTORY_KEEP = 1440
@@ -101,7 +102,7 @@ async def tick(save=True):
     """1분 갱신. save=False 면 기록을 모아 두기만 한다 (%관리 주식가속, 끝나고 flush)."""
     global price, previous, news_left
     previous = price
-    price *= math.exp(random.gauss(-SIGMA * SIGMA / 2, SIGMA))
+    price *= math.exp(random.gauss(0.0, SIGMA))
 
     headline = None
     news_left -= 1
@@ -109,9 +110,10 @@ async def tick(save=True):
         news_left = random.randint(*NEWS_MINUTES)
         up = random.random() < 0.5
         size = random.uniform(*JUMP)
-        price *= 1 + size if up else 1 - size
+        change = math.exp(size if up else -size) - 1      # 같은 크기로 한 번씩 오르고 내리면 제자리
+        price *= 1 + change
         headline = random.choice(GOOD_NEWS if up else BAD_NEWS)
-        recent_news.append((db.now(), headline, size if up else -size))
+        recent_news.append((db.now(), headline, change))
 
     if price < SPLIT_LOW:
         await rescale(SPLIT_FACTOR)
@@ -167,7 +169,7 @@ async def buy(user_id, tokens):
     if tokens < 1:
         return "❌ 1토큰 이상으로 사주세요."
     async with db.user_tx(user_id) as conn:
-        if await db.add_tokens(user_id, -tokens, conn) is None:
+        if await db.add_tokens(user_id, -tokens, conn, source="coin_buy") is None:
             return "🪙 토큰이 부족합니다. (`%토큰 구매`, 퀴즈, `%강화 암시장`으로 얻을 수 있어요)"
         now_price = price
         coins = tokens * (1 - FEE) / now_price
@@ -200,7 +202,7 @@ async def sell(user_id, amount=None):
         left = have - sold
         spent_left = holding["spent"] * (left / have) if have else 0
         await db.set_coin_holding(user_id, left if left > 1e-12 else 0, spent_left, conn)
-        await db.add_tokens(user_id, tokens, conn)
+        await db.add_tokens(user_id, tokens, conn, source="coin_sell")
     return {"coins": sold, "tokens": tokens, "price": now_price, "left": max(left, 0)}
 
 

@@ -314,7 +314,7 @@ async def run_quiz(channel, quiz):
         token_chance = level["token"] + await abilities.total(winner.author.id, "quiz_token")
         got_token = abilities.chance(token_chance)
         if got_token:
-            await db.add_tokens(winner.author.id, 1)
+            await db.add_tokens(winner.author.id, 1, source="quiz")
         embed = discord.Embed(
             title="🎉 정답!",
             description=(

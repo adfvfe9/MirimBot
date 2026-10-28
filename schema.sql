@@ -341,6 +341,16 @@ CREATE TABLE IF NOT EXISTS money_log (
 CREATE INDEX IF NOT EXISTS money_log_source_idx ON money_log (source, created_at);
 CREATE INDEX IF NOT EXISTS money_log_user_idx ON money_log (user_id, source);   -- 칭호 진행도 계산용
 
+-- 토큰이 들어오고 나간 기록 (v1.3.9.1부터). 토큰이 너무 많이 / 적게 풀리는지 보려고 남긴다. amount 는 토큰 개수 (+ / -)
+CREATE TABLE IF NOT EXISTS token_log (
+    id         BIGSERIAL PRIMARY KEY,
+    user_id    BIGINT      NOT NULL,
+    source     TEXT        NOT NULL,                  -- quiz, mission, buy, reroll, coin_buy ... (database.add_tokens 참고)
+    amount     INT         NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS token_log_source_idx ON token_log (source, created_at);
+
 
 -- ───────────── 칭호 / 자산 기록 (features/titles.py, features/assets.py) ─────────────
 -- 한 번 얻은 칭호는 돈이 줄거나 파산해도 남는다. equipped: 장착한 칭호 (1인 1개)

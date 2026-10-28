@@ -124,7 +124,7 @@ async def give_item(user_id, item_name, level, rows, conn, tag):
 async def hand_over(user_id, listing, conn):
     """등록된 물건을 user_id 에게 넘긴다. 받은 것의 이름('칼#12 +9' / '🪙 토큰 5개')을 돌려준다."""
     if is_token(listing):
-        await db.add_tokens(user_id, listing["tokens"], conn)
+        await db.add_tokens(user_id, listing["tokens"], conn, source="market_get")
         return title_of(listing)
     name = await give_item(user_id, listing["item_name"], listing["level"], listing["abilities"], conn, listing["id"])
     return f"{name} +{listing['level']}"
@@ -181,7 +181,7 @@ async def list_tokens(user_id, count, unit_price):
     async with db.user_tx(user_id) as conn:
         if len(await db.seller_listings(user_id, conn)) >= MAX_LISTINGS:
             return f"❌ 암시장에는 한 번에 {MAX_LISTINGS}개까지 올릴 수 있어요. (`📦 내 판매`에서 정리)"
-        if await db.add_tokens(user_id, -count, conn) is None:
+        if await db.add_tokens(user_id, -count, conn, source="market_list") is None:
             return "❌ 토큰이 부족해요."
         price = unit_price * count
         expires = db.now() + datetime.timedelta(hours=LISTING_HOURS)

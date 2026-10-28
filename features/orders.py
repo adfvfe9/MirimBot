@@ -87,7 +87,7 @@ async def place(user_id, side, stock_name, quantity_text, price_text, direction_
             held = (await db.get_portfolio(user_id, conn)).get(symbol, {}).get("quantity", 0)
             if held < quantity:
                 return f"❌ {symbol} 주식이 {held}주뿐이에요."
-        left = await db.add_tokens(user_id, -ORDER_TOKEN_COST, conn)
+        left = await db.add_tokens(user_id, -ORDER_TOKEN_COST, conn, source="order")
         if left is None:
             return f"❌ 예약하려면 🪙 토큰 {ORDER_TOKEN_COST}개가 필요해요. (`%토큰 구매`, 퀴즈, 일일 미션)"
         order = await db.add_order(user_id, symbol, side, quantity, price, direction,

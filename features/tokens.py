@@ -75,6 +75,7 @@ async def purchase_tokens(user_id, count):
             token_price_at=db.now(),
         )
         await db.log_money(user_id, "token_buy", -total_cost, f"{count}개", conn)
+        await db.log_tokens(user_id, "buy", count, conn)
         return result
 
 
@@ -272,7 +273,7 @@ async def add_token(ctx, member: discord.Member, amount: int):
     async def confirm_callback(interaction):
         await respond.defer(interaction)
 
-        tokens = await db.add_tokens(user_id, amount)
+        tokens = await db.add_tokens(user_id, amount, source="admin_add")
 
         result = discord.Embed(
             title="✅ 토큰 추가 완료",
@@ -326,7 +327,7 @@ async def remove_token(ctx, member: discord.Member, amount: int):
     async def confirm_callback(interaction):
         await respond.defer(interaction)
 
-        tokens = await db.add_tokens(user_id, -amount)
+        tokens = await db.add_tokens(user_id, -amount, source="admin_remove")
         if tokens is None:
             await respond.edit(interaction,
                 embed=discord.Embed(

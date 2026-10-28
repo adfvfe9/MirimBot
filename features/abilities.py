@@ -261,7 +261,7 @@ async def reroll(user_id, item_name):
         if not targets:
             return "❌ 다시 뽑을 슬롯이 없어요. (열린 슬롯이 없거나 전부 잠겨 있어요)"
         cost = reroll_cost(rows, level)
-        if await db.add_tokens(user_id, -cost, conn) is None:
+        if await db.add_tokens(user_id, -cost, conn, source="reroll") is None:
             return f"🪙 토큰이 부족합니다. (필요: {cost}개, `%토큰 구매` 또는 퀴즈로 얻을 수 있어요)"
         for r in targets:
             key, tier, value = roll(level)

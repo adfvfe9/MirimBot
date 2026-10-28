@@ -305,19 +305,43 @@ async def bankrupt(user_id, day: datetime.date, conn=None) -> None:
             await run(c)
 
 
-async def add_tokens(user_id, delta: int, conn=None) -> int | None:
-    """토큰을 더한다 (음수면 뺀다). 0 개 미만이 되면 바꾸지 않고 None, 성공하면 바뀐 개수."""
+# 토큰 기록 source 목록 (schema.sql 의 token_log)
+#   quiz / mission                퀴즈 정답 / 일일 미션 다 깨기
+#   buy                           %토큰 구매 (byte 로 사기)
+#   reroll / order                능력 리롤 / 주식 예약
+#   coin_buy / coin_sell          비트코인 사기 / 팔기
+#   market_list / market_get      암시장에 올리기 / 받기 (산 사람, 또는 안 팔려서 돌아온 판매자)
+#   admin_add / admin_remove      관리자 토큰추가 / 토큰제거
+
+async def add_tokens(user_id, delta: int, conn=None, *, source: str) -> int | None:
+    """토큰을 더한다 (음수면 뺀다). 0 개 미만이 되면 바꾸지 않고 None, 성공하면 바뀐 개수.
+    바뀌면 토큰 기록(token_log)에 source 로 남긴다. 같은 conn 이면 함께 취소/저장된다."""
+    if conn is None:
+        async with transaction() as c:
+            return await add_tokens(user_id, delta, c, source=source)
     if delta < 0:
-        return await (conn or pool()).fetchval(
+        left = await conn.fetchval(
             "UPDATE users SET tokens = tokens + $2 WHERE user_id = $1 AND tokens + $2 >= 0 "
             "RETURNING tokens",
             int(user_id), delta,
         )
-    c = conn or pool()
-    await _ensure_user(c, user_id)
-    return await c.fetchval(
-        "UPDATE users SET tokens = tokens + $2 WHERE user_id = $1 RETURNING tokens",
-        int(user_id), delta,
+    else:
+        await _ensure_user(conn, user_id)
+        left = await conn.fetchval(
+            "UPDATE users SET tokens = tokens + $2 WHERE user_id = $1 RETURNING tokens",
+            int(user_id), delta,
+        )
+    if left is not None:
+        await log_tokens(user_id, source, delta, conn)
+    return left
+
+
+async def log_tokens(user_id, source: str, amount: int, conn=None) -> None:
+    """토큰이 바뀐 기록. add_tokens 를 안 거치고 토큰을 바꾸는 곳(%토큰 구매)은 직접 부른다."""
+    if not amount:
+        return
+    await (conn or pool()).execute(
+        "INSERT INTO token_log (user_id, source, amount) VALUES ($1, $2, $3)", int(user_id), source, int(amount)
     )
 
 
@@ -1636,7 +1660,7 @@ async def set_quiz_channel(guild_id, channel_id) -> None:
 RESET_TABLES = [
     "users", "loans", "enhance_items", "enhance_abilities",
     "stocks", "price_history", "portfolio", "stock_positions", "stock_notices", "market_state",
-    "warnings", "warning_logs", "suggestions", "news", "wordchain_records", "money_log",
+    "warnings", "warning_logs", "suggestions", "news", "wordchain_records", "money_log", "token_log",
     "market_listings", "market_trades", "coin_price", "coin_history", "coin_holdings", "miners",
     "user_titles", "asset_history", "mission_claims", "stock_orders", "brag_log", "game_bets",
 ]

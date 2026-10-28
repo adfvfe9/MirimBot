@@ -70,7 +70,7 @@ async def claim(user_id):
             await db.log_money(user_id, "mission", got_byte, ", ".join(names), conn)
         claimed = await db.mission_claims(user_id, day, conn)
         if all(r["key"] in claimed for r in rows) and await db.add_mission_claim(user_id, day, "all", conn):
-            await db.add_tokens(user_id, ALL_CLEAR_TOKENS, conn)
+            await db.add_tokens(user_id, ALL_CLEAR_TOKENS, conn, source="mission")
             got_tokens = ALL_CLEAR_TOKENS
     return {"byte": got_byte, "tokens": got_tokens, "names": names, "collected": collected}
 

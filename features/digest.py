@@ -44,14 +44,30 @@ def channel_key(guild_id):
     return f"digest_channel:{int(guild_id)}"
 
 
-async def channel_of(guild):
-    """소식 채널 (없으면 None). 따로 안 정했으면 주식 뉴스 채널"""
+def result_key(guild_id):
+    return f"digest_result:{int(guild_id)}"
+
+
+async def channel_status(guild):
+    """(소식 채널 또는 None, 어떻게 정해졌는지). 따로 안 정했으면 주식 뉴스 채널"""
     value = await db.get_state(channel_key(guild.id))
     if value == "off":
-        return None
+        return None, "꺼짐"
+    how = "직접 정함"
     if value is None:
         value = await db.get_state(f"news_channel:{guild.id}")
-    return guild.get_channel(int(value)) if value else None
+        how = "주식 뉴스 채널을 따라감"
+    if value is None:
+        return None, "소식 채널도 주식 뉴스 채널도 안 정함"
+    channel = guild.get_channel(int(value))
+    if channel is None:
+        return None, f"정해 둔 채널({value})이 없어졌거나 봇이 볼 수 없음"
+    return channel, how
+
+
+async def channel_of(guild):
+    """소식 채널 (없으면 None)"""
+    return (await channel_status(guild))[0]
 
 
 # ───────────── 자랑 알림 ─────────────
@@ -266,16 +282,23 @@ async def post_due(now=None):
         if await db.get_state(key) == now.date().isoformat():
             continue
         await db.set_state(key, now.date().isoformat())       # 실패해도 오늘은 다시 안 보낸다
-        channel = await channel_of(guild)
+        channel, how = await channel_status(guild)
         if channel is None:
-            continue
-        try:
-            embed = await build(guild, now)
-            if embed is not None:
-                await channel.send(embed=embed)
-                sent += 1
-        except Exception as e:
-            print(f"[오늘의 미림봇] {guild.id} 실패: {type(e).__name__} {e}")
+            result = f"못 보냄: {how}"
+        else:
+            try:
+                embed = await build(guild, now)
+                if embed is None:
+                    result = "안 보냄: 오늘 쓴 사람이 없음"
+                else:
+                    await channel.send(embed=embed)
+                    result = f"#{channel.name} 에 보냄"
+                    sent += 1
+            except Exception as e:
+                result = f"보내기 실패: {type(e).__name__} {e}"
+        # 보냈는지 나중에 확인할 수 있게 남긴다 (%관리 소식채널)
+        await db.set_state(result_key(guild.id), f"{now:%m-%d %H:%M} {result}")
+        print(f"[오늘의 미림봇] {guild.name}: {result}")
     await db.prune_brags(now - datetime.timedelta(days=KEEP_DAYS))
     return sent
 
@@ -297,9 +320,14 @@ async def post_loop():
 @commands.has_permissions(administrator=True)
 async def digest_channel(ctx, channel_id: str = None):
     if channel_id is None:
-        channel = await channel_of(ctx.guild)
-        now = channel.mention if channel else "꺼짐"
-        await ctx.send(f"📢 지금 소식 채널: {now}\n사용법: `%관리 소식채널 <채널ID>` · `%관리 소식채널 끄기` (안 정하면 주식 뉴스 채널)")
+        channel, how = await channel_status(ctx.guild)
+        last = await db.get_state(result_key(ctx.guild.id)) or "아직 없음"
+        where = f"{channel.mention} ({how})" if channel else f"없음 ({how})"
+        await ctx.send(
+            f"📢 지금 소식 채널: {where}\n"
+            f"🌙 마지막 오늘의 미림봇: {last}\n"
+            "사용법: `%관리 소식채널 <채널ID>` · `%관리 소식채널 끄기` (안 정하면 주식 뉴스 채널)"
+        )
         return
     if channel_id == "끄기":
         await db.set_state(channel_key(ctx.guild.id), "off")

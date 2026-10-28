@@ -10,6 +10,7 @@ JSON 파일은 지우지 않는다. 봇이 DB 로 잘 돌아가는 걸 확인한
 
 옮기지 않는 파일 (main.py 에서 쓰지 않음)
   bank_data.json, enhance_ranking.json, shop_items.json, achievements.json
+  items.json (예전 토큰 상점 아이템, 상점을 역할 상점으로 바꾸면서 없앴다)
 """
 from __future__ import annotations
 
@@ -30,7 +31,7 @@ import database as db
 KST = db.KST
 BASE_DIR = Path(__file__).resolve().parent
 
-# --reset 때 지울 테이블. 예전에 쓰던 테이블(attendance_channels, bank_accounts, user_warnings)도 포함한다.
+# --reset 때 지울 테이블. 예전에 쓰던 테이블(inventory, attendance_channels, bank_accounts, user_warnings)도 포함한다.
 ALL_TABLES = [
     "users", "loans", "enhance_items", "inventory", "stocks", "price_history",
     "portfolio", "stock_positions", "stock_notices", "delisted_notices",
@@ -138,13 +139,6 @@ def convert(data_dir: Path) -> dict[str, list[tuple]]:
         for name, level in items.items()
     ]
 
-    inventory = [
-        (int(uid), name, int(qty))
-        for uid, items in load(data_dir, "items.json", {}).items()
-        for name, qty in items.items()
-        if int(qty) > 0
-    ]
-
     stock_prices = load(data_dir, "stock_prices.json", {})
     stocks = [
         (symbol, money(p["current"]), money(p["previous"]))
@@ -212,7 +206,6 @@ def convert(data_dir: Path) -> dict[str, list[tuple]]:
         "loans (user_id, amount, taken_at, collected, collection_amount, collected_amount, "
         "unpaid_from_loan, collected_at)": loans,
         "enhance_items (user_id, item_name, level)": enhance_items,
-        "inventory (user_id, item_name, quantity)": inventory,
         "stocks (symbol, current_price, previous_price)": stocks,
         "price_history (symbol, price, recorded_at)": price_history,
         "portfolio (user_id, symbol, quantity, avg_price)": portfolio,

@@ -17,6 +17,12 @@ defer() 는 바로 "받았어"라고 답하지 않고 DEFER_AFTER 초를 기다�
 edit / reply 는 먼저 답했는지에 따라 알맞은 방법을 고른다.
 
 delete_soon(ctx.message): %명령어를 친 메시지를 지운다. 디스코드 응답을 기다리지 않고 뒤에서 지운다.
+
+ConfirmView(ctx.author): 확인 / 취소처럼 한 번만 누르는 버튼 창. View() 대신 쓴다.
+- 명령어를 친 사람만 누를 수 있다. (콜백에서 따로 검사하지 않아도 된다)
+- 처음 누른 순간 창이 닫혀서, 확인을 빨리 두 번 눌러도 한 번만 처리된다.
+
+시간이 지났거나 봇이 다시 켜져서 주인 없는 버튼을 누르면 features/errors.py 가 안내한다.
 """
 import asyncio
 import contextlib
@@ -90,3 +96,22 @@ def delete_soon(message) -> None:
     task = asyncio.create_task(run())
     _background.add(task)
     task.add_done_callback(_background.discard)
+
+
+class ConfirmView(discord.ui.View):
+    """확인 / 취소처럼 한 번만 누르는 버튼 창. owner = 누를 수 있는 사람 (Member 또는 ID)"""
+
+    def __init__(self, owner, *, timeout: float = 180):
+        super().__init__(timeout=timeout)
+        self.owner_id = getattr(owner, "id", owner)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await reply(interaction, "이 버튼은 당신의 것이 아니에요!", ephemeral=True)
+            return False
+        # 두 번 누르면 두 콜백이 같이 돈다. 검사와 stop() 사이에 await 가 없어서 먼저 온 쪽만 통과한다
+        if self.is_finished():
+            await reply(interaction, "이미 처리한 버튼이에요.", ephemeral=True)
+            return False
+        self.stop()
+        return True

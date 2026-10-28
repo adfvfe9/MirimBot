@@ -16,7 +16,6 @@
 """
 import asyncio
 import datetime
-import math
 
 import discord
 from discord import ButtonStyle
@@ -27,7 +26,7 @@ import database as db
 import respond
 from bot import client
 from features import abilities
-from fmt import debt_line, num
+from fmt import ALL_WORDS, debt_line, num, parse_amount
 
 # ───────────── 밸런스 설정 ─────────────
 LOAN_LIMIT = 50000            # 동시에 빌릴 수 있는 원금 한도 (🏦 대출 한도 증가 능력만큼 늘어난다)
@@ -73,19 +72,6 @@ def deposit_after(user, change, now=None):
     if value < 0.01:
         return 0.0, None
     return value / deposit_multiplier(start, now), start
-
-
-def parse_amount(value):
-    try:
-        amount = float(value.replace(",", "").strip())
-
-        if not math.isfinite(amount):
-            return None
-
-        return amount
-
-    except (ValueError, AttributeError, TypeError):
-        return None
 
 
 # =========================
@@ -447,7 +433,7 @@ class RepayModal(Modal, title="✅ 상환 금액 입력"):
             loans = [l for l in await db.get_loans(self.user_id, conn) if not l["collected"]]
             total_loan = get_total_loan(loans)
 
-            if raw.lower() in ("전액", "전체", "all", "max"):
+            if raw.lower() in ALL_WORDS | {"전액"}:
                 amount = total_loan
             else:
                 amount = parse_amount(raw)
@@ -579,7 +565,7 @@ class WithdrawModal(Modal, title="💳 적금 출금"):
             else:
                 raw_amount = self.amount.value.strip()
 
-                if raw_amount.lower() in ("전액", "전체", "all", "max"):
+                if raw_amount.lower() in ALL_WORDS | {"전액"}:
                     withdraw_amount = total_value
                 else:
                     withdraw_amount = parse_amount(raw_amount)

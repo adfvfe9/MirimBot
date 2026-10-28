@@ -18,7 +18,7 @@ async def reset_all_data(ctx):
         description=(
             "**모든 유저의 데이터가 삭제됩니다. 되돌릴 수 없습니다.**\n\n"
             "• 돈, 도박 기록, 기초수급/위로금/파산 기록\n"
-            "• 토큰, 상점 아이템, 강화 아이템\n"
+            "• 토큰, 강화 아이템\n"
             "• 은행 대출/적금/미납금\n"
             "• 보유 주식, 레버리지 포지션, 주가 기록 (주가는 기본가로)\n"
             "• 경고 기록, 건의 내용\n\n"
@@ -27,23 +27,13 @@ async def reset_all_data(ctx):
         color=discord.Color.red()
     )
 
-    class ResetView(discord.ui.View):
+    class ResetView(respond.ConfirmView):
         def __init__(self):
-            super().__init__(timeout=30)
-
-        async def interaction_check(self, interaction: discord.Interaction):
-            if interaction.user.id != ctx.author.id:
-                await respond.reply(interaction,
-                    "❌ 명령어를 실행한 사람만 선택할 수 있습니다.",
-                    ephemeral=True
-                )
-                return False
-            return True
+            super().__init__(ctx.author, timeout=30)
 
         @discord.ui.button(label="전부 초기화", style=discord.ButtonStyle.danger, emoji="🗑️")
         async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
             await respond.defer(interaction)
-            self.stop()
             await db.reset_all()
 
             # 메모리에 들고 있던 주가/시장 상태도 처음 상태로 (DB 가 비어 있으면 기본값으로 다시 만든다)
@@ -62,7 +52,6 @@ async def reset_all_data(ctx):
         @discord.ui.button(label="취소", style=discord.ButtonStyle.secondary, emoji="❌")
         async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
             await respond.defer(interaction)
-            self.stop()
             await respond.edit(interaction,
                 embed=discord.Embed(
                     title="✅ 초기화 취소",
@@ -80,9 +69,3 @@ async def reset_all_data(ctx):
 
     view = ResetView()
     view.message = await ctx.send(embed=embed, view=view)
-
-
-@reset_all_data.error
-async def reset_all_data_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ 이 명령어는 관리자만 사용할 수 있어요!")

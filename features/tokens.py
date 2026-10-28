@@ -1,10 +1,10 @@
-"""토큰: 토큰 구매/확인/최대교환, 관리자 토큰 추가/제거/구매가, 상점 드롭다운"""
+"""토큰: 토큰 구매/확인/최대교환, 관리자 토큰 추가/제거/구매가"""
 
 
 import discord
-from discord import ButtonStyle, SelectOption
+from discord import ButtonStyle
 from discord.ext import commands
-from discord.ui import Button, Select, View
+from discord.ui import Button
 
 import math
 
@@ -12,7 +12,7 @@ import database as db
 import respond
 from bot import client
 from features import abilities
-from fmt import num
+from fmt import ALL, Amount, num, resolve_amount
 
 # ───────────── 토큰 구매가 ─────────────
 # 살 때마다 2배가 되고, 마지막으로 산(또는 정해진) 시각부터 하루에 4배씩 다시 떨어진다. (최소 100)
@@ -52,52 +52,6 @@ def max_affordable(price, money):
     return count, total
 
 
-class ShopDropdown(Select):
-    def __init__(self, user: discord.Member, shop_items):
-        self.user = user
-        self.shop_items = shop_items
-
-        options = [
-            SelectOption(
-                label=item["name"],
-                description=f"💰 {item['price']} 토큰",
-                value=item["name"]
-            ) for item in shop_items
-        ]
-        super().__init__(placeholder="구매할 아이템을 선택하세요", options=options, min_values=1, max_values=1)
-
-    async def callback(self, interaction: discord.Interaction):
-        await respond.defer(interaction)
-        if interaction.user != self.user:
-            await respond.reply(interaction, "이 상점은 당신의 것이 아닙니다!", ephemeral=True)
-            return
-
-        selected_name = self.values[0]
-        item = next(i for i in self.shop_items if i["name"] == selected_name)
-        user_id = interaction.user.id
-        price = item["price"]
-
-        async with db.user_tx(user_id) as conn:
-            # ✅ 토큰 가져오기
-            user_token = (await db.get_user(user_id, conn))["tokens"]
-
-            if user_token >= price:
-                await db.update_user(user_id, conn, tokens=user_token - price)
-                await db.add_inventory_item(user_id, selected_name, 1, conn)
-
-        if user_token < price:
-            await respond.reply(interaction,
-                f"❌ `{selected_name}` 구매에 필요한 **{price - user_token} 토큰**이 부족합니다!",
-                ephemeral=True
-            )
-            return
-
-        await respond.reply(interaction,
-            f"✅ `{selected_name}` 아이템을 **{price} 토큰**에 구매했습니다!",
-            ephemeral=True
-        )
-
-
 async def purchase_tokens(user_id, count):
     """토큰 count 개를 지금 가격으로 산다. (확인 창을 띄운 뒤 가격이 내려갔으면 내려간 가격으로)
     잔액이 부족하면 None, 성공하면 {"money", "tokens", "price"(다음 가격), "cost"}."""
@@ -125,17 +79,19 @@ async def purchase_tokens(user_id, count):
         return result
 
 
-@client.command(aliases=["토큰구매", "토큰교환"])
-async def buy_token(ctx, amount: int = 1):
+@client.command(aliases=["토큰구매", "토큰교환"], usage="[개수 | 최대 | 절반]")
+async def buy_token(ctx, amount: Amount = 1):
+    if amount == ALL:
+        return await buy_token_max(ctx)
     respond.delete_soon(ctx.message)
     user_id = ctx.author.id
 
+    user = await db.get_user(user_id)
+    price, drop = await price_of(user_id, user)
+    amount = resolve_amount(amount, max_affordable(price, user["money"])[0])   # 절반: 살 수 있는 개수의 절반
     if amount <= 0:
         await ctx.send("❌ 1 이상의 수량을 입력해주세요.")
         return
-
-    user = await db.get_user(user_id)
-    price, drop = await price_of(user_id, user)
     total_cost = cost_of(price, amount)
 
     if user["money"] < total_cost:
@@ -153,13 +109,10 @@ async def buy_token(ctx, amount: int = 1):
     embed.add_field(name="총 가격", value=f"{num(total_cost)} byte", inline=True)
     embed.set_footer(text=f"※ 토큰 가격은 살 때마다 2배가 되고, 하루에 {num(drop)}배씩 다시 떨어져요. (최소 {BASE_PRICE})")
 
-    view = View()
+    view = respond.ConfirmView(ctx.author)
 
     async def confirm_callback(interaction):
         await respond.defer(interaction)
-        if interaction.user != ctx.author:
-            await respond.reply(interaction, "이 버튼은 당신의 것이 아니에요!", ephemeral=True)
-            return
 
         # 결제 및 토큰 증가 (확인을 누른 순간의 가격)
         user_tokens = await purchase_tokens(user_id, amount)
@@ -247,13 +200,10 @@ async def buy_token_max(ctx):
     embed.add_field(name="총 필요 금액", value=f"{num(total_cost)} byte", inline=True)
     embed.set_footer(text="※ 확인을 누르면 바로 교환이 진행됩니다.")
 
-    view = View()
+    view = respond.ConfirmView(ctx.author)
 
     async def confirm_callback(interaction):
         await respond.defer(interaction)
-        if interaction.user != ctx.author:
-            await respond.reply(interaction, "이 버튼은 당신의 것이 아닙니다!", ephemeral=True)
-            return
 
         # 교환 처리
         user_tokens = await purchase_tokens(user_id, max_tokens)
@@ -300,7 +250,7 @@ async def buy_token_max(ctx):
 
     await ctx.send(embed=embed, view=view)
 
-@client.command(aliases=["토큰추가"])
+@client.command(aliases=["토큰추가"], usage="<@유저> <개수>")
 @commands.has_permissions(administrator=True)
 async def add_token(ctx, member: discord.Member, amount: int):
     respond.delete_soon(ctx.message)
@@ -319,13 +269,10 @@ async def add_token(ctx, member: discord.Member, amount: int):
         color=discord.Color.teal()
     )
 
-    view = View()
+    view = respond.ConfirmView(ctx.author)
 
     async def confirm_callback(interaction):
         await respond.defer(interaction)
-        if interaction.user != ctx.author:
-            await respond.reply(interaction, "이 버튼은 당신의 명령이 아닙니다!", ephemeral=True)
-            return
 
         tokens = await db.add_tokens(user_id, amount)
 
@@ -353,7 +300,7 @@ async def add_token(ctx, member: discord.Member, amount: int):
 
     await ctx.send(embed=embed, view=view)
 
-@client.command(aliases=["토큰제거"])
+@client.command(aliases=["토큰제거"], usage="<@유저> <개수>")
 @commands.has_permissions(administrator=True)
 async def remove_token(ctx, member: discord.Member, amount: int):
     respond.delete_soon(ctx.message)
@@ -376,13 +323,10 @@ async def remove_token(ctx, member: discord.Member, amount: int):
         color=discord.Color.orange()
     )
 
-    view = View()
+    view = respond.ConfirmView(ctx.author)
 
     async def confirm_callback(interaction):
         await respond.defer(interaction)
-        if interaction.user != ctx.author:
-            await respond.reply(interaction, "이 버튼은 당신의 명령이 아닙니다!", ephemeral=True)
-            return
 
         tokens = await db.add_tokens(user_id, -amount)
         if tokens is None:
@@ -441,13 +385,10 @@ async def set_token_price(ctx, member: discord.Member, new_price: int = 100):
         color=discord.Color.blurple()
     )
 
-    view = View()
+    view = respond.ConfirmView(ctx.author)
 
     async def confirm_callback(interaction):
         await respond.defer(interaction)
-        if interaction.user != ctx.author:
-            await respond.reply(interaction, "이 버튼은 당신의 명령이 아닙니다!", ephemeral=True)
-            return
 
         await db.update_user(user_id, token_price=new_price, token_price_at=db.now())  # 지금부터 다시 떨어진다
 

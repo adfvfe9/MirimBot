@@ -9,7 +9,7 @@ import database as db
 import respond
 from bot import client
 from features import abilities, digest
-from fmt import debt_line, num
+from fmt import ALL, HALF, Amount, debt_line, floor2, num
 
 
 # ───────────── 도박 ─────────────
@@ -33,7 +33,7 @@ async def max_bet(user_id, conn=None):
 
 
 async def play_gamble(user_id, amount=None):
-    """도박 1회 처리. amount 가 None 이면 올인 (최대 판돈까지).
+    """도박 1회 처리. amount 가 None / ALL 이면 올인 (최대 판돈까지), HALF 면 잔액의 절반.
     실패하면 안내 메시지(str), 성공하면 결과 dict 를 돌려준다."""
     now = db.now()
 
@@ -41,7 +41,7 @@ async def play_gamble(user_id, amount=None):
         user = await db.get_user(user_id, conn)
         current_money = user["money"]
 
-        if amount is None and current_money <= 0:
+        if amount in (None, ALL, HALF) and current_money <= 0:
             return "❌ 잔액이 부족합니다."
 
         # 쿨타임 체크
@@ -53,8 +53,10 @@ async def play_gamble(user_id, amount=None):
                 return f"⏳ 아직 도박할 수 없어요! 다시 시도하려면 **{remain}초** 기다려주세요."
 
         limit = await max_bet(user_id, conn)
-        if amount is None:
+        if amount in (None, ALL):
             amount = min(current_money, limit)  # 올인!
+        elif amount == HALF:
+            amount = floor2(min(current_money / 2, limit))
         elif amount <= 0:
             return "❌ 1 이상의 금액을 입력해주세요."
         elif amount > limit:
@@ -134,7 +136,8 @@ def gamble_embed(result, title, description):
 
 
 @client.command(aliases=["도박"])
-async def gamble(ctx, amount: int):
+async def gamble(ctx, amount: Amount):
+    """%도박 <금액 | 올인 | 절반>"""
     respond.delete_soon(ctx.message)
 
     result = await play_gamble(ctx.author.id, amount)
@@ -143,7 +146,8 @@ async def gamble(ctx, amount: int):
         return
 
     await ctx.send(embed=gamble_embed(
-        result, "🎲 도박 결과", f"{ctx.author.mention}님이 **{num(amount)} byte**를 걸었습니다!"
+        result, "🎲 도박 올인 결과" if amount == ALL else "🎲 도박 결과",
+        f"{ctx.author.mention}님이 **{num(result['amount'])} byte**를 걸었습니다!"
     ))
 
 

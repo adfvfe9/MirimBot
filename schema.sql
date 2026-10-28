@@ -171,14 +171,6 @@ UPDATE market_listings SET abilities = (
 )
 WHERE abilities @> '[{"ability": "wordchain_time"}]';
 
-CREATE TABLE IF NOT EXISTS inventory (                -- items.json (상점에서 산 아이템)
-    user_id   BIGINT NOT NULL,
-    item_name TEXT   NOT NULL,
-    quantity  INT    NOT NULL,
-    PRIMARY KEY (user_id, item_name)
-);
-
-
 -- ───────────── 주식 ─────────────
 -- 종목별 기준가/변동폭(stock_info)은 설정값이라 main.py 에 그대로 둔다.
 CREATE TABLE IF NOT EXISTS stocks (                   -- stock_prices.json
@@ -549,3 +541,5 @@ CREATE TABLE IF NOT EXISTS bot_state (
 ALTER TABLE users DROP COLUMN IF EXISTS checkin_last_date;
 ALTER TABLE users DROP COLUMN IF EXISTS checkin_level;
 DROP TABLE IF EXISTS attendance_channels;
+-- 예전 토큰 상점 아이템. 쓸 곳이 없어서 상점을 역할 상점(%역할상점)으로 바꾸면서 없앴다.
+DROP TABLE IF EXISTS inventory;

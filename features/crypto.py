@@ -25,12 +25,12 @@ from collections import deque
 
 import discord
 from discord.ext import commands
-from discord.ui import Button, View
+from discord.ui import Button
 
 import database as db
 import respond
 from bot import client
-from fmt import num
+from fmt import Amount, num, resolve_amount
 
 # ───────────── 밸런스 설정 ─────────────
 START_PRICE = 10.0
@@ -235,19 +235,13 @@ async def coin(ctx):
 
 def confirm_view(owner_id, on_confirm):
     """확인 / 취소 버튼. on_confirm(interaction) 은 확인을 누른 순간 실행된다."""
-    view = View(timeout=60)
+    view = respond.ConfirmView(owner_id, timeout=60)
 
     async def yes(interaction):
-        if interaction.user.id != owner_id:
-            await respond.reply(interaction, "이 버튼은 당신의 것이 아니에요!", ephemeral=True)
-            return
         await respond.defer(interaction)
         await on_confirm(interaction)
 
     async def no(interaction):
-        if interaction.user.id != owner_id:
-            await respond.reply(interaction, "이 버튼은 당신의 것이 아니에요!", ephemeral=True)
-            return
         await respond.edit(interaction, embed=discord.Embed(description="❌ 취소했어요.", color=discord.Color.red()), view=None)
 
     for label, style, callback in (("확인", discord.ButtonStyle.green, yes), ("취소", discord.ButtonStyle.red, no)):
@@ -258,11 +252,15 @@ def confirm_view(owner_id, on_confirm):
 
 
 @client.command(aliases=["코인구매"])
-async def coin_buy(ctx, tokens: int = None):
-    if tokens is None or tokens < 1:
-        await ctx.send("사용법: `%코인구매 <토큰 수>` 예) `%코인구매 5`")
+async def coin_buy(ctx, tokens: Amount = None):
+    if tokens is None:
+        await ctx.send("사용법: `%코인구매 <토큰 수 | 올인 | 절반>` 예) `%코인구매 5`")
         return
     have = (await db.get_user(ctx.author.id))["tokens"]
+    tokens = resolve_amount(tokens, have)
+    if tokens < 1:
+        await ctx.send(f"🪙 1 토큰 이상으로 사주세요. (보유 {have}개)")
+        return
     if have < tokens:
         await ctx.send(f"🪙 토큰이 부족해요. (보유 {have}개)")
         return

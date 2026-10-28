@@ -4,7 +4,7 @@ import datetime
 
 import discord
 from discord.ext import commands
-from discord.ui import Button, View
+from discord.ui import Button
 
 import database as db
 import respond
@@ -44,7 +44,7 @@ async def find_member(ctx, name_or_mention):
     return None
 
 # 경고 명령어
-@client.command(aliases=["경고"])
+@client.command(aliases=["경고"], usage="<이름 | @유저> [횟수] [사유]")
 @commands.has_permissions(administrator=True)
 async def warn(ctx, name: str, amount: int = 1, *, reason: str = None):
     respond.delete_soon(ctx.message)
@@ -56,13 +56,10 @@ async def warn(ctx, name: str, amount: int = 1, *, reason: str = None):
 
     guild_id = ctx.guild.id
     user_id = member.id
-    view = View()
+    view = respond.ConfirmView(ctx.author)
 
     async def confirm_callback(interaction):
         await respond.defer(interaction)
-        if interaction.user != ctx.author:
-            await respond.reply(interaction, "❌ 당신의 명령이 아닙니다.", ephemeral=True)
-            return
 
         # 경고 수 갱신 (0 미만으로는 내려가지 않음)
         count = await db.add_warning_count(guild_id, user_id, amount)

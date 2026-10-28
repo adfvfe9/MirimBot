@@ -5,12 +5,12 @@ import random
 import discord
 from discord import Embed, Interaction
 from discord.ext import commands
-from discord.ui import Button, View
+from discord.ui import Button
 
 import database as db
 import respond
 from bot import client
-from fmt import debt_line, num
+from fmt import ALL, HALF, Amount, debt_line, num, resolve_amount
 from features import abilities
 from features.bank import get_total_loan
 
@@ -56,13 +56,10 @@ async def money(ctx, member: discord.Member = None):
 async def moneyadd(ctx, member: discord.Member, amount: int):
     respond.delete_soon(ctx.message)
     user_id = member.id
-    view = View()
+    view = respond.ConfirmView(ctx.author)
 
     async def confirm_callback(interaction: Interaction):
         await respond.defer(interaction)
-        if interaction.user != ctx.author:
-            await respond.reply(interaction, "이 버튼은 당신의 것이 아닙니다!", ephemeral=True)
-            return
 
         result = await db.receive(user_id, amount)
         await db.log_money(user_id, "admin_add", amount, f"by {ctx.author.id}")
@@ -102,13 +99,10 @@ async def moneyadd(ctx, member: discord.Member, amount: int):
 async def moneydel(ctx, member: discord.Member, amount: int):
     respond.delete_soon(ctx.message)
     user_id = member.id
-    view = View()
+    view = respond.ConfirmView(ctx.author)
 
     async def confirm_callback(interaction: Interaction):
         await respond.defer(interaction)
-        if interaction.user != ctx.author:
-            await respond.reply(interaction, "이 버튼은 당신의 것이 아닙니다!", ephemeral=True)
-            return
 
         # 잔액보다 많이 빼면 모자란 만큼은 미납금(빚)이 된다.
         await db.add_money(user_id, -amount)
@@ -150,22 +144,30 @@ def sent_today(user, today):
 
 
 @client.command(aliases=['송금'])
-async def send(ctx, member: discord.Member, amount: int):
+async def send(ctx, member: discord.Member, amount: Amount):
     respond.delete_soon(ctx.message)
     sender_id = ctx.author.id
     receiver_id = member.id
-    fee = int(amount * SEND_FEE_RATE)
-    total_cost = amount + fee
 
-    if amount <= 0:
-        await ctx.send(embed=Embed(description="❌ 송금 금액은 0보다 커야 합니다.", color=discord.Color.red()))
-        return
     if receiver_id == sender_id:
         await ctx.send(embed=Embed(description="❌ 자기 자신에게는 송금할 수 없습니다.", color=discord.Color.red()))
         return
 
     sender = await db.get_user(sender_id)
     remaining_limit = SEND_DAILY_LIMIT - sent_today(sender, db.today())
+
+    # 올인 / 절반: 잔액(수수료 포함)과 오늘 남은 한도 안에서 보낼 수 있는 만큼
+    typed = amount not in (ALL, HALF)
+    amount = resolve_amount(amount, max(0, min(sender["money"] // (1 + SEND_FEE_RATE), remaining_limit)))
+    fee = int(amount * SEND_FEE_RATE)
+    total_cost = amount + fee
+
+    if amount <= 0:
+        await ctx.send(embed=Embed(
+            description="❌ 송금 금액은 0보다 커야 합니다." if typed else "❌ 보낼 수 있는 돈이 없어요. (잔액 또는 오늘 송금 한도 부족)",
+            color=discord.Color.red()
+        ))
+        return
 
     if amount > remaining_limit:
         await ctx.send(embed=Embed(
@@ -180,13 +182,10 @@ async def send(ctx, member: discord.Member, amount: int):
         await ctx.send(embed=Embed(description="❌ 잔액이 부족합니다! (10% 수수료 포함)", color=discord.Color.red()))
         return
 
-    view = View()
+    view = respond.ConfirmView(ctx.author)
 
     async def confirm_callback(interaction: Interaction):
         await respond.defer(interaction)
-        if interaction.user != ctx.author:
-            await respond.reply(interaction, "이 버튼은 당신의 것이 아닙니다!", ephemeral=True)
-            return
 
         # 확인 버튼을 누른 시점의 잔액/한도로 다시 검사하고, 두 사람의 돈을 한 번에 바꾼다.
         today = db.today()
@@ -416,18 +415,9 @@ async def 파산(ctx):
         color=discord.Color.orange()
     )
 
-    class BankruptcyView(discord.ui.View):
+    class BankruptcyView(respond.ConfirmView):
         def __init__(self):
-            super().__init__(timeout=30)
-
-        async def interaction_check(self, interaction: discord.Interaction):
-            if interaction.user.id != ctx.author.id:
-                await respond.reply(interaction,
-                    "❌ 명령어를 실행한 사람만 선택할 수 있습니다.",
-                    ephemeral=True
-                )
-                return False
-            return True
+            super().__init__(ctx.author, timeout=30)
 
         @discord.ui.button(
             label="파산하기",

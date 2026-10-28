@@ -8,6 +8,7 @@
   features/school.py       급식, 시간표, 학사일정, 평일 아침 학사정보 알림 (나이스 API)
   features/health.py       %핑 (디스코드 / DB / 봇 멈춤 시간 재기)
   features/audit.py        모든 명령어 / 버튼 기록, %로그 (관리자)
+  features/errors.py       잘못 쓴 명령어에 사용법 안내, 시간 지난 버튼 안내
   features/economy.py      머니, 송금, 머니랭킹, 위로금, 기초수급, 파산
   features/enhance.py      강화
   features/stocks.py       주식
@@ -57,6 +58,7 @@ from features import (  # noqa: F401
     bank,
     economy,
     enhance,
+    errors,
     gamble,
     games,
     general,

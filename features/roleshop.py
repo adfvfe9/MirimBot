@@ -181,7 +181,7 @@ class ShopView(View):
         if item is None or role is None:
             await respond.reply(interaction, "❌ 지금 팔지 않는 역할이에요.", ephemeral=True)
             return
-        confirm = View(timeout=60)
+        confirm = respond.ConfirmView(interaction.user, timeout=60)   # 두 번 눌러도 한 번만 산다
         button = Button(label=f"{num(item['price'])} byte에 사기", emoji="🛒", style=discord.ButtonStyle.success)
 
         async def go(inner):

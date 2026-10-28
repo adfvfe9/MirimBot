@@ -457,7 +457,7 @@ def record_field(game, matches):
     return title, "\n".join(lines + [footer])
 
 
-@client.command(aliases=["전적", "최근전적"])
+@client.command(aliases=["전적", "최근전적"], usage="[@유저 | 닉네임#태그] [롤 | 발로]")
 async def game_record(ctx, *, query: str = None):
     usage = "사용법: `%전적 [@유저 | 닉네임#태그] [롤 | 발로]` 예) `%전적` `%전적 @철수 롤` `%전적 Hide on bush#KR1`"
     words = (query or "").split()

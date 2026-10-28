@@ -84,7 +84,7 @@ async def 명령어(ctx):
     await ctx.send(embed=embed)
 
 
-@client.command(aliases=["청소"])
+@client.command(aliases=["청소"], usage="<개수>")
 @commands.has_permissions(administrator=True)
 async def clean(ctx, amount: int):
     # 명령어 메시지 + 그 위의 메시지 amount 개를 지운다 (14일 지난 메시지는 디스코드가 막아서 못 지움)

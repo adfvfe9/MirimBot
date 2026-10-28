@@ -514,21 +514,6 @@ async def recent_token_prices(limit: int = 10) -> list[float]:
     return [float(r["unit"]) for r in rows]
 
 
-# ───────────── 상점 아이템 (인벤토리) ─────────────
-
-async def add_inventory_item(user_id, item_name: str, quantity: int = 1, conn=None) -> int:
-    """아이템 개수를 더하고 바뀐 개수를 돌려준다."""
-    return await (conn or pool()).fetchval(
-        """
-        INSERT INTO inventory (user_id, item_name, quantity) VALUES ($1, $2, $3)
-        ON CONFLICT (user_id, item_name) DO UPDATE
-            SET quantity = inventory.quantity + EXCLUDED.quantity
-        RETURNING quantity
-        """,
-        int(user_id), item_name, quantity,
-    )
-
-
 # ───────────── 주식 ─────────────
 
 async def load_stock_prices() -> dict[str, dict]:
@@ -1649,7 +1634,7 @@ async def set_quiz_channel(guild_id, channel_id) -> None:
 # %초기화 로 비우는 테이블.
 # suggestion_admins(건의 관리자 목록)는 게임 데이터가 아니라 권한 설정이라 남긴다.
 RESET_TABLES = [
-    "users", "loans", "enhance_items", "enhance_abilities", "inventory",
+    "users", "loans", "enhance_items", "enhance_abilities",
     "stocks", "price_history", "portfolio", "stock_positions", "stock_notices", "market_state",
     "warnings", "warning_logs", "suggestions", "news", "wordchain_records", "money_log",
     "market_listings", "market_trades", "coin_price", "coin_history", "coin_holdings", "miners",

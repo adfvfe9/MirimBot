@@ -1,6 +1,6 @@
 """레버리지 거래: 롱(오르면 이득) / 숏(내리면 이득)
 
-    %롱 <종목> <증거금> [배율]     예) %롱 JAVA 10000 5
+    %롱 <종목> <증거금> [배율]     예) %롱 JAVA 10000 5 · %롱 JAVA 5만 5 · %롱 JAVA 올인 10 (절반도 된다)
     %숏 <종목> <증거금> [배율]     예) %숏 RUST 5000 3
     %포지션 [@유저]               내 포지션과 손익 보기
     %청산 <번호 | 전체>            포지션 정리하고 돈 받기
@@ -14,13 +14,13 @@
   초상승장 / 주식부도 중에는 모든 종목, 부도 위기 뉴스가 진행 중이면 그 종목. 이미 연 포지션은 그대로 둔다.
 """
 import discord
-from discord.ui import Button, View
+from discord.ui import Button
 
 import database as db
 import respond
 from bot import client
 from features import abilities, digest, stocks
-from fmt import debt_line, num
+from fmt import ALL, HALF, Amount, debt_line, num, resolve_amount
 
 # ───────────── 밸런스 설정 ─────────────
 MAX_LEVERAGE = 10             # 최대 배율
@@ -171,9 +171,6 @@ async def open_position(ctx, side, stock_name, margin, leverage):
     if not symbol or symbol not in stocks.stock_prices:
         await ctx.send("❌ 존재하지 않는 주식입니다.")
         return
-    if margin <= 0:
-        await ctx.send("❌ 증거금은 1 이상이어야 합니다.")
-        return
     max_leverage = MAX_LEVERAGE + int(await abilities.total(user_id, "leverage_up"))  # 🚀 배율 한계 돌파
     if not 1 <= leverage <= max_leverage:
         await ctx.send(f"❌ 배율은 1~{max_leverage}배 사이로 입력해주세요.")
@@ -183,13 +180,22 @@ async def open_position(ctx, side, stock_name, margin, leverage):
         await ctx.send(f"❌ {blocked}")
         return
 
+    user = await db.get_user(user_id)
+    used = sum(p["margin"] for p in await db.get_positions(user_id))
+    limit = await margin_limit(user_id)
+    # 올인 / 절반: 잔액(진입 수수료 포함)과 증거금 한도 안에서 걸 수 있는 만큼
+    affordable = max(0.0, min(user["money"] / (1 + leverage * OPEN_FEE), limit - used))
+    typed = margin not in (ALL, HALF)
+    margin = resolve_amount(margin, affordable)
+    if margin <= 0:
+        await ctx.send("❌ 증거금은 1 이상이어야 합니다." if typed else
+                       "❌ 걸 수 있는 증거금이 없어요. (잔액이 부족하거나 증거금 한도를 다 썼어요)")
+        return
+
     price = current_price(symbol)
     preview = {"symbol": symbol, "side": side, "margin": margin, "leverage": leverage, "entry_price": price}
     total = margin + open_fee(preview)  # 진입할 때 잔액에서 나가는 돈
 
-    user = await db.get_user(user_id)
-    used = sum(p["margin"] for p in await db.get_positions(user_id))
-    limit = await margin_limit(user_id)
     if user["money"] < total:
         await ctx.send(f"❌ 잔액이 부족합니다. (증거금 + 진입 수수료 {num(total)} byte 필요)")
         return
@@ -232,13 +238,10 @@ async def open_position(ctx, side, stock_name, margin, leverage):
         inline=False
     )
 
-    view = View()
+    view = respond.ConfirmView(ctx.author)
 
     async def confirm_callback(interaction: discord.Interaction):
         await respond.defer(interaction)
-        if interaction.user != ctx.author:
-            await respond.reply(interaction, "이 버튼은 당신의 것이 아니에요!", ephemeral=True)
-            return
 
         entry = current_price(symbol)
         # 확인 창을 띄운 뒤에 뉴스가 났을 수도 있으니 다시 검사
@@ -298,13 +301,13 @@ async def open_position(ctx, side, stock_name, margin, leverage):
 
 
 @client.command(aliases=["롱"])
-async def open_long(ctx, stock_name: str, margin: int, leverage: int = 1):
+async def open_long(ctx, stock_name: str, margin: Amount, leverage: int = 1):
     respond.delete_soon(ctx.message)
     await open_position(ctx, "LONG", stock_name, margin, leverage)
 
 
 @client.command(aliases=["숏"])
-async def open_short(ctx, stock_name: str, margin: int, leverage: int = 1):
+async def open_short(ctx, stock_name: str, margin: Amount, leverage: int = 1):
     respond.delete_soon(ctx.message)
     await open_position(ctx, "SHORT", stock_name, margin, leverage)
 

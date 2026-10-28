@@ -15,14 +15,14 @@ import matplotlib.pyplot as plt  # noqa: E402
 from discord import ButtonStyle, File
 from discord.ext import commands, tasks
 from concurrent.futures import ThreadPoolExecutor
-from discord.ui import Button, View
+from discord.ui import Button
 from matplotlib import font_manager
 
 import database as db
 import respond
 from bot import client
 from features import abilities
-from fmt import num
+from fmt import ALL, HALF, Amount, num, resolve_amount
 
 # 그래프에 한글이 나오도록 맑은 고딕 폰트 등록 (malgun.ttf 는 프로젝트 폴더에 있다)
 font_path = os.path.join(
@@ -629,8 +629,12 @@ stock_aliases = {
 }
 
 # ───────────── %주식구매 ─────────────
-@client.command(aliases=["주식구매"])
-async def buy_stock(ctx, stock_name: str, amount: int):
+@client.command(aliases=["주식구매"], usage="<종목> <수량 | 올인 | 절반>")
+async def buy_stock(ctx, stock_name: str, amount: Amount):
+    if amount == ALL:
+        return await buy_all_stock(ctx, stock_name)
+    if amount == HALF:
+        return await buy_half_stock(ctx, stock_name)
     respond.delete_soon(ctx.message)
     user_id = ctx.author.id
     stock_key = stock_aliases.get(stock_name.upper())
@@ -662,13 +666,10 @@ async def buy_stock(ctx, stock_name: str, amount: int):
              f"{num(QUICK_SELL_FEE * 100)}%가 붙어요."
     )
 
-    view = View()
+    view = respond.ConfirmView(ctx.author)
 
     async def confirm_callback(interaction: discord.Interaction):
         await respond.defer(interaction)
-        if interaction.user != ctx.author:
-            await respond.reply(interaction, "이 버튼은 당신의 것이 아니에요!", ephemeral=True)
-            return
 
         bought = await buy_shares(user_id, stock_key, amount)
         if bought is None:
@@ -715,17 +716,16 @@ async def buy_stock(ctx, stock_name: str, amount: int):
     await ctx.send(embed=embed, view=view)
 
 # ───────────── %주식판매 ─────────────
-@client.command(aliases=["주식판매"])
-async def sell_stock(ctx, stock_name: str, amount: int):
+@client.command(aliases=["주식판매"], usage="<종목> <수량 | 전부 | 절반>")
+async def sell_stock(ctx, stock_name: str, amount: Amount):
+    if amount == ALL:
+        return await sell_all_stock(ctx, stock_name)
     respond.delete_soon(ctx.message)
     user_id = ctx.author.id
     stock_key = stock_aliases.get(stock_name.upper())
 
     if not stock_key or stock_key not in stock_prices:
         await ctx.send("❌ 존재하지 않는 주식입니다.")
-        return
-    if amount <= 0:
-        await ctx.send("❌ 1 이상의 수량을 입력해주세요.")
         return
     stock = (await db.get_portfolio(user_id)).get(stock_key)
 
@@ -735,6 +735,10 @@ async def sell_stock(ctx, stock_name: str, amount: int):
         return
 
     quantity = stock["quantity"]
+    amount = resolve_amount(amount, quantity)   # 절반: 가진 수량의 절반
+    if amount <= 0:
+        await ctx.send("❌ 1 이상의 수량을 입력해주세요.")
+        return
 
     if quantity < amount:
         await ctx.send("❌ 보유 수량이 부족합니다.")
@@ -755,13 +759,10 @@ async def sell_stock(ctx, stock_name: str, amount: int):
     embed.add_field(name=f"{fee_text(stock, bonus)} 차감 후 (지금 가격 기준)", value=f"{num(total_earned)} byte", inline=False)
     embed.set_footer(text="확인을 누르는 순간의 가격으로 거래돼요.")
 
-    view = View()
+    view = respond.ConfirmView(ctx.author)
 
     async def confirm_callback(interaction: discord.Interaction):
         await respond.defer(interaction)
-        if interaction.user != ctx.author:
-            await respond.reply(interaction, "이 버튼은 당신의 것이 아니에요!", ephemeral=True)
-            return
 
         sold = await sell_shares(user_id, {stock_key: amount})
         if sold is None:
@@ -906,13 +907,10 @@ async def buy_all_stock(ctx, stock_name: str):
              f"{num(QUICK_SELL_FEE * 100)}%가 붙어요."
     )
 
-    view = View()
+    view = respond.ConfirmView(ctx.author)
 
     async def confirm_callback(interaction):
         await respond.defer(interaction)
-        if interaction.user != ctx.author:
-            await respond.reply(interaction, "이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
-            return
 
         bought = await buy_shares(user_id, stock_key, max_amount)
         if bought is None:
@@ -997,16 +995,10 @@ async def buy_half_stock(ctx, stock_name: str):
              f"{num(QUICK_SELL_FEE * 100)}%가 붙어요."
     )
 
-    view = View()
+    view = respond.ConfirmView(ctx.author)
 
     async def confirm_callback(interaction):
         await respond.defer(interaction)
-        if interaction.user != ctx.author:
-            await respond.reply(interaction,
-                "이 버튼은 당신의 것이 아닙니다.",
-                ephemeral=True
-            )
-            return
 
         # 확인 버튼을 누르기 전 주가가 바뀌었으면 다시 실행하게 한다 (예전 가격으로 사는 것 방지)
         bought = None
@@ -1104,13 +1096,10 @@ async def sell_all_stock(ctx, stock_name: str = None):
         embed.add_field(name=f"수익 ({fee_text(stock, bonus)} 적용)", value=f"{num(net)} byte", inline=False)
         embed.set_footer(text="확인을 누르는 순간의 가격으로 거래돼요.")
 
-        view = View()
+        view = respond.ConfirmView(ctx.author)
 
         async def confirm_callback(interaction):
             await respond.defer(interaction)
-            if interaction.user != ctx.author:
-                await respond.reply(interaction, "이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
-                return
 
             sold = await sell_shares(user_id, {stock_key: quantity})
             if sold is None:
@@ -1198,13 +1187,10 @@ async def sell_all_stock(ctx, stock_name: str = None):
              f"(보통은 {num(SELL_FEE * 100)}%). 확인을 누르는 순간의 가격으로 거래돼요."
     )
 
-    view = View()
+    view = respond.ConfirmView(ctx.author)
 
     async def confirm_callback(interaction):
         await respond.defer(interaction)
-        if interaction.user != ctx.author:
-            await respond.reply(interaction, "이 버튼은 당신의 것이 아닙니다.", ephemeral=True)
-            return
 
         sales = {name: stock["quantity"] for name, stock in user_stocks.items()}
         sold = await sell_shares(user_id, sales)

@@ -127,7 +127,7 @@ async def purchase_tokens(user_id, count):
 
 @client.command(aliases=["토큰구매", "토큰교환"])
 async def buy_token(ctx, amount: int = 1):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     user_id = ctx.author.id
 
     if amount <= 0:
@@ -204,7 +204,7 @@ async def buy_token(ctx, amount: int = 1):
 
 @client.command(aliases=["토큰확인", "토큰"])
 async def check_token(ctx, member: discord.Member = None):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     member = member or ctx.author
     data = await db.get_user(member.id)
 
@@ -224,7 +224,7 @@ async def check_token(ctx, member: discord.Member = None):
 
 @client.command(aliases=["토큰최대교환"])
 async def buy_token_max(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     user_id = ctx.author.id
 
     user = await db.get_user(user_id)
@@ -303,7 +303,7 @@ async def buy_token_max(ctx):
 @client.command(aliases=["토큰추가"])
 @commands.has_permissions(administrator=True)
 async def add_token(ctx, member: discord.Member, amount: int):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     if amount <= 0:
         await ctx.send("❌ 1 이상의 수량을 입력해주세요.")
         return
@@ -356,7 +356,7 @@ async def add_token(ctx, member: discord.Member, amount: int):
 @client.command(aliases=["토큰제거"])
 @commands.has_permissions(administrator=True)
 async def remove_token(ctx, member: discord.Member, amount: int):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     if amount <= 0:
         await ctx.send("❌ 1 이상의 수량을 입력해주세요.")
         return
@@ -423,7 +423,7 @@ async def remove_token(ctx, member: discord.Member, amount: int):
 @client.command(aliases=["토큰구매가"])
 @commands.has_permissions(administrator=True)
 async def set_token_price(ctx, member: discord.Member, new_price: int = 100):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
 
     if new_price <= 0:
         await ctx.send("❌ 가격은 1 이상이어야 합니다.")

@@ -4,6 +4,7 @@
 import discord
 
 import database as db
+import respond
 from bot import client
 
 
@@ -12,7 +13,7 @@ SUGGESTION_COOLDOWN = 3600  # 초 단위 (1시간)
 
 @client.command(aliases=["건의"])
 async def suggestion(ctx, *, content: str = None):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     user_id = ctx.author.id
     now = db.now()
 

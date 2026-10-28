@@ -299,13 +299,13 @@ async def open_position(ctx, side, stock_name, margin, leverage):
 
 @client.command(aliases=["롱"])
 async def open_long(ctx, stock_name: str, margin: int, leverage: int = 1):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     await open_position(ctx, "LONG", stock_name, margin, leverage)
 
 
 @client.command(aliases=["숏"])
 async def open_short(ctx, stock_name: str, margin: int, leverage: int = 1):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     await open_position(ctx, "SHORT", stock_name, margin, leverage)
 
 
@@ -313,7 +313,7 @@ async def open_short(ctx, stock_name: str, margin: int, leverage: int = 1):
 
 @client.command(aliases=["포지션"])
 async def positions(ctx, member: discord.Member = None):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     member = member or ctx.author
 
     if member == ctx.author:
@@ -365,7 +365,7 @@ async def positions(ctx, member: discord.Member = None):
 
 @client.command(aliases=["청산"])
 async def close_position(ctx, target: str = None):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     user_id = ctx.author.id
 
     if target is None:

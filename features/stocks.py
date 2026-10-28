@@ -8,7 +8,10 @@ import os
 import random
 
 import discord
-import matplotlib.pyplot as plt
+import matplotlib
+
+matplotlib.use("Agg")   # 화면 없이 그림만 그린다 (그래프 전용 스레드에서 그려도 되게)
+import matplotlib.pyplot as plt  # noqa: E402
 from discord import ButtonStyle, File
 from discord.ext import commands, tasks
 from concurrent.futures import ThreadPoolExecutor
@@ -359,7 +362,7 @@ async def accelerate_stocks(ctx, minutes: int = 60):
     매분: 시장 상태 타이머(상승장/하락장, 초상승장/주식부도) 1분 당기기 → 뉴스 타이머 → 가격 갱신.
     상장폐지, 강제청산도 실제로 처리된다. 단타 수수료(30분)는 실제 시각 그대로다.
     가속 중에 나온 뉴스는 DB 에 저장되고(%뉴스) 효과도 걸리지만, 뉴스 채널에 도배되지 않게 채널에는 올리지 않는다."""
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     if not 1 <= minutes <= ACCEL_MAX_MINUTES:
         await ctx.send(f"❌ 1~{ACCEL_MAX_MINUTES}분 사이로 입력해주세요.")
         return
@@ -453,7 +456,7 @@ async def accelerate_stocks(ctx, minutes: int = 60):
 # ───────────── %주식 명령어 ─────────────
 @client.command(aliases=["주식"])
 async def stock(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
 
     next_update = last_update_time + datetime.timedelta(seconds=60)
     timestamp = int(next_update.timestamp())
@@ -502,7 +505,7 @@ async def stock(ctx):
 @client.command(aliases=["주식초기화"])
 @commands.has_permissions(administrator=True)
 async def reset_stock(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     global stock_prices, last_update_time
 
     # 주식 초기화
@@ -628,7 +631,7 @@ stock_aliases = {
 # ───────────── %주식구매 ─────────────
 @client.command(aliases=["주식구매"])
 async def buy_stock(ctx, stock_name: str, amount: int):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     user_id = ctx.author.id
     stock_key = stock_aliases.get(stock_name.upper())
 
@@ -714,7 +717,7 @@ async def buy_stock(ctx, stock_name: str, amount: int):
 # ───────────── %주식판매 ─────────────
 @client.command(aliases=["주식판매"])
 async def sell_stock(ctx, stock_name: str, amount: int):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     user_id = ctx.author.id
     stock_key = stock_aliases.get(stock_name.upper())
 
@@ -806,7 +809,7 @@ async def sell_stock(ctx, stock_name: str, amount: int):
 
 @client.command(aliases=["주식확인"])
 async def stock_status(ctx, member: discord.Member = None):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     member = member or ctx.author
     user_id = member.id
 
@@ -872,7 +875,7 @@ async def stock_status(ctx, member: discord.Member = None):
 
 @client.command(aliases=["주식올인", "주식전량구매"])
 async def buy_all_stock(ctx, stock_name: str):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     user_id = ctx.author.id
     stock_key = stock_aliases.get(stock_name.upper())
 
@@ -955,7 +958,7 @@ async def buy_all_stock(ctx, stock_name: str):
 
 @client.command(aliases=["주식절반구매"])
 async def buy_half_stock(ctx, stock_name: str):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     user_id = ctx.author.id
     stock_key = stock_aliases.get(stock_name.upper())
 
@@ -1070,7 +1073,7 @@ async def buy_half_stock(ctx, stock_name: str):
 
 @client.command(aliases=["주식전량판매"])
 async def sell_all_stock(ctx, stock_name: str = None):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     user_id = ctx.author.id
     holdings = await db.get_portfolio(user_id)
     bonus = await abilities.totals(user_id)
@@ -1264,6 +1267,11 @@ async def in_plot_thread(fn, *args):
     return await asyncio.get_running_loop().run_in_executor(_plot_thread, functools.partial(fn, *args))
 
 
+async def warm_up_plot():
+    """봇이 켜질 때 그래프를 한 번 그려 둔다. 처음 그릴 때만 글꼴 등을 불러와서 몇 배 느리다. (setup_hook)"""
+    await in_plot_thread(draw_chart, {"-": [1.0, 1.0]}, 2, "")
+
+
 def draw_chart(series, minutes, title):
     """series: {종목: [가격...]} → 최근 minutes 분 그래프 PNG"""
     plt.figure(figsize=(10, 4) if len(series) == 1 else (12, 6))
@@ -1285,7 +1293,7 @@ def draw_chart(series, minutes, title):
 @client.command(aliases=["주가그래프"])
 async def stock_chart(ctx, *args):
     """%주가그래프 [주식이름] [분]  — 기본 60분 무료, 60분 더 볼 때마다 2000 byte"""
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     stock_key, minutes = None, CHART_FREE_MINUTES
     for arg in args:
         if arg.isdigit():
@@ -1302,14 +1310,10 @@ async def stock_chart(ctx, *args):
         await ctx.send(f"❌ 최대 {CHART_MAX_MINUTES}분(24시간)까지만 볼 수 있어요.")
         return
 
-    price_history = await db.load_price_history()
-    if stock_key:
-        if stock_key not in price_history:
-            await ctx.send("❌ 해당 주식의 가격 데이터가 없습니다.")
-            return
-        series = {stock_key: price_history[stock_key]}
-    else:
-        series = price_history
+    series = await db.load_recent_prices(minutes, stock_key)
+    if stock_key and stock_key not in series:
+        await ctx.send("❌ 해당 주식의 가격 데이터가 없습니다.")
+        return
     if not series:
         await ctx.send("❌ 아직 기록된 가격 데이터가 없습니다.")
         return
@@ -1335,7 +1339,7 @@ async def stock_chart(ctx, *args):
 
 @client.command(aliases=["주식랭킹"])
 async def stock_rank(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
 
     user_profits = []
 

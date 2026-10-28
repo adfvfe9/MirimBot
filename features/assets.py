@@ -12,6 +12,7 @@ import discord
 from matplotlib.ticker import FuncFormatter
 
 import database as db
+import respond
 from bot import client
 from features import bank, enhance, futures, stocks
 from fmt import num
@@ -128,7 +129,7 @@ async def check_titles(worths):
 
 @client.command(aliases=["자산"])
 async def assets(ctx, member: discord.Member = None):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     member = member or ctx.author
     parts, badge = await asyncio.gather(user_breakdown(member.id), titles().badge(member.id))
 
@@ -147,7 +148,7 @@ async def assets(ctx, member: discord.Member = None):
 
 @client.command(aliases=["자산랭킹", "순자산랭킹"])
 async def asset_rank(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
 
     worths, equipped = await asyncio.gather(all_net_worths(), db.equipped_titles())
     if not worths:
@@ -199,7 +200,7 @@ def draw_worth_chart(series, title):
 @client.command(aliases=["자산그래프"])
 async def asset_chart(ctx, *args):
     """%자산그래프 [@유저 ...] [일]  — 기본 나, 최근 7일 (최대 30일). 여러 명을 멘션하면 같이 그린다."""
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     days = GRAPH_DEFAULT_DAYS
     for arg in args:
         if arg.isdigit():

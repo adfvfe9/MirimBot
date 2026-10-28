@@ -31,6 +31,7 @@ import requests
 from discord.ext import commands, tasks
 
 import database as db
+import respond
 from bot import client
 from features import abilities, quiz_bank, quiz_gen, quiz_math, stocks, wordchain
 from fmt import debt_line, num
@@ -368,7 +369,7 @@ async def start_quiz_loop():
 @client.command(aliases=["퀴즈채널"])
 @commands.has_permissions(administrator=True)
 async def set_quiz_channel(ctx, channel_id: int):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     await db.set_quiz_channel(ctx.guild.id, channel_id)
     await ctx.send(f"✅ 퀴즈 채널이 <#{channel_id}>로 설정되었습니다.")
 
@@ -377,7 +378,7 @@ async def set_quiz_channel(ctx, channel_id: int):
 @commands.has_permissions(administrator=True)
 async def publish_quiz(ctx, *args):
     """%퀴즈출제 [과목] [난이도] (순서 상관없음, 생략하면 랜덤)"""
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     subject = next((a for a in args if a in SUBJECTS), None)
     level = next((a for a in args if a in LEVELS), None)
     unknown = [a for a in args if a not in SUBJECTS and a not in LEVELS]

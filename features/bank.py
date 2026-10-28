@@ -14,6 +14,7 @@
   매일 조금씩 빼면 복리가 되고 30일 제한과 원금 한도도 넘어갔다)
 - 30일이 지나면 이자가 더 안 붙는다. 다 빼고 다시 넣으면 다시 시작한다. (이때도 한도 안에서만)
 """
+import asyncio
 import datetime
 import math
 
@@ -197,18 +198,21 @@ async def loan_limit(user_id, conn=None):
 
 @client.command(aliases=["은행"])
 async def bank(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
 
     user_id = ctx.author.id
 
-    # 명령어 실행 시에도 즉시 연체 확인
-    collection_messages = await collect_overdue(user_id)
+    # 서로 상관없는 조회라 한꺼번에 보낸다
+    user, loans, limit = await asyncio.gather(db.get_user(user_id), db.get_loans(user_id), loan_limit(user_id))
 
-    user = await db.get_user(user_id)
-    loans = await db.get_loans(user_id)
+    # 기한이 지난 대출이 있을 때만 바로 연체 처리하고 다시 읽는다 (없으면 트랜잭션을 열 필요가 없다)
+    now = db.now()
+    collection_messages = []
+    if any(not l["collected"] and now >= l["taken_at"] + datetime.timedelta(hours=LOAN_DEADLINE_HOURS) for l in loans):
+        collection_messages = await collect_overdue(user_id)
+        user, loans = await asyncio.gather(db.get_user(user_id), db.get_loans(user_id))
 
     total_owed = get_total_loan(loans)
-    limit = await loan_limit(user_id)
     loan_room = max(0.0, limit - total_owed / (1 + LOAN_INTEREST))
 
     deadline_lines = []

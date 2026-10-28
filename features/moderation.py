@@ -47,7 +47,7 @@ async def find_member(ctx, name_or_mention):
 @client.command(aliases=["경고"])
 @commands.has_permissions(administrator=True)
 async def warn(ctx, name: str, amount: int = 1, *, reason: str = None):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     member = await find_member(ctx, name)
 
     if not member:
@@ -133,7 +133,7 @@ async def warn(ctx, name: str, amount: int = 1, *, reason: str = None):
 
 @client.command(aliases=["경고확인"])
 async def check_warning(ctx, *, target: str = None):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     if target:
         member = None
         # 멘션일 경우

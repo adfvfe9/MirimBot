@@ -15,8 +15,11 @@ defer() 는 바로 "받았어"라고 답하지 않고 DEFER_AFTER 초를 기다�
   ("받았어" + "메시지 수정" 2번이면 그만큼 화면이 늦게 바뀌고, 그 사이 옛 버튼을 또 누르게 된다)
 - 일이 오래 걸리면 DEFER_AFTER 초에 "받았어"라고 먼저 답해서 3초 제한을 넘기지 않는다.
 edit / reply 는 먼저 답했는지에 따라 알맞은 방법을 고른다.
+
+delete_soon(ctx.message): %명령어를 친 메시지를 지운다. 디스코드 응답을 기다리지 않고 뒤에서 지운다.
 """
 import asyncio
+import contextlib
 from collections import deque
 
 import discord
@@ -73,3 +76,17 @@ async def reply(interaction: discord.Interaction, content=None, *, ephemeral: bo
         return await interaction.response.send_message(content, ephemeral=ephemeral, **kwargs)
 
     await _first_or_later(interaction, first, lambda: interaction.followup.send(content, ephemeral=ephemeral, **kwargs))
+
+
+_background = set()    # 뒤에서 도는 작업 (끝나기 전에 가비지 컬렉션되지 않게 잡아 둔다)
+
+
+def delete_soon(message) -> None:
+    """명령어 메시지를 뒤에서 지운다. 기다리면 명령어마다 디스코드 왕복(0.3~0.5초)만큼 답이 늦어진다.
+    이미 지워졌거나 권한이 없어도 명령어는 그대로 진행한다."""
+    async def run():
+        with contextlib.suppress(discord.HTTPException):
+            await message.delete()
+    task = asyncio.create_task(run())
+    _background.add(task)
+    task.add_done_callback(_background.discard)

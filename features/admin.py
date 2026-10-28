@@ -11,7 +11,7 @@ from features import stocks
 @client.command(aliases=["초기화"])
 @commands.has_permissions(administrator=True)
 async def reset_all_data(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
 
     embed = discord.Embed(
         title="⚠️ 전체 초기화 확인",

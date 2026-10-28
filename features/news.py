@@ -16,6 +16,7 @@ import discord
 from discord.ext import commands, tasks
 
 import database as db
+import respond
 from bot import client
 from features import stocks
 from fmt import num
@@ -301,7 +302,7 @@ async def start_news_loop():
 
 @client.command(aliases=["뉴스"])
 async def news(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     rows = await db.recent_news(5)
     if not rows:
         await ctx.send("📭 아직 나온 뉴스가 없어요.")
@@ -319,7 +320,7 @@ async def news(ctx):
 @client.command(aliases=["뉴스채널"])
 @commands.has_permissions(administrator=True)
 async def set_news_channel(ctx, channel_id: int):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     await db.set_news_channel(ctx.guild.id, channel_id)
     await ctx.send(f"✅ 뉴스 채널이 <#{channel_id}>로 설정되었습니다.")
 
@@ -327,7 +328,7 @@ async def set_news_channel(ctx, channel_id: int):
 @client.command(aliases=["뉴스발행"])
 @commands.has_permissions(administrator=True)
 async def publish_news(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     embed = await publish()
     if not await db.get_news_channels():
         await ctx.send("⚠️ 뉴스 채널이 설정되지 않아 여기에만 보여요. (`%뉴스채널 <채널ID>`)", embed=embed)

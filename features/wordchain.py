@@ -681,7 +681,7 @@ MEDALS = ["🥇", "🥈", "🥉"]
 @client.command(aliases=["끝말잇기랭킹", "끝말랭킹"])
 async def wordchain_rank(ctx, level: str = None):
     """%끝말잇기랭킹 [어려움|지옥] — 생략하면 둘 다"""
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     keys = [k for k in RANKED if level in (None, DIFFICULTIES[k]["name"])]
     if not keys:
         names = " / ".join(DIFFICULTIES[k]["name"] for k in RANKED)

@@ -32,7 +32,7 @@ BANKRUPTCY_INTERVAL_DAYS = 1  # 파산 간격 (일). 1 이면 하루에 1번
 # 머니 확인
 @client.command(aliases=['머니확인', '머니'])
 async def money(ctx, member: discord.Member = None):
-    await ctx.message.delete()  # 명령어 삭제
+    respond.delete_soon(ctx.message)  # 명령어 삭제
     member = member or ctx.author
     user = await db.get_user(member.id)
 
@@ -54,7 +54,7 @@ async def money(ctx, member: discord.Member = None):
 @client.command(aliases=['머니추가'])
 @commands.has_permissions(administrator=True)
 async def moneyadd(ctx, member: discord.Member, amount: int):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     user_id = member.id
     view = View()
 
@@ -100,7 +100,7 @@ async def moneyadd(ctx, member: discord.Member, amount: int):
 @client.command(aliases=['머니제거'])
 @commands.has_permissions(administrator=True)
 async def moneydel(ctx, member: discord.Member, amount: int):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     user_id = member.id
     view = View()
 
@@ -151,7 +151,7 @@ def sent_today(user, today):
 
 @client.command(aliases=['송금'])
 async def send(ctx, member: discord.Member, amount: int):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     sender_id = ctx.author.id
     receiver_id = member.id
     fee = int(amount * SEND_FEE_RATE)
@@ -253,7 +253,7 @@ async def send(ctx, member: discord.Member, amount: int):
 
 @client.command(aliases=["머니랭킹"])
 async def money_rank(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     top = await db.top_money(10)
     if not top:
         await ctx.send("❌ 데이터가 없습니다.")
@@ -275,7 +275,7 @@ async def money_rank(ctx):
 
 @client.command(aliases=["위로금"])
 async def consolation(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     user_id = ctx.author.id
     today = db.today()
     error = None
@@ -310,7 +310,7 @@ async def consolation(ctx):
 
 @client.command(aliases=["기초수급"])
 async def welfare(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     user_id = ctx.author.id
     today = db.today()
 
@@ -376,7 +376,7 @@ async def total_debt(user_id, user, conn=None):
 
 @client.command()
 async def 파산(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
 
     user_id = ctx.author.id
     user = await db.get_user(user_id)

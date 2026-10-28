@@ -135,7 +135,7 @@ def gamble_embed(result, title, description):
 
 @client.command(aliases=["도박"])
 async def gamble(ctx, amount: int):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
 
     result = await play_gamble(ctx.author.id, amount)
     if isinstance(result, str):
@@ -149,7 +149,7 @@ async def gamble(ctx, amount: int):
 
 @client.command(aliases=["도박랭킹"])
 async def gamble_rank(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     top = await db.top_gamble(10)
     if not top:
         await ctx.send("❌ 아직 도박 기록이 없습니다.")
@@ -172,7 +172,7 @@ async def gamble_rank(ctx):
 
 @client.command(aliases=["도박올인"])
 async def gamble_allin(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
 
     result = await play_gamble(ctx.author.id)
     if isinstance(result, str):

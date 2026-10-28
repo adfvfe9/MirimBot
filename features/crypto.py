@@ -375,7 +375,7 @@ ACCEL_MAX_MINUTES = 1440
 @commands.has_permissions(administrator=True)
 async def coin_accelerate(ctx, minutes: int = 60):
     """비트코인만 minutes 분이 지난 것처럼 진행한다. (뉴스와 액면 조정 포함, 뉴스 채널에는 안 올림)"""
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     if not 1 <= minutes <= ACCEL_MAX_MINUTES:
         await ctx.send(f"❌ 1~{ACCEL_MAX_MINUTES}분 사이로 입력해주세요.")
         return

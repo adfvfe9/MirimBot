@@ -379,7 +379,7 @@ async def mining_rank(ctx):
 @commands.has_permissions(administrator=True)
 async def mining_accelerate(ctx, count: int = 1):
     """블록을 바로 count 번 캔다. 전기세도 진짜로 빠지고, 다음 블록 시각은 그대로다."""
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     if not 1 <= count <= ACCEL_MAX_BLOCKS:
         await ctx.send(f"❌ 1~{ACCEL_MAX_BLOCKS}블록 사이로 입력해주세요.")
         return

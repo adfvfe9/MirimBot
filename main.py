@@ -111,6 +111,7 @@ async def setup_hook():
     asyncio.create_task(digest.post_loop())
     asyncio.create_task(activity.loop())
     asyncio.create_task(games.loop())
+    asyncio.create_task(stocks.warm_up_plot())
 
     await slash.sync()     # 슬래시 명령어 목록이 바뀌었으면 디스코드에 등록
 

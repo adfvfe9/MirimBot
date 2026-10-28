@@ -4,12 +4,13 @@ import discord
 from discord.ext import commands
 
 import database as db
+import respond
 from bot import client
 
 
 @client.command(aliases=['시간'])
 async def timeget(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     now = db.now()  # 한국 시간
     current_time = now.strftime("%Y년 %m월 %d일 %H시 %M분 %S초")
     embed = discord.Embed(title="현재 시간 ⏰", description=f"{current_time}", color=0x3498db)
@@ -17,7 +18,7 @@ async def timeget(ctx):
 
 @client.command(aliases=['패치노트'])
 async def patchnote(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     # 패치노트에는 가장 최근 a.b.c 버전의 내용만 보여준다. (d 자리 수정 · 지난 버전은 노션 "미림봇 업데이트 내용")
     embed = discord.Embed(
         title="📜 패치노트 v1.3.8 — 롤 · 발로 연동 · 오늘의 미림봇 · 활동 보상",
@@ -60,7 +61,7 @@ COMMANDS_URL = "https://www.notion.so/20cf2c1e9859807781bac6f3ce06c317?v=20cf2c1
 
 @client.command(aliases=["도움말", "가이드"])
 async def 명령어(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
 
     embed = discord.Embed(
         title="📘 미림봇 도움말 (노션)",

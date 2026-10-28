@@ -649,7 +649,7 @@ async def enhance_list(ctx, member: discord.Member = None):
 
 @client.command(aliases=['강화판매'])
 async def sell_enhance(ctx, item_name: str):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
 
     sold = await sell(ctx.author.id, item_name)
     if sold is None:
@@ -716,7 +716,7 @@ async def admin_set_enhance(ctx, item_name: str, level: int, member: discord.Mem
 
 @client.command(aliases=["강화랭킹"])
 async def enhance_rank(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     items = (await db.all_enhance_items())[:10]
     if not items:
         await ctx.send("❌ 아직 강화 아이템이 없습니다.")
@@ -737,7 +737,7 @@ async def enhance_rank(ctx):
 
 @client.command(aliases=["강화확률"])
 async def enhance_odds(ctx):
-    await ctx.message.delete()
+    respond.delete_soon(ctx.message)
     lines = []
     for level in range(1, MAX_LEVEL):
         success, keep, down, destroy = outcome_chances(level)

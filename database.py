@@ -580,9 +580,18 @@ async def save_stock_tick(stock_prices: dict, keep: int = 1440, history=None) ->
         )
 
 
-async def load_price_history() -> dict[str, list[float]]:
-    """{종목: [오래된 가격, ..., 최신 가격]}"""
-    rows = await pool().fetch("SELECT symbol, price FROM price_history ORDER BY id")
+async def load_recent_prices(minutes: int, symbol: str | None = None) -> dict[str, list[float]]:
+    """{종목: [오래된 가격, ..., 최신 가격]} 최근 minutes 개만 (symbol 을 주면 그 종목만). 그래프용.
+    전체 기록(24시간 × 종목 수)을 다 받으면 그만큼 느려서, 필요한 만큼만 받는다."""
+    rows = await pool().fetch(
+        """
+        SELECT symbol, price FROM (
+            SELECT id, symbol, price, row_number() OVER (PARTITION BY symbol ORDER BY id DESC) AS rn
+            FROM price_history WHERE $2::text IS NULL OR symbol = $2
+        ) t WHERE rn <= $1 ORDER BY id
+        """,
+        minutes, symbol,
+    )
     history: dict[str, list[float]] = {}
     for r in rows:
         history.setdefault(r["symbol"], []).append(_float(r["price"]))

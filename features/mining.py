@@ -1,11 +1,11 @@
 """코인 채굴: byte 로 채굴기를 돌려서 비트코인을 캔다
 
     %채굴 [@유저]               내 채굴기, 해시, 내 몫, 시간당 예상 채굴량, 전기세, 다음 블록 / 반감기
-    %채굴기구매                  채굴기 1대 사기 (Lv1, 1인 최대 3대)
-    %채굴기업그레이드 [번호]      채굴기 레벨 올리기 (안 쓰면 레벨이 가장 낮은 것)
-    %채굴켜기 / %채굴끄기
-    %채굴랭킹                   지금까지 캔 코인 순위
-    %채굴가속 [블록 수]          (관리자) 블록을 바로 [블록 수] 번 캔다 (전기세도 진짜로 빠진다)
+    %채굴 구매                  채굴기 1대 사기 (Lv1, 1인 최대 3대)
+    %채굴 업그레이드 [번호]      채굴기 레벨 올리기 (안 쓰면 레벨이 가장 낮은 것)
+    %채굴 켜기 / %채굴 끄기
+    %채굴 랭킹                   지금까지 캔 코인 순위
+    %관리 채굴가속 [블록 수]          (관리자) 블록을 바로 [블록 수] 번 캔다 (전기세도 진짜로 빠진다)
 
 - 1시간마다 블록 하나. 서버 전체 블록 보상(처음 0.1 BTC)을 그때 켜져 있는 채굴기 해시 비율로 나눠 갖는다.
   그래서 몇 명이 채굴하든 서버 전체에서 풀리는 코인은 하루 2.4 BTC 로 고정이다. (사람이 많으면 1인 몫이 준다)
@@ -22,7 +22,6 @@ from discord.ext import commands
 
 import database as db
 import respond
-from bot import client
 from features import crypto
 from fmt import num
 
@@ -158,7 +157,7 @@ async def buy_rig(user_id):
     async with db.user_tx(user_id) as conn:
         miner = await db.get_miner(user_id, conn)
         if len(miner["rigs"]) >= MAX_RIGS:
-            return f"❌ 채굴기는 1인 최대 {MAX_RIGS}대예요. `%채굴기업그레이드`로 레벨을 올려보세요."
+            return f"❌ 채굴기는 1인 최대 {MAX_RIGS}대예요. `%채굴 업그레이드`로 레벨을 올려보세요."
         money = await db.get_money(user_id, conn)
         if money < RIG_PRICE:
             return f"💸 돈이 부족해요. 채굴기는 {num(RIG_PRICE)} byte예요. (보유 {num(money)} byte)"
@@ -182,7 +181,7 @@ async def upgrade_rig(user_id, number=None):
         miner = await db.get_miner(user_id, conn)
         rigs = miner["rigs"]
         if not rigs:
-            return "❌ 채굴기가 없어요. `%채굴기구매`로 먼저 사주세요."
+            return "❌ 채굴기가 없어요. `%채굴 구매`로 먼저 사주세요."
         if number is not None and not 1 <= number <= len(rigs):
             return f"❌ 채굴기 번호는 1~{len(rigs)} 이에요."
         i = pick_rig(rigs, number)
@@ -205,7 +204,7 @@ async def set_running(user_id, on):
     async with db.user_tx(user_id) as conn:
         miner = await db.get_miner(user_id, conn)
         if not miner["rigs"]:
-            return "❌ 채굴기가 없어요. `%채굴기구매`로 먼저 사주세요."
+            return "❌ 채굴기가 없어요. `%채굴 구매`로 먼저 사주세요."
         if miner["running"] == on:
             return "⛏️ 이미 켜져 있어요." if on else "⛏️ 이미 꺼져 있어요."
         await db.update_miner(user_id, conn, running=on, note=None)
@@ -221,7 +220,7 @@ def rigs_text(rigs):
     )
 
 
-@client.command(aliases=["채굴"])
+@commands.command(name="확인")
 async def mining_status(ctx, member: discord.Member = None):
     member = member or ctx.author
     miner = await db.get_miner(member.id)
@@ -231,7 +230,7 @@ async def mining_status(ctx, member: discord.Member = None):
 
     embed = discord.Embed(title=f"⛏️ {member.display_name}님의 코인 채굴", color=discord.Color.dark_gold())
     if not miner["rigs"]:
-        embed.description = f"채굴기가 없어요. `%채굴기구매`로 시작해보세요! (1대 {num(RIG_PRICE)} byte)"
+        embed.description = f"채굴기가 없어요. `%채굴 구매`로 시작해보세요! (1대 {num(RIG_PRICE)} byte)"
     else:
         mine = total_hash(miner["rigs"])
         # 꺼져 있으면 "지금 켜면" 기준으로 보여준다
@@ -264,15 +263,15 @@ async def mining_status(ctx, member: discord.Member = None):
         ),
         inline=False,
     )
-    embed.set_footer(text="%채굴기구매 · %채굴기업그레이드 [번호] · %채굴켜기 · %채굴끄기 · %채굴랭킹")
+    embed.set_footer(text="%채굴 구매 · %채굴 업그레이드 [번호] · %채굴 켜기 · %채굴 끄기 · %채굴 랭킹")
     await ctx.send(embed=embed)
 
 
-@client.command(aliases=["채굴기구매"])
+@commands.command(name="구매")
 async def mining_buy(ctx):
     miner = await db.get_miner(ctx.author.id)
     if len(miner["rigs"]) >= MAX_RIGS:
-        await ctx.send(f"❌ 채굴기는 1인 최대 {MAX_RIGS}대예요. `%채굴기업그레이드`로 레벨을 올려보세요.")
+        await ctx.send(f"❌ 채굴기는 1인 최대 {MAX_RIGS}대예요. `%채굴 업그레이드`로 레벨을 올려보세요.")
         return
     embed = discord.Embed(
         title="⛏️ 채굴기 구매 확인",
@@ -289,7 +288,7 @@ async def mining_buy(ctx):
         if isinstance(r, str):
             await respond.edit(interaction, embed=discord.Embed(description=r, color=discord.Color.red()), view=None)
             return
-        tip = "" if miner["running"] else "\n`%채굴켜기`로 채굴을 시작하세요!"
+        tip = "" if miner["running"] else "\n`%채굴 켜기`로 채굴을 시작하세요!"
         await respond.edit(interaction, embed=discord.Embed(
             title="✅ 채굴기 구매 완료",
             description=f"이제 채굴기 {len(r)}대, 해시 {total_hash(r)} · 전기세 {num(total_power(r))} byte/시간{tip}",
@@ -299,11 +298,11 @@ async def mining_buy(ctx):
     await ctx.send(embed=embed, view=crypto.confirm_view(ctx.author.id, on_confirm))
 
 
-@client.command(aliases=["채굴기업그레이드", "채굴기강화"])
+@commands.command(name="업그레이드")
 async def mining_upgrade(ctx, number: int = None):
     rigs = (await db.get_miner(ctx.author.id))["rigs"]
     if not rigs:
-        await ctx.send("❌ 채굴기가 없어요. `%채굴기구매`로 먼저 사주세요.")
+        await ctx.send("❌ 채굴기가 없어요. `%채굴 구매`로 먼저 사주세요.")
         return
     if number is not None and not 1 <= number <= len(rigs):
         await ctx.send(f"❌ 채굴기 번호는 1~{len(rigs)} 이에요.")
@@ -337,7 +336,7 @@ async def mining_upgrade(ctx, number: int = None):
     await ctx.send(embed=embed, view=crypto.confirm_view(ctx.author.id, on_confirm))
 
 
-@client.command(aliases=["채굴켜기"])
+@commands.command(name="켜기")
 async def mining_on(ctx):
     r = await set_running(ctx.author.id, True)
     if r:
@@ -350,13 +349,13 @@ async def mining_on(ctx):
     )
 
 
-@client.command(aliases=["채굴끄기"])
+@commands.command(name="끄기")
 async def mining_off(ctx):
     r = await set_running(ctx.author.id, False)
     await ctx.send(r or "🔴 채굴을 껐어요. 전기세도 더 안 빠져요.")
 
 
-@client.command(aliases=["채굴랭킹"])
+@commands.command(name="랭킹")
 async def mining_rank(ctx):
     rows = sorted(await db.all_miners(), key=lambda m: -m["mined"])[:10]
     if not rows:
@@ -375,7 +374,7 @@ async def mining_rank(ctx):
     await ctx.send(embed=embed)
 
 
-@client.command(aliases=["채굴가속"])
+@commands.command(name="채굴가속", usage="[블록 수]")
 @commands.has_permissions(administrator=True)
 async def mining_accelerate(ctx, count: int = 1):
     """블록을 바로 count 번 캔다. 전기세도 진짜로 빠지고, 다음 블록 시각은 그대로다."""

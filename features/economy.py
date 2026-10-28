@@ -9,7 +9,6 @@ from discord.ui import Button
 
 import database as db
 import respond
-from bot import client
 from fmt import ALL, HALF, Amount, debt_line, num, resolve_amount
 from features import abilities
 from features.bank import get_total_loan
@@ -30,7 +29,7 @@ BANKRUPTCY_INTERVAL_DAYS = 1  # 파산 간격 (일). 1 이면 하루에 1번
 
 
 # 머니 확인
-@client.command(aliases=['머니확인', '머니'])
+@commands.command(name="확인")
 async def money(ctx, member: discord.Member = None):
     respond.delete_soon(ctx.message)  # 명령어 삭제
     member = member or ctx.author
@@ -51,7 +50,7 @@ async def money(ctx, member: discord.Member = None):
     await ctx.send(embed=embed)
 
 # 머니 추가
-@client.command(aliases=['머니추가'])
+@commands.command(name="머니추가")
 @commands.has_permissions(administrator=True)
 async def moneyadd(ctx, member: discord.Member, amount: int):
     respond.delete_soon(ctx.message)
@@ -94,7 +93,7 @@ async def moneyadd(ctx, member: discord.Member, amount: int):
     await ctx.send(embed=embed, view=view)
 
 # 머니 제거
-@client.command(aliases=['머니제거'])
+@commands.command(name="머니제거")
 @commands.has_permissions(administrator=True)
 async def moneydel(ctx, member: discord.Member, amount: int):
     respond.delete_soon(ctx.message)
@@ -143,7 +142,7 @@ def sent_today(user, today):
     return user["send_total"] if user["send_date"] == today else 0.0
 
 
-@client.command(aliases=['송금'])
+@commands.command(name="송금")
 async def send(ctx, member: discord.Member, amount: Amount):
     respond.delete_soon(ctx.message)
     sender_id = ctx.author.id
@@ -250,7 +249,7 @@ async def send(ctx, member: discord.Member, amount: Amount):
     await ctx.send(embed=embed, view=view)
 
 
-@client.command(aliases=["머니랭킹"])
+@commands.command(name="랭킹")
 async def money_rank(ctx):
     respond.delete_soon(ctx.message)
     top = await db.top_money(10)
@@ -260,7 +259,7 @@ async def money_rank(ctx):
 
     embed = discord.Embed(
         title="💰 머니 랭킹 TOP 10",
-        description="현재 보유한 현금 기준 랭킹입니다. (주식·적금까지 합친 순위는 `%자산랭킹`)",
+        description="현재 보유한 현금 기준 랭킹입니다. (주식·적금까지 합친 순위는 `%자산 랭킹`)",
         color=discord.Color.gold()
     )
 
@@ -272,7 +271,7 @@ async def money_rank(ctx):
     await ctx.send(embed=embed)
 
 
-@client.command(aliases=["위로금"])
+@commands.command(name="위로금")
 async def consolation(ctx):
     respond.delete_soon(ctx.message)
     user_id = ctx.author.id
@@ -307,7 +306,7 @@ async def consolation(ctx):
     await ctx.send(embed=embed)
 
 
-@client.command(aliases=["기초수급"])
+@commands.command(name="기초수급")
 async def welfare(ctx):
     respond.delete_soon(ctx.message)
     user_id = ctx.author.id
@@ -373,7 +372,7 @@ async def total_debt(user_id, user, conn=None):
     return user["unpaid_amount"] + get_total_loan(loans)
 
 
-@client.command()
+@commands.command(name="파산")
 async def 파산(ctx):
     respond.delete_soon(ctx.message)
 

@@ -1,8 +1,9 @@
 """슬래시 명령어 (/): 기존 %명령어를 그대로 불러 쓰는 얇은 껍데기
 
-- %명령어는 그대로 두고, 같은 이름의 /명령어를 하나 더 만든다. (/주식구매 = %주식구매)
+- %명령어와 같은 모양으로 상위 명령어 아래 하위 명령어를 단다. (/주식 구매 = %주식 구매, features/groups.py)
   동작은 %명령어 함수 한 곳에만 있다. 여기서는 입력칸 · 설명 · 자동완성만 정하고 그 함수를 부른다.
-- 관리자 명령어는 /관리 아래로 묶었다. (관리자에게만 보이고, 디스코드 한도 100개를 넘지 않게)
+- 슬래시는 상위 명령어만 단독으로 쓸 수 없어서 (/주식 X) 항상 하위 명령어까지 고른다. 하나뿐인 /은행 · /미션 은 그대로.
+- 관리자 명령어는 /관리 아래에 있다. (관리자에게만 보인다)
 - 개발자용 (건의목록 · 건의제거 · 연장 · 연장확인, DM 전용) 과 장난 명령어는 %로만 쓴다.
 
 SlashContext: %명령어 함수가 쓰는 ctx 를 흉내 낸다.
@@ -19,9 +20,11 @@ import traceback
 
 import discord
 from discord import app_commands
+from discord.ext import commands
 
 import database as db
 from bot import client
+from fmt import Amount, parse_amount
 from features import (
     abilities, admin, assets, audit, bank, crypto, digest, economy, enhance, futures, gamble, games, general, health,
     market, mining, missions, moderation, music, news, orders, quiz, roleshop, school, stocks,
@@ -53,7 +56,7 @@ class SlashContext:
         self.bot = client
         self.message = _Message(interaction, mentions)
         self.command = None
-        self.invoked_with = interaction.command.name if interaction.command else None
+        self.invoked_with = interaction.command.qualified_name if interaction.command else None   # 예) 주식 구매
         self.sent = False
 
     async def send(self, content=None, *, delete_after=None, **kwargs):
@@ -91,7 +94,7 @@ async def run(interaction, command, *args, mentions=(), **kwargs):
         print(f"[슬래시 에러] /{ctx.invoked_with} ({interaction.user}): {type(e).__name__} {e}")
         traceback.print_exception(type(e), e, e.__traceback__)
         with contextlib.suppress(discord.HTTPException):
-            await ctx.send("❌ 처리하다가 오류가 났어요. 같은 명령어를 `%`로 써보거나, 계속되면 `%건의`로 알려주세요.")
+            await ctx.send("❌ 처리하다가 오류가 났어요. 같은 명령어를 `%`로 써보거나, 계속되면 `%봇 건의`로 알려주세요.")
     if not ctx.sent:
         with contextlib.suppress(discord.HTTPException):
             await interaction.delete_original_response()     # 아무 말도 안 한 명령어: "생각 중…" 지우기
@@ -138,36 +141,75 @@ async def ac_all(interaction, current):
 DIRECTION = [app_commands.Choice(name="이하가 되면", value="이하"), app_commands.Choice(name="이상이 되면", value="이상")]
 
 
-# ───────────── 돈 · 기본 ─────────────
+# ───────────── 금액 칸 ─────────────
+# 금액 · 수량 칸은 글자로 받아서 5000 · 5만 · 1,000 · 올인 · 절반 을 모두 쓸 수 있게 한다. (%명령어와 같은 fmt.Amount)
 
-@command("머니", "내 (또는 다른 사람의) 잔액과 미납금")
+async def amount(interaction, text):
+    """금액 칸 → Amount 값. 못 읽으면 안내하고 None"""
+    try:
+        return await Amount().convert(None, text)
+    except commands.BadArgument:
+        await interaction.response.send_message(
+            f"❌ `{text}`는 읽을 수 없는 값이에요. 예) 5000 · 5만 · 1,000 · 올인 · 절반", ephemeral=True)
+        return None
+
+
+def ac_words(*words):
+    """금액 칸 자동완성: 친 숫자(5만 · 1,000) 그대로 + 올인 / 절반 같은 말"""
+    async def complete(interaction, current):
+        typed = [current] if parse_amount(current) is not None else []
+        return _choices(typed + [w for w in words if current in w], "")
+    return complete
+
+
+ac_amount = ac_words("올인", "절반")
+ac_sell_amount = ac_words("전부", "절반")
+ac_token_count = ac_words("최대", "절반")
+
+
+def group(name, description):
+    """/상위 명령어 (서버에서만). 하위 명령어는 @그룹.command(name=…, description=…) 로 단다."""
+    g = app_commands.Group(name=name, description=description, guild_only=True)
+    tree.add_command(g)
+    return g
+
+
+# ───────────── /머니 · /은행 · /미션 · /자산 ─────────────
+
+money_g = group("머니", "잔액 · 송금 · 랭킹 · 기초수급 · 위로금 · 파산")
+
+
+@money_g.command(name="확인", description="내 (또는 다른 사람의) 잔액과 미납금")
 @app_commands.describe(유저="볼 사람 (안 고르면 나)")
 async def s_money(i: discord.Interaction, 유저: discord.Member = None):
     await run(i, economy.money, 유저)
 
 
-@command("송금", "다른 사람에게 돈 보내기 (수수료 10%, 하루 10만)")
-@app_commands.describe(유저="받을 사람", 금액="보낼 금액")
-async def s_send(i: discord.Interaction, 유저: discord.Member, 금액: app_commands.Range[int, 1]):
-    await run(i, economy.send, 유저, 금액)
+@money_g.command(name="송금", description="다른 사람에게 돈 보내기 (수수료 10%, 하루 10만)")
+@app_commands.describe(유저="받을 사람", 금액="보낼 금액 (5만 · 올인 · 절반도 돼요)")
+@app_commands.autocomplete(금액=ac_amount)
+async def s_send(i: discord.Interaction, 유저: discord.Member, 금액: str):
+    value = await amount(i, 금액)
+    if value is not None:
+        await run(i, economy.send, 유저, value)
 
 
-@command("머니랭킹", "현금 순위")
+@money_g.command(name="랭킹", description="현금 순위")
 async def s_money_rank(i: discord.Interaction):
     await run(i, economy.money_rank)
 
 
-@command("기초수급", "하루 한 번 공짜 돈 (연속으로 받으면 늘어나요)")
+@money_g.command(name="기초수급", description="하루 한 번 공짜 돈 (연속으로 받으면 늘어나요)")
 async def s_welfare(i: discord.Interaction):
     await run(i, economy.welfare)
 
 
-@command("위로금", "잔액이 1천 미만일 때 하루 한 번")
+@money_g.command(name="위로금", description="잔액이 1천 미만일 때 하루 한 번")
 async def s_consolation(i: discord.Interaction):
     await run(i, economy.consolation)
 
 
-@command("파산", "빚이 있을 때만: 빚 대신 가진 것을 전부 잃어요")
+@money_g.command(name="파산", description="빚이 있을 때만: 빚 대신 가진 것을 전부 잃어요")
 async def s_bankrupt(i: discord.Interaction):
     await run(i, economy.파산)
 
@@ -182,18 +224,21 @@ async def s_missions(i: discord.Interaction):
     await run(i, missions.daily_missions)
 
 
-@command("자산", "순자산 (현금 · 주식 · 적금 · 레버리지 · 강화템)")
+assets_g = group("자산", "순자산 · 랭킹 · 그래프")
+
+
+@assets_g.command(name="확인", description="순자산 (현금 · 주식 · 적금 · 레버리지 · 강화템)")
 @app_commands.describe(유저="볼 사람 (안 고르면 나)")
 async def s_assets(i: discord.Interaction, 유저: discord.Member = None):
     await run(i, assets.assets, 유저)
 
 
-@command("자산랭킹", "순자산 순위")
+@assets_g.command(name="랭킹", description="순자산 순위")
 async def s_asset_rank(i: discord.Interaction):
     await run(i, assets.asset_rank)
 
 
-@command("자산그래프", "순자산 변화 그래프 (친구랑 비교 가능)")
+@assets_g.command(name="그래프", description="순자산 변화 그래프 (친구랑 비교 가능)")
 @app_commands.describe(일="최근 며칠 (기본 7, 최대 30)", 친구1="같이 볼 사람", 친구2="같이 볼 사람", 친구3="같이 볼 사람")
 async def s_asset_chart(i: discord.Interaction, 일: app_commands.Range[int, 1, 30] = None,
                         친구1: discord.Member = None, 친구2: discord.Member = None, 친구3: discord.Member = None):
@@ -202,72 +247,65 @@ async def s_asset_chart(i: discord.Interaction, 일: app_commands.Range[int, 1, 
     await run(i, assets.asset_chart, *([str(일)] if 일 else []), mentions=mentions)
 
 
-# ───────────── 주식 ─────────────
+# ───────────── /주식 (레버리지 · 예약 · 뉴스 포함) ─────────────
 
-@command("주식", "지금 주식 시세")
+stock_g = group("주식", "시세 · 사고팔기 · 그래프 · 뉴스 · 예약 · 레버리지(롱 / 숏)")
+
+
+@stock_g.command(name="시세", description="지금 주식 시세")
 async def s_stock(i: discord.Interaction):
     await run(i, stocks.stock)
 
 
-@command("주식구매", "주식 사기")
-@app_commands.describe(주식="종목", 수량="몇 주")
-@app_commands.autocomplete(주식=ac_stock)
-async def s_buy(i: discord.Interaction, 주식: str, 수량: app_commands.Range[int, 1]):
-    await run(i, stocks.buy_stock, 주식, 수량)
+@stock_g.command(name="구매", description="주식 사기 (올인 · 절반도 돼요)")
+@app_commands.describe(주식="종목", 수량="몇 주 · 올인 · 절반")
+@app_commands.autocomplete(주식=ac_stock, 수량=ac_amount)
+async def s_buy(i: discord.Interaction, 주식: str, 수량: str):
+    value = await amount(i, 수량)
+    if value is not None:
+        await run(i, stocks.buy_stock, 주식, value)
 
 
-@command("주식판매", "주식 팔기 (수수료 2%, 30분 안에 팔면 8%)")
-@app_commands.describe(주식="종목", 수량="몇 주")
-@app_commands.autocomplete(주식=ac_stock)
-async def s_sell(i: discord.Interaction, 주식: str, 수량: app_commands.Range[int, 1]):
-    await run(i, stocks.sell_stock, 주식, 수량)
+@stock_g.command(name="판매", description="주식 팔기 (수수료 2%, 30분 안에 팔면 8%)")
+@app_commands.describe(주식="종목", 수량="몇 주 · 전부 · 절반")
+@app_commands.autocomplete(주식=ac_stock, 수량=ac_sell_amount)
+async def s_sell(i: discord.Interaction, 주식: str, 수량: str):
+    value = await amount(i, 수량)
+    if value is not None:
+        await run(i, stocks.sell_stock, 주식, value)
 
 
-@command("주식전량구매", "가진 돈으로 살 수 있는 만큼 사기")
-@app_commands.describe(주식="종목")
-@app_commands.autocomplete(주식=ac_stock)
-async def s_buy_all(i: discord.Interaction, 주식: str):
-    await run(i, stocks.buy_all_stock, 주식)
-
-
-@command("주식절반구매", "살 수 있는 만큼의 절반 사기")
-@app_commands.describe(주식="종목")
-@app_commands.autocomplete(주식=ac_stock)
-async def s_buy_half(i: discord.Interaction, 주식: str):
-    await run(i, stocks.buy_half_stock, 주식)
-
-
-@command("주식전량판매", "주식 전부 팔기 (종목을 안 고르면 모든 종목)")
+@stock_g.command(name="전량판매", description="가진 주식 전부 팔기 (종목을 고르면 그 종목만)")
 @app_commands.describe(주식="종목 (안 고르면 전부)")
 @app_commands.autocomplete(주식=ac_stock)
 async def s_sell_all(i: discord.Interaction, 주식: str = None):
     await run(i, stocks.sell_all_stock, 주식)
 
 
-@command("주식확인", "가진 주식과 손익")
+@stock_g.command(name="확인", description="가진 주식과 손익")
 @app_commands.describe(유저="볼 사람 (안 고르면 나)")
 async def s_stock_status(i: discord.Interaction, 유저: discord.Member = None):
     await run(i, stocks.stock_status, 유저)
 
 
-@command("주가그래프", "주가 그래프 (60분 무료, 60분 더 볼 때마다 2,000 byte)")
+@stock_g.command(name="그래프", description="주가 그래프 (60분 무료, 60분 더 볼 때마다 2,000 byte)")
 @app_commands.describe(주식="종목 (안 고르면 전부)", 분="최근 몇 분 (기본 60, 최대 1440)")
 @app_commands.autocomplete(주식=ac_stock)
 async def s_stock_chart(i: discord.Interaction, 주식: str = None, 분: app_commands.Range[int, 1, 1440] = None):
     await run(i, stocks.stock_chart, *[str(a) for a in (주식, 분) if a])
 
 
-@command("주식랭킹", "주식 수익 순위")
+@stock_g.command(name="랭킹", description="주식 수익 순위")
 async def s_stock_rank(i: discord.Interaction):
     await run(i, stocks.stock_rank)
 
 
-@command("뉴스", "최근 주식 뉴스")
+@stock_g.command(name="뉴스", description="최근 주식 뉴스")
 async def s_news(i: discord.Interaction):
     await run(i, news.news)
 
 
-@command("예약구매", "가격이 닿으면 자동으로 사기 (토큰 1개)")
+@stock_g.command(name="예약구매", description="가격이 닿으면 자동으로 사기 (토큰 1개)")
 @app_commands.describe(주식="종목", 수량="몇 주", 가격="이 가격에 닿으면", 조건="기본: 이하가 되면")
 @app_commands.autocomplete(주식=ac_stock)
 @app_commands.choices(조건=DIRECTION)
@@ -275,7 +313,7 @@ async def s_order_buy(i: discord.Interaction, 주식: str, 수량: app_commands.
     await run(i, orders.order_buy, 주식, str(수량), str(가격), *([조건] if 조건 else []))
 
 
-@command("예약판매", "가격이 닿으면 자동으로 팔기 (토큰 1개, 이하 = 손절)")
+@stock_g.command(name="예약판매", description="가격이 닿으면 자동으로 팔기 (토큰 1개, 이하 = 손절)")
 @app_commands.describe(주식="종목", 수량="몇 주 또는 전부", 가격="이 가격에 닿으면", 조건="기본: 이상이 되면")
 @app_commands.autocomplete(주식=ac_stock, 수량=ac_all)
 @app_commands.choices(조건=DIRECTION)
@@ -283,41 +321,48 @@ async def s_order_sell(i: discord.Interaction, 주식: str, 수량: str, 가격:
     await run(i, orders.order_sell, 주식, 수량, str(가격), *([조건] if 조건 else []))
 
 
-@command("예약목록", "내 주식 예약 보기 · 취소")
+@stock_g.command(name="예약목록", description="내 주식 예약 보기 · 취소")
 async def s_order_list(i: discord.Interaction):
     await run(i, orders.order_list)
 
 
-@command("롱", "레버리지 롱: 오르면 이득")
-@app_commands.describe(주식="종목", 증거금="걸 돈", 배율="몇 배 (기본 1)")
-@app_commands.autocomplete(주식=ac_stock)
-async def s_long(i: discord.Interaction, 주식: str, 증거금: app_commands.Range[int, 1], 배율: app_commands.Range[int, 1] = 1):
-    await run(i, futures.open_long, 주식, 증거금, 배율)
+@stock_g.command(name="롱", description="레버리지 롱: 오르면 이득")
+@app_commands.describe(주식="종목", 증거금="걸 돈 (5만 · 올인 · 절반도 돼요)", 배율="몇 배 (기본 1)")
+@app_commands.autocomplete(주식=ac_stock, 증거금=ac_amount)
+async def s_long(i: discord.Interaction, 주식: str, 증거금: str, 배율: app_commands.Range[int, 1] = 1):
+    value = await amount(i, 증거금)
+    if value is not None:
+        await run(i, futures.open_long, 주식, value, 배율)
 
 
-@command("숏", "레버리지 숏: 내리면 이득")
-@app_commands.describe(주식="종목", 증거금="걸 돈", 배율="몇 배 (기본 1)")
-@app_commands.autocomplete(주식=ac_stock)
-async def s_short(i: discord.Interaction, 주식: str, 증거금: app_commands.Range[int, 1], 배율: app_commands.Range[int, 1] = 1):
-    await run(i, futures.open_short, 주식, 증거금, 배율)
+@stock_g.command(name="숏", description="레버리지 숏: 내리면 이득")
+@app_commands.describe(주식="종목", 증거금="걸 돈 (5만 · 올인 · 절반도 돼요)", 배율="몇 배 (기본 1)")
+@app_commands.autocomplete(주식=ac_stock, 증거금=ac_amount)
+async def s_short(i: discord.Interaction, 주식: str, 증거금: str, 배율: app_commands.Range[int, 1] = 1):
+    value = await amount(i, 증거금)
+    if value is not None:
+        await run(i, futures.open_short, 주식, value, 배율)
 
 
-@command("포지션", "레버리지 포지션 · 청산가")
+@stock_g.command(name="포지션", description="레버리지 포지션 · 청산가")
 @app_commands.describe(유저="볼 사람 (안 고르면 나)")
 async def s_positions(i: discord.Interaction, 유저: discord.Member = None):
     await run(i, futures.positions, 유저)
 
 
-@command("청산", "레버리지 포지션 정리하고 돈 받기")
+@stock_g.command(name="청산", description="레버리지 포지션 정리하고 돈 받기")
 @app_commands.describe(번호="포지션 번호 또는 전체")
 @app_commands.autocomplete(번호=ac_position)
 async def s_close(i: discord.Interaction, 번호: str = None):
     await run(i, futures.close_position, 번호)
 
 
-# ───────────── 강화 ─────────────
+# ───────────── /강화 (능력 · 암시장 포함) ─────────────
 
-@command("강화", "아이템 만들기 · 강화 (목표를 쓰면 자동 강화)")
+enhance_g = group("강화", "아이템 강화 · 목록 · 판매 · 능력 · 암시장")
+
+
+@enhance_g.command(name="하기", description="아이템 만들기 · 강화 (목표를 쓰면 자동 강화)")
 @app_commands.describe(아이템="아이템 이름 (없으면 새로 만들어요)", 목표="자동 강화 목표 레벨", 제물="제물로 바칠 아이템 이름 (여러 개면 띄어쓰기)")
 @app_commands.autocomplete(아이템=ac_my_item)
 async def s_enhance(i: discord.Interaction, 아이템: str, 목표: app_commands.Range[int, 2, 13] = None, 제물: str = None):
@@ -325,164 +370,178 @@ async def s_enhance(i: discord.Interaction, 아이템: str, 목표: app_commands
     await run(i, enhance.enhance, 아이템, *args)
 
 
-@command("강화목록", "가진 강화 아이템")
+@enhance_g.command(name="목록", description="가진 강화 아이템")
 @app_commands.describe(유저="볼 사람 (안 고르면 나)")
 async def s_enhance_list(i: discord.Interaction, 유저: discord.Member = None):
     await run(i, enhance.enhance_list, 유저)
 
 
-@command("강화판매", "강화 아이템을 봇에게 팔기")
+@enhance_g.command(name="판매", description="강화 아이템을 봇에게 팔기")
 @app_commands.describe(아이템="팔 아이템")
 @app_commands.autocomplete(아이템=ac_my_item)
 async def s_enhance_sell(i: discord.Interaction, 아이템: str):
     await run(i, enhance.sell_enhance, 아이템)
 
 
-@command("강화확률", "강화 확률표 · 비용 · 판매가")
+@enhance_g.command(name="확률", description="강화 확률표 · 비용 · 판매가")
 async def s_enhance_odds(i: discord.Interaction):
     await run(i, enhance.enhance_odds)
 
 
-@command("강화랭킹", "최고 강화 아이템 순위")
+@enhance_g.command(name="랭킹", description="최고 강화 아이템 순위")
 async def s_enhance_rank(i: discord.Interaction):
     await run(i, enhance.enhance_rank)
 
 
-@command("강화능력설정", "아이템 능력 슬롯 보기 · 잠금 · 리롤")
+@enhance_g.command(name="능력", description="모든 아이템 능력을 합친 효과")
+@app_commands.describe(유저="볼 사람 (안 고르면 나)")
+async def s_my_abilities(i: discord.Interaction, 유저: discord.Member = None):
+    await run(i, abilities.my_abilities, 유저)
+
+
+@enhance_g.command(name="능력설정", description="아이템 능력 슬롯 보기 · 잠금 · 리롤")
 @app_commands.describe(아이템="아이템")
 @app_commands.autocomplete(아이템=ac_my_item)
 async def s_ability_panel(i: discord.Interaction, 아이템: str):
     await run(i, abilities.ability_panel, 아이템)
 
 
-@command("리롤", "잠그지 않은 능력 슬롯 다시 뽑기 (토큰)")
+@enhance_g.command(name="리롤", description="잠그지 않은 능력 슬롯 다시 뽑기 (토큰)")
 @app_commands.describe(아이템="아이템")
 @app_commands.autocomplete(아이템=ac_my_item)
 async def s_reroll(i: discord.Interaction, 아이템: str):
     await run(i, abilities.reroll_command, 아이템)
 
 
-@command("내능력", "모든 아이템 능력을 합친 효과")
-@app_commands.describe(유저="볼 사람 (안 고르면 나)")
-async def s_my_abilities(i: discord.Interaction, 유저: discord.Member = None):
-    await run(i, abilities.my_abilities, 유저)
-
-
-@command("암시장", "유저끼리 강화 아이템 · 토큰 사고팔기")
+@enhance_g.command(name="암시장", description="유저끼리 강화 아이템 · 토큰 사고팔기")
 async def s_market(i: discord.Interaction):
     await run(i, market.black_market)
 
 
-# ───────────── 토큰 · 코인 · 채굴 ─────────────
+# ───────────── /토큰 · /코인 · /채굴 ─────────────
 
-@command("토큰", "내 토큰과 지금 토큰 가격")
+token_g = group("토큰", "내 토큰 · 토큰 사기")
+
+
+@token_g.command(name="확인", description="내 토큰과 지금 토큰 가격")
 @app_commands.describe(유저="볼 사람 (안 고르면 나)")
 async def s_token(i: discord.Interaction, 유저: discord.Member = None):
     await run(i, tokens.check_token, 유저)
 
 
-@command("토큰구매", "byte 로 토큰 사기 (살 때마다 2배, 하루에 4배씩 떨어짐)")
-@app_commands.describe(개수="몇 개 (기본 1)")
-async def s_token_buy(i: discord.Interaction, 개수: app_commands.Range[int, 1] = 1):
-    await run(i, tokens.buy_token, 개수)
+@token_g.command(name="구매", description="byte 로 토큰 사기 (살 때마다 2배, 하루에 4배씩 떨어짐)")
+@app_commands.describe(개수="몇 개 · 최대 · 절반 (기본 1)")
+@app_commands.autocomplete(개수=ac_token_count)
+async def s_token_buy(i: discord.Interaction, 개수: str = None):
+    value = 1 if 개수 is None else await amount(i, 개수)
+    if value is not None:
+        await run(i, tokens.buy_token, value)
 
 
-@command("토큰최대교환", "가진 돈으로 살 수 있는 만큼 토큰 사기")
-async def s_token_max(i: discord.Interaction):
-    await run(i, tokens.buy_token_max)
+coin_g = group("코인", "비트코인 시세 · 사고팔기 · 그래프 (토큰으로 거래)")
 
 
-@command("코인", "비트코인 시세 (토큰 단위)")
+@coin_g.command(name="시세", description="비트코인 시세 (토큰 단위)")
 async def s_coin(i: discord.Interaction):
     await run(i, crypto.coin)
 
 
-@command("코인구매", "토큰으로 비트코인 사기 (수수료 1%)")
-@app_commands.describe(토큰="쓸 토큰 수")
-async def s_coin_buy(i: discord.Interaction, 토큰: app_commands.Range[int, 1]):
-    await run(i, crypto.coin_buy, 토큰)
+@coin_g.command(name="구매", description="토큰으로 비트코인 사기 (수수료 1%)")
+@app_commands.describe(토큰="쓸 토큰 수 · 올인 · 절반")
+@app_commands.autocomplete(토큰=ac_amount)
+async def s_coin_buy(i: discord.Interaction, 토큰: str):
+    value = await amount(i, 토큰)
+    if value is not None:
+        await run(i, crypto.coin_buy, value)
 
 
-@command("코인판매", "비트코인 팔고 토큰 받기 (수수료 1%)")
+@coin_g.command(name="판매", description="비트코인 팔고 토큰 받기 (수수료 1%)")
 @app_commands.describe(개수="팔 개수 또는 전부 (안 쓰면 전부)")
 @app_commands.autocomplete(개수=ac_all)
 async def s_coin_sell(i: discord.Interaction, 개수: str = None):
     await run(i, crypto.coin_sell, 개수)
 
 
-@command("코인확인", "가진 비트코인과 손익")
+@coin_g.command(name="확인", description="가진 비트코인과 손익")
 @app_commands.describe(유저="볼 사람 (안 고르면 나)")
 async def s_coin_status(i: discord.Interaction, 유저: discord.Member = None):
     await run(i, crypto.coin_status, 유저)
 
 
-@command("코인그래프", "비트코인 그래프 (60분 무료)")
+@coin_g.command(name="그래프", description="비트코인 그래프 (60분 무료)")
 @app_commands.describe(분="최근 몇 분 (기본 60, 최대 1440)")
 async def s_coin_chart(i: discord.Interaction, 분: app_commands.Range[int, 1, 1440] = 60):
     await run(i, crypto.coin_chart, 분)
 
 
-@command("코인랭킹", "비트코인 보유 순위")
+@coin_g.command(name="랭킹", description="비트코인 보유 순위")
 async def s_coin_rank(i: discord.Interaction):
     await run(i, crypto.coin_rank)
 
 
-@command("채굴", "내 채굴기 · 몫 · 다음 블록")
+mining_g = group("채굴", "채굴기 · 코인 캐기")
+
+
+@mining_g.command(name="확인", description="내 채굴기 · 몫 · 다음 블록")
 @app_commands.describe(유저="볼 사람 (안 고르면 나)")
 async def s_mining(i: discord.Interaction, 유저: discord.Member = None):
     await run(i, mining.mining_status, 유저)
 
 
-@command("채굴기구매", "채굴기 사기 (5만 byte, 최대 3대)")
+@mining_g.command(name="구매", description="채굴기 사기 (5만 byte, 최대 3대)")
 async def s_mining_buy(i: discord.Interaction):
     await run(i, mining.mining_buy)
 
 
-@command("채굴기업그레이드", "채굴기 레벨 올리기 (최대 Lv5)")
+@mining_g.command(name="업그레이드", description="채굴기 레벨 올리기 (최대 Lv5)")
 @app_commands.describe(번호="채굴기 번호 (안 쓰면 가장 낮은 것)")
 async def s_mining_upgrade(i: discord.Interaction, 번호: app_commands.Range[int, 1, 3] = None):
     await run(i, mining.mining_upgrade, 번호)
 
 
-@command("채굴켜기", "채굴 켜기 (블록마다 전기세)")
+@mining_g.command(name="켜기", description="채굴 켜기 (블록마다 전기세)")
 async def s_mining_on(i: discord.Interaction):
     await run(i, mining.mining_on)
 
 
-@command("채굴끄기", "채굴 끄기")
+@mining_g.command(name="끄기", description="채굴 끄기")
 async def s_mining_off(i: discord.Interaction):
     await run(i, mining.mining_off)
 
 
-@command("채굴랭킹", "캔 코인 순위")
+@mining_g.command(name="랭킹", description="캔 코인 순위")
 async def s_mining_rank(i: discord.Interaction):
     await run(i, mining.mining_rank)
 
 
-# ───────────── 놀이 ─────────────
+# ───────────── /도박 · /끝말잇기 ─────────────
 
-@command("가위바위보", "이길 때마다 보상 2배! (하루 5판)")
-async def s_rps(i: discord.Interaction):
-    await run(i, gamble.rps)
+gamble_g = group("도박", "도박 · 가위바위보")
 
 
-@command("도박", "꽝 50% / 최대 7배 (최대 10만)")
-@app_commands.describe(금액="걸 돈")
-async def s_gamble(i: discord.Interaction, 금액: app_commands.Range[int, 1]):
-    await run(i, gamble.gamble, 금액)
+@gamble_g.command(name="걸기", description="꽝 50% / 최대 7배 (최대 10만)")
+@app_commands.describe(금액="걸 돈 (5만 · 올인 · 절반도 돼요)")
+@app_commands.autocomplete(금액=ac_amount)
+async def s_gamble(i: discord.Interaction, 금액: str):
+    value = await amount(i, 금액)
+    if value is not None:
+        await run(i, gamble.gamble, value)
 
 
-@command("도박올인", "최대 판돈까지 전부 걸기")
-async def s_gamble_allin(i: discord.Interaction):
-    await run(i, gamble.gamble_allin)
-
-
-@command("도박랭킹", "도박 수익 순위")
+@gamble_g.command(name="랭킹", description="도박 수익 순위")
 async def s_gamble_rank(i: discord.Interaction):
     await run(i, gamble.gamble_rank)
 
 
-@command("끝말잇기", "끝말잇기 (봇과 1대1 · 연습 · 친구들과 같이)")
+@gamble_g.command(name="가위바위보", description="이길 때마다 보상 2배! (하루 5판)")
+async def s_rps(i: discord.Interaction):
+    await run(i, gamble.rps)
+
+
+wordchain_g = group("끝말잇기", "끝말잇기 · 랭킹")
+
+
+@wordchain_g.command(name="시작", description="끝말잇기 (봇과 1대1 · 연습 · 친구들과 같이)")
 @app_commands.describe(모드="기본: 봇과 1대1 (보상 · 랭킹)")
 @app_commands.choices(모드=[app_commands.Choice(name="봇과 1대1", value="1대1"),
                            app_commands.Choice(name="연습 (보상 없음)", value="연습"),
@@ -491,37 +550,21 @@ async def s_wordchain(i: discord.Interaction, 모드: str = None):
     await run(i, wordchain.wordchain, None if 모드 in (None, "1대1") else 모드)
 
 
-@command("끝말잇기랭킹", "끝말잇기 한 판 최고 점수 순위")
+@wordchain_g.command(name="랭킹", description="끝말잇기 한 판 최고 점수 순위")
 @app_commands.describe(난이도="안 고르면 둘 다")
 @app_commands.choices(난이도=[app_commands.Choice(name="어려움", value="어려움"), app_commands.Choice(name="지옥", value="지옥")])
 async def s_wordchain_rank(i: discord.Interaction, 난이도: str = None):
     await run(i, wordchain.wordchain_rank, 난이도)
 
 
-# ───────────── 롤 · 발로란트 ─────────────
+# ───────────── /게임 (롤 · 발로란트) ─────────────
 
 GAME_CHOICES = [app_commands.Choice(name="롤", value="롤"), app_commands.Choice(name="발로란트", value="발로")]
 
-
-@command("롤등록", "내 롤 계정 등록 (랭크 결과가 소식 채널에 떠요)")
-@app_commands.describe(라이엇아이디="닉네임#태그 예) Hide on bush#KR1")
-async def s_lol_register(i: discord.Interaction, 라이엇아이디: str):
-    await run(i, games.lol_register, riot_id=라이엇아이디)
+game_g = group("게임", "롤 · 발로란트: 전적 · 계정 등록 · 친구 판에 베팅")
 
 
-@command("발로등록", "내 발로란트 계정 등록 (경쟁전 결과가 소식 채널에 떠요)")
-@app_commands.describe(라이엇아이디="닉네임#태그")
-async def s_val_register(i: discord.Interaction, 라이엇아이디: str):
-    await run(i, games.val_register, riot_id=라이엇아이디)
-
-
-@command("게임등록해제", "롤 / 발로란트 계정 등록 해제")
-@app_commands.choices(게임=GAME_CHOICES)
-async def s_game_unregister(i: discord.Interaction, 게임: str):
-    await run(i, games.game_unregister, 게임)
-
-
-@command("전적", "롤 · 발로 최근 10판 (일반 · 칼바람 등 전부)")
+@game_g.command(name="전적", description="롤 · 발로 최근 10판 (일반 · 칼바람 등 전부)")
 @app_commands.describe(유저="볼 사람 (안 고르면 나, 계정을 등록한 사람)", 라이엇아이디="등록 안 한 계정은 닉네임#태그로", 게임="한 게임만 보기")
 @app_commands.choices(게임=GAME_CHOICES)
 async def s_game_record(i: discord.Interaction, 유저: discord.Member = None, 라이엇아이디: str = None, 게임: str = None):
@@ -529,180 +572,216 @@ async def s_game_record(i: discord.Interaction, 유저: discord.Member = None, �
     await run(i, games.game_record, query=f"{who} {게임 or ''}".strip() or None)
 
 
-@command("베팅", "친구 다음 랭크 판에 byte 걸기 (맞힌 사람끼리 나눠 가져요)")
+@game_g.command(name="등록", description="내 롤 / 발로란트 계정 등록 (랭크 결과가 소식 채널에 떠요)")
+@app_commands.describe(게임="롤 또는 발로란트", 라이엇아이디="닉네임#태그 예) Hide on bush#KR1")
+@app_commands.choices(게임=GAME_CHOICES)
+async def s_game_register(i: discord.Interaction, 게임: str, 라이엇아이디: str):
+    await run(i, games.game_register, 게임, riot_id=라이엇아이디)
+
+
+@game_g.command(name="해제", description="롤 / 발로란트 계정 등록 해제")
+@app_commands.choices(게임=GAME_CHOICES)
+async def s_game_unregister(i: discord.Interaction, 게임: str):
+    await run(i, games.game_unregister, 게임)
+
+
+@game_g.command(name="베팅", description="친구 다음 랭크 판에 byte 걸기 (맞힌 사람끼리 나눠 가져요)")
 @app_commands.describe(친구="걸 친구", 결과="이길까 질까", 금액="100 ~ 10만", 게임="친구가 둘 다 등록했으면 골라요")
 @app_commands.choices(결과=[app_commands.Choice(name="승", value="승"), app_commands.Choice(name="패", value="패")], 게임=GAME_CHOICES)
 async def s_game_bet(i: discord.Interaction, 친구: discord.Member, 결과: str, 금액: app_commands.Range[int, 100, 100_000], 게임: str = None):
     await run(i, games.game_bet, 친구, *([게임] if 게임 else []), 결과, str(금액))
 
 
-@command("베팅목록", "지금 걸려 있는 판돈")
+@game_g.command(name="베팅목록", description="지금 걸려 있는 판돈")
 async def s_game_bet_list(i: discord.Interaction):
     await run(i, games.game_bet_list)
 
 
-# ───────────── 자랑 · 상점 ─────────────
+# ───────────── /칭호 · /역할 ─────────────
 
-@command("칭호", "칭호 28개와 진행도")
+title_g = group("칭호", "칭호 · 장착 · 랭킹")
+
+
+@title_g.command(name="보기", description="칭호 28개와 진행도")
 @app_commands.describe(유저="볼 사람 (안 고르면 나)")
 async def s_titles(i: discord.Interaction, 유저: discord.Member = None):
     await run(i, titles.titles_command, 유저)
 
 
-@command("칭호장착", "칭호 하나를 이름 앞에 달기")
+@title_g.command(name="장착", description="칭호 하나를 이름 앞에 달기")
 @app_commands.describe(칭호="가진 칭호")
 @app_commands.autocomplete(칭호=ac_my_title)
 async def s_title_equip(i: discord.Interaction, 칭호: str):
     await run(i, titles.title_equip, name=칭호)
 
 
-@command("칭호해제", "장착한 칭호 빼기")
+@title_g.command(name="해제", description="장착한 칭호 빼기")
 async def s_title_unequip(i: discord.Interaction):
     await run(i, titles.title_unequip)
 
 
-@command("칭호랭킹", "가진 칭호 수 순위")
+@title_g.command(name="랭킹", description="가진 칭호 수 순위")
 async def s_title_rank(i: discord.Interaction):
     await run(i, titles.title_rank)
 
 
-@command("역할상점", "byte 로 디스코드 역할 사기")
+role_g = group("역할", "byte 로 디스코드 역할 사기")
+
+
+@role_g.command(name="상점", description="byte 로 디스코드 역할 사기")
 async def s_role_shop(i: discord.Interaction):
     await run(i, roleshop.role_shop)
 
 
-@command("내역할", "산 역할과 남은 기간")
+@role_g.command(name="목록", description="산 역할과 남은 기간")
 async def s_my_roles(i: discord.Interaction):
     await run(i, roleshop.my_shop_roles)
 
 
-# ───────────── 학교 ─────────────
+# ───────────── /학교 ─────────────
 
-@command("급식", "급식 (오늘 · 내일 · 날짜)")
+school_g = group("학교", "급식 · 시간표 · 학사일정")
+
+
+@school_g.command(name="급식", description="급식 (오늘 · 내일 · 날짜)")
 @app_commands.describe(날짜="내일, 모레, 1024, 10/24 (안 쓰면 오늘)")
 async def s_meal(i: discord.Interaction, 날짜: str = None):
     await run(i, school.school_meal, when=날짜)
 
 
-@command("시간표", "시간표 (반을 안 쓰면 %내반 으로 정한 반)")
+@school_g.command(name="시간표", description="시간표 (반을 안 쓰면 /학교 내반 으로 정한 반)")
 @app_commands.describe(학년="학년", 반="반", 날짜="내일, 1024 … (안 쓰면 오늘)")
 async def s_timetable(i: discord.Interaction, 학년: app_commands.Range[int, 1, 6] = None, 반: app_commands.Range[int, 1, 30] = None, 날짜: str = None):
     args = ([str(학년), str(반)] if 학년 and 반 else []) + ([날짜] if 날짜 else [])
     await run(i, school.school_timetable, *args)
 
 
-@command("내반", "내 반 저장 (/시간표 에 쓰여요)")
+@school_g.command(name="내반", description="내 반 저장 (/학교 시간표 에 쓰여요)")
 @app_commands.describe(학년="학년", 반="반")
 async def s_my_class(i: discord.Interaction, 학년: app_commands.Range[int, 1, 6], 반: app_commands.Range[int, 1, 30]):
     await run(i, school.my_class, 학년, str(반))
 
 
-@command("학사일정", "그 달 학사일정")
+@school_g.command(name="학사일정", description="그 달 학사일정")
 @app_commands.describe(월="몇 월 (안 쓰면 이번 달)")
 async def s_schedule(i: discord.Interaction, 월: app_commands.Range[int, 1, 12] = None):
     await run(i, school.school_schedule, 월)
 
 
-# ───────────── 통화방 ─────────────
+# ───────────── /음악 · /읽기 (통화방) ─────────────
 
-@command("재생", "통화방에서 유튜브 노래 틀기")
+music_g = group("음악", "통화방에서 유튜브 노래 듣기")
+
+
+@music_g.command(name="재생", description="통화방에서 유튜브 노래 틀기")
 @app_commands.describe(노래="유튜브 링크 또는 제목")
 async def s_play(i: discord.Interaction, 노래: str):
     await run(i, music.music_play, query=노래)
 
 
-@command("스킵", "지금 노래 넘기기")
+@music_g.command(name="스킵", description="지금 노래 넘기기")
 async def s_skip(i: discord.Interaction):
     await run(i, music.music_skip)
 
 
-@command("일시정지", "노래 일시정지")
+@music_g.command(name="일시정지", description="노래 일시정지")
 async def s_pause(i: discord.Interaction):
     await run(i, music.music_pause)
 
 
-@command("다시재생", "일시정지한 노래 이어서 듣기")
+@music_g.command(name="다시재생", description="일시정지한 노래 이어서 듣기")
 async def s_resume(i: discord.Interaction):
     await run(i, music.music_resume)
 
 
-@command("정지", "노래 멈추고 대기열 비우기")
+@music_g.command(name="정지", description="노래 멈추고 대기열 비우기")
 async def s_stop(i: discord.Interaction):
     await run(i, music.music_stop)
 
 
-@command("대기열", "지금 노래와 다음 노래들")
+@music_g.command(name="대기열", description="지금 노래와 다음 노래들")
 async def s_queue(i: discord.Interaction):
     await run(i, music.music_queue)
 
 
-@command("지금곡", "지금 노래 정보 · 버튼")
+@music_g.command(name="지금곡", description="지금 노래 정보 · 버튼")
 async def s_now(i: discord.Interaction):
     await run(i, music.music_now)
 
 
-@command("볼륨", "음악 볼륨 (0~100)")
+@music_g.command(name="볼륨", description="음악 볼륨 (0~100)")
 @app_commands.describe(값="0~100 (안 쓰면 지금 볼륨)")
 async def s_volume(i: discord.Interaction, 값: app_commands.Range[int, 0, 100] = None):
     await run(i, music.music_volume, 값)
 
 
-@command("읽어", "이 채널 채팅을 통화방에서 읽어주기 (TTS)")
+@music_g.command(name="나가기", description="봇을 통화방에서 내보내기 (음악 · TTS 끝)")
+async def s_music_leave(i: discord.Interaction):
+    await run(i, tts.voice_leave)
+
+
+read_g = group("읽기", "채팅을 통화방에서 읽어주기 (TTS) · 줄임말")
+
+
+@read_g.command(name="시작", description="이 채널 채팅을 통화방에서 읽어주기 (TTS)")
 async def s_tts(i: discord.Interaction):
     await run(i, tts.tts_start)
 
 
-@command("나가", "봇을 통화방에서 내보내기 (TTS · 음악 끝)")
+@read_g.command(name="나가기", description="봇을 통화방에서 내보내기 (TTS · 음악 끝)")
 async def s_leave(i: discord.Interaction):
     await run(i, tts.voice_leave)
 
 
-@command("줄임말설정", "TTS 가 글자를 어떻게 읽을지 (- 면 안 읽기)")
+@read_g.command(name="줄임말", description="이 서버의 TTS 줄임말 목록")
+async def s_abbrev_list(i: discord.Interaction):
+    await run(i, tts.tts_abbrev_list)
+
+
+@read_g.command(name="줄임말설정", description="TTS 가 글자를 어떻게 읽을지 (- 면 안 읽기)")
 @app_commands.describe(글자="바꿀 글자 · 초성 · 기호", 읽을말="이렇게 읽기 (- 면 안 읽기)")
 async def s_abbrev_set(i: discord.Interaction, 글자: str, 읽을말: str):
     await run(i, tts.tts_abbrev_set, 글자, reading=읽을말)
 
 
-@command("줄임말삭제", "TTS 줄임말 지우기")
+@read_g.command(name="줄임말삭제", description="TTS 줄임말 지우기")
 @app_commands.describe(글자="지울 글자")
 async def s_abbrev_del(i: discord.Interaction, 글자: str):
-    await run(i, tts.tts_abbrev_set, "삭제", reading=글자)
+    await run(i, tts.tts_abbrev_delete, word=글자)
 
 
-@command("줄임말", "이 서버의 TTS 줄임말 목록")
-async def s_abbrev_list(i: discord.Interaction):
-    await run(i, tts.tts_abbrev_list)
+# ───────────── /봇 ─────────────
+
+bot_g = group("봇", "도움말 · 패치노트 · 시간 · 핑 · 건의 · 경고확인")
 
 
-# ───────────── 기타 ─────────────
-
-@command("도움말", "미림봇 길라잡이 · 모든 명령어 (노션)")
+@bot_g.command(name="도움말", description="미림봇 길라잡이 · 모든 명령어 (노션)")
 async def s_help(i: discord.Interaction):
     await run(i, general.명령어)
 
 
-@command("패치노트", "최근 업데이트 내용")
+@bot_g.command(name="패치노트", description="최근 업데이트 내용")
 async def s_patchnote(i: discord.Interaction):
     await run(i, general.patchnote)
 
 
-@command("시간", "지금 한국 시간")
+@bot_g.command(name="시간", description="지금 한국 시간")
 async def s_time(i: discord.Interaction):
     await run(i, general.timeget)
 
 
-@command("핑", "어디가 느린지 재보기 (디스코드 · DB · 봇)")
+@bot_g.command(name="핑", description="어디가 느린지 재보기 (디스코드 · DB · 봇)")
 async def s_ping(i: discord.Interaction):
     await run(i, health.health_ping)
 
 
-@command("건의", "미림봇에 건의하기 (1시간에 한 번)")
+@bot_g.command(name="건의", description="미림봇에 건의하기 (1시간에 한 번)")
 @app_commands.describe(내용="건의할 내용")
 async def s_suggest(i: discord.Interaction, 내용: str):
     await run(i, suggestions.suggestion, content=내용)
 
 
-@command("경고확인", "경고 확인")
+@bot_g.command(name="경고확인", description="경고 확인")
 @app_commands.describe(유저="볼 사람 (안 고르면 나)")
 async def s_warnings(i: discord.Interaction, 유저: discord.Member = None):
     await run(i, moderation.check_warning, target=유저.mention if 유저 else None)
@@ -777,7 +856,7 @@ async def a_warn(i: discord.Interaction, 유저: discord.Member, 개수: app_com
 @admin_command("청소", "메시지 지우기 (14일 지난 것은 못 지움)")
 async def a_clean(i: discord.Interaction, 개수: app_commands.Range[int, 1, 100]):
     await i.response.defer(ephemeral=True, thinking=True)
-    deleted = await i.channel.purge(limit=개수)        # %청소 는 명령어 메시지까지 지우지만 / 는 없다
+    deleted = await i.channel.purge(limit=개수)        # %관리 청소 는 명령어 메시지까지 지우지만 / 는 없다
     await i.followup.send(f"🧹 {len(deleted)}개 지웠어요.", ephemeral=True)
 
 

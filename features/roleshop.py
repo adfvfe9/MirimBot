@@ -1,10 +1,10 @@
 """역할 상점: byte 로 디스코드 역할을 산다 (돈이 빠져나가는 곳)
 
-    %역할상점          (%상점) 팔고 있는 역할 보기 · 골라서 구매
-    %내역할            산 역할과 남은 기간
-    %상점관리          (관리자) 역할 추가 / 가격 · 기간 · 설명 수정 / 판매 중지 / 상점에서 빼기
+    %역할 상점          (%역할 상점) 팔고 있는 역할 보기 · 골라서 구매
+    %역할 목록            산 역할과 남은 기간
+    %관리 상점관리          (관리자) 역할 추가 / 가격 · 기간 · 설명 수정 / 판매 중지 / 상점에서 빼기
 
-- 역할은 관리자가 디스코드에서 직접 만들고, %상점관리 에서 골라 가격을 붙인다.
+- 역할은 관리자가 디스코드에서 직접 만들고, %관리 상점관리 에서 골라 가격을 붙인다.
 - 기간: 0 이면 영구, N 이면 N일 뒤 봇이 역할을 회수한다. 가진 상태에서 또 사면 기간이 늘어난다. (영구는 한 번만)
 - 위험한 권한(관리자, 역할 관리, 추방 …)이 있는 역할은 올릴 수 없다. 봇 역할보다 위에 있는 역할도 봇이 줄 수 없어서 막는다.
 - 상점에서 빼거나 판매를 멈춰도 이미 산 사람의 역할은 그대로 둔다. (기간이 있으면 그때 회수)
@@ -111,7 +111,7 @@ async def expire_due():
             except discord.HTTPException as e:
                 print(f"[역할상점] 회수 실패 {p}: {type(e).__name__}")
                 continue        # 다음에 다시 시도
-            await db.add_notice(p["user_id"], f"⌛ 역할 상점에서 산 **{role.name}** 역할의 기간이 끝났어요. (`%역할상점`)")
+            await db.add_notice(p["user_id"], f"⌛ 역할 상점에서 산 **{role.name}** 역할의 기간이 끝났어요. (`%역할 상점`)")
             removed += 1
         await db.delete_role_purchase(p["guild_id"], p["user_id"], p["role_id"])
     return removed
@@ -143,8 +143,8 @@ def shop_embed(guild, items, owned):
             mark = " · ✅ 영구 보유" if mine is None else f" · ⏳ <t:{int(mine.timestamp())}:R> 끝"
         desc = f"\n> {it['description']}" if it["description"] else ""
         lines.append(f"{role.mention} — **{num(it['price'])} byte** · {period_text(it['days'])}{mark}{desc}")
-    embed.description = "\n".join(lines) if lines else "아직 파는 역할이 없어요. 관리자가 `%상점관리`로 올릴 수 있어요."
-    embed.set_footer(text="아래 메뉴에서 골라서 사요 · 기간제는 또 사면 기간이 늘어나요 · %내역할")
+    embed.description = "\n".join(lines) if lines else "아직 파는 역할이 없어요. 관리자가 `%관리 상점관리`로 올릴 수 있어요."
+    embed.set_footer(text="아래 메뉴에서 골라서 사요 · 기간제는 또 사면 기간이 늘어나요 · %역할 목록")
     return embed
 
 
@@ -170,7 +170,7 @@ class ShopView(View):
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.member.id:
-            await respond.reply(interaction, "❌ `%역할상점`으로 직접 열어서 사주세요.", ephemeral=True)
+            await respond.reply(interaction, "❌ `%역할 상점`으로 직접 열어서 사주세요.", ephemeral=True)
             return False
         return True
 
@@ -203,7 +203,7 @@ class ShopView(View):
         )
 
 
-@client.command(aliases=["역할상점", "상점"])
+@commands.command(name="상점")
 async def role_shop(ctx):
     if ctx.guild is None:
         return
@@ -212,7 +212,7 @@ async def role_shop(ctx):
     await ctx.send(embed=shop_embed(ctx.guild, items, owned), view=ShopView(ctx.author, items) if items else None)
 
 
-@client.command(aliases=["내역할"])
+@commands.command(name="목록")
 async def my_shop_roles(ctx):
     if ctx.guild is None:
         return
@@ -225,7 +225,7 @@ async def my_shop_roles(ctx):
         lines.append(f"{role.mention} · {until}")
     await ctx.send(embed=discord.Embed(
         title=f"🎽 {ctx.author.display_name}님이 산 역할",
-        description="\n".join(lines) or "아직 산 역할이 없어요. `%역할상점`에서 둘러보세요!",
+        description="\n".join(lines) or "아직 산 역할이 없어요. `%역할 상점`에서 둘러보세요!",
         color=discord.Color.gold(),
     ))
 
@@ -260,7 +260,7 @@ class AdminView(View):
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.user_id:
-            await respond.reply(interaction, "❌ `%상점관리`를 연 관리자만 쓸 수 있어요.", ephemeral=True)
+            await respond.reply(interaction, "❌ `%관리 상점관리`를 연 관리자만 쓸 수 있어요.", ephemeral=True)
             return False
         return True
 
@@ -349,7 +349,7 @@ class RoleModal(Modal):
         await self.panel.refresh()
 
 
-@client.command(aliases=["상점관리"])
+@commands.command(name="상점관리")
 @commands.has_permissions(administrator=True)
 async def role_shop_admin(ctx):
     if ctx.guild is None:

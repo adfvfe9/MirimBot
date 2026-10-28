@@ -1,8 +1,8 @@
 """주식 뉴스: 30~90분마다 랜덤 뉴스가 나오고, 뉴스가 나오는 순간 주가가 한 번에 튄다.
 
-    %뉴스                최근 뉴스 보기
-    %뉴스채널 <채널ID>    (관리자) 뉴스를 올릴 채널 설정
-    %뉴스발행            (관리자) 지금 바로 뉴스 하나 내기
+    %주식 뉴스                최근 뉴스 보기
+    %관리 뉴스채널 <채널ID>    (관리자) 뉴스를 올릴 채널 설정
+    %관리 뉴스발행            (관리자) 지금 바로 뉴스 하나 내기
 
 - 큰 움직임(점프)은 뉴스와 동시에 일어난다. 뉴스를 보고 들어가면 이미 움직인 뒤다. (stocks.jump)
 - 그 뒤 10~30분 동안 작은 후속 움직임이 이어지는데, 방향은 반반에 가깝다. (stocks.update_stocks 가 current_drift 를 사용)
@@ -200,7 +200,7 @@ def delist_chance(symbol):
 
 async def make_news(kind=None):
     """뉴스 하나를 만들고 점프와 효과를 건다. (kind, symbol, headline, body) 를 돌려준다.
-    가격을 바꾸므로 stocks.update_lock 을 잡은 상태에서 불러야 한다. (publish, %주식가속)"""
+    가격을 바꾸므로 stocks.update_lock 을 잡은 상태에서 불러야 한다. (publish, %관리 주식가속)"""
     if kind is None:
         kind = random.choices(list(KIND_WEIGHTS), weights=list(KIND_WEIGHTS.values()))[0]
 
@@ -252,7 +252,7 @@ def news_embed(kind, symbol, headline, body, when=None):
 
 async def publish(kind=None):
     """뉴스를 만들어 설정된 모든 뉴스 채널에 올린다."""
-    async with stocks.update_lock:  # 뉴스가 가격을 바꾸므로 1분 갱신 / %주식가속과 겹치지 않게
+    async with stocks.update_lock:  # 뉴스가 가격을 바꾸므로 1분 갱신 / %관리 주식가속과 겹치지 않게
         kind, symbol, headline, body = await make_news(kind)
     embed = news_embed(kind, symbol, headline, body)
     for channel_id in await db.get_news_channels():
@@ -269,7 +269,7 @@ async def publish(kind=None):
 
 def minute_passed():
     """1분 지남. 뉴스를 낼 때가 됐으면 True 를 돌려주고 다음 뉴스까지 남은 분을 새로 정한다.
-    (news_loop 와 %주식가속 이 같이 쓴다)"""
+    (news_loop 와 %관리 주식가속 이 같이 쓴다)"""
     global minutes_until_next
     minutes_until_next -= 1
     if minutes_until_next <= 0:
@@ -300,7 +300,7 @@ async def start_news_loop():
 
 # ───────────── 명령어 ─────────────
 
-@client.command(aliases=["뉴스"])
+@commands.command(name="뉴스")
 async def news(ctx):
     respond.delete_soon(ctx.message)
     rows = await db.recent_news(5)
@@ -317,7 +317,7 @@ async def news(ctx):
     await ctx.send(embed=embed)
 
 
-@client.command(aliases=["뉴스채널"])
+@commands.command(name="뉴스채널")
 @commands.has_permissions(administrator=True)
 async def set_news_channel(ctx, channel_id: int):
     respond.delete_soon(ctx.message)
@@ -325,10 +325,10 @@ async def set_news_channel(ctx, channel_id: int):
     await ctx.send(f"✅ 뉴스 채널이 <#{channel_id}>로 설정되었습니다.")
 
 
-@client.command(aliases=["뉴스발행"])
+@commands.command(name="뉴스발행")
 @commands.has_permissions(administrator=True)
 async def publish_news(ctx):
     respond.delete_soon(ctx.message)
     embed = await publish()
     if not await db.get_news_channels():
-        await ctx.send("⚠️ 뉴스 채널이 설정되지 않아 여기에만 보여요. (`%뉴스채널 <채널ID>`)", embed=embed)
+        await ctx.send("⚠️ 뉴스 채널이 설정되지 않아 여기에만 보여요. (`%관리 뉴스채널 <채널ID>`)", embed=embed)

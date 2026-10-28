@@ -44,7 +44,7 @@ async def find_member(ctx, name_or_mention):
     return None
 
 # 경고 명령어
-@client.command(aliases=["경고"], usage="<이름 | @유저> [횟수] [사유]")
+@commands.command(name="경고", usage="<이름 | @유저> [횟수] [사유]")
 @commands.has_permissions(administrator=True)
 async def warn(ctx, name: str, amount: int = 1, *, reason: str = None):
     respond.delete_soon(ctx.message)
@@ -128,7 +128,7 @@ async def warn(ctx, name: str, amount: int = 1, *, reason: str = None):
     )
     await ctx.send(embed=embed, view=view)
 
-@client.command(aliases=["경고확인"])
+@commands.command(name="경고확인", usage="[@유저]")
 async def check_warning(ctx, *, target: str = None):
     respond.delete_soon(ctx.message)
     if target:

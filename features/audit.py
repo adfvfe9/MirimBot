@@ -1,13 +1,13 @@
 """명령어 / 버튼 기록: 누가 언제 무엇을 했는지 남긴다
 
-    %로그 [@유저] [찾을 말 | 관리자] [개수]     (관리자만) 최근 기록 보기
+    %관리 로그 [@유저] [찾을 말 | 관리자] [개수]     (관리자만) 최근 기록 보기
 
 - 모든 명령어: 친 메시지 그대로, 성공했는지 (에러면 에러 종류), 걸린 시간
 - 모든 /명령어: 입력한 값 그대로
 - 모든 버튼 / 메뉴 / 입력창: 누른 버튼 이름 (또는 고른 값, 입력한 값) + 버튼이 달린 메시지 제목
 - 돈이 바뀐 기록은 따로 money_log 에 있다. 여기는 "누가 무엇을 눌렀나" 를 보는 곳.
 - 기록은 명령어를 느리게 하지 않게 따로(백그라운드로) 저장하고, 90일이 지나면 지운다.
-- `%로그 관리자` 는 관리자 권한이 필요한 명령어(%강화수정, %돈추가 …)만 보여준다.
+- `%관리 로그 관리자` 는 관리자 권한이 필요한 명령어(%관리 강화수정, %관리 머니추가 …)만 보여준다.
 """
 import asyncio
 import datetime
@@ -20,6 +20,7 @@ from discord.ext import commands
 
 import database as db
 from bot import client
+from features import errors
 
 KEEP_DAYS = 90
 CONTENT_MAX = 500
@@ -60,7 +61,7 @@ def save_command(ctx, result):
         guild_id=ctx.guild and ctx.guild.id,
         channel_id=ctx.channel and ctx.channel.id,
         kind="command",
-        name=ctx.invoked_with or (ctx.command and ctx.command.name) or "?",
+        name=errors.command_name(ctx),        # 하위 명령어는 "주식 구매" 처럼
         content=clip(ctx.message.content),
         result=result,
         ms=None if begin is None else int((time.perf_counter() - begin) * 1000),
@@ -80,7 +81,7 @@ async def command_failed(ctx, error):
     # on_command_error 를 듣는 순간 discord.py 가 에러를 출력해주지 않아서 직접 출력한다
     if ctx.command and ctx.command.has_error_handler():
         return
-    print(f"[명령어 에러] %{ctx.invoked_with} ({ctx.author}): {type(error).__name__}")
+    print(f"[명령어 에러] %{errors.command_name(ctx)} ({ctx.author}): {type(error).__name__}")
     traceback.print_exception(type(error), error, error.__traceback__)
 
 
@@ -182,11 +183,11 @@ async def prune_loop():
 # ───────────── 보기 ─────────────
 
 def admin_command_names():
-    """관리자 권한 등 검사가 붙은 명령어의 이름과 별칭 전부"""
+    """관리자 권한 등 검사가 붙은 명령어의 이름과 별칭 전부 (v1.3.9 전 기록은 '머니추가', 그 뒤는 '관리 머니추가')"""
     names = []
     for command in client.walk_commands():
         if command.checks:
-            names += [command.name, *command.aliases]
+            names += [command.qualified_name, command.name, *command.aliases]
     group = client.tree.get_command("관리")          # 슬래시 관리자 명령어 (/관리 …)
     if group is not None:
         names += [f"/관리 {c.name}" for c in group.commands]
@@ -210,7 +211,7 @@ def log_line(row):
     return f"`{at}` <@{row['user_id']}> {icon} {body}{tail}"
 
 
-@client.command(aliases=["로그"])
+@commands.command(name="로그", usage="[@유저] [찾을 말 | 관리자] [개수]")
 @commands.has_permissions(administrator=True)
 async def audit_log(ctx, member: Optional[discord.Member] = None, *args: str):
     count = VIEW_DEFAULT
@@ -242,5 +243,5 @@ async def audit_log(ctx, member: Optional[discord.Member] = None, *args: str):
             break
         description = line + "\n" + description
     embed.description = description or "기록이 없어요."
-    embed.set_footer(text=f"%로그 [@유저] [찾을 말 | 관리자] [개수(최대 {VIEW_MAX})] · ⌨️ 명령어 🔘 버튼 📋 메뉴 📝 입력창 · {KEEP_DAYS}일 보관")
+    embed.set_footer(text=f"%관리 로그 [@유저] [찾을 말 | 관리자] [개수(최대 {VIEW_MAX})] · ⌨️ 명령어 🔘 버튼 📋 메뉴 📝 입력창 · {KEEP_DAYS}일 보관")
     await ctx.send(embed=embed)

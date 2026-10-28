@@ -4,11 +4,10 @@ from discord.ext import commands
 
 import database as db
 import respond
-from bot import client
 from features import stocks
 
 
-@client.command(aliases=["초기화"])
+@commands.command(name="초기화")
 @commands.has_permissions(administrator=True)
 async def reset_all_data(ctx):
     respond.delete_soon(ctx.message)

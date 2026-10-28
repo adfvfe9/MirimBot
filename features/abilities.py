@@ -1,8 +1,8 @@
 """강화 아이템 능력 슬롯
 
-    %강화능력설정 <아이템>   슬롯과 능력 보기 / 슬롯 잠금 / 리롤 (버튼)
-    %리롤 <아이템>          잠그지 않은 슬롯을 전부 다시 뽑기 (토큰 1개 + 잠근 슬롯 하나당 1개)
-    %내능력 [@유저]         모든 아이템의 능력을 합친 효과
+    %강화 능력설정 <아이템>   슬롯과 능력 보기 / 슬롯 잠금 / 리롤 (버튼)
+    %강화 리롤 <아이템>          잠그지 않은 슬롯을 전부 다시 뽑기 (토큰 1개 + 잠근 슬롯 하나당 1개)
+    %강화 능력 [@유저]         모든 아이템의 능력을 합친 효과
 
 - +3 / +5 / +7 / +9 / +11 / +13 에 처음 도달하면 슬롯이 하나씩 열리고 능력이 공짜로 하나 붙는다.
   (v1.3.2 에서 +5 부터 → +3 부터로 바꿨다. 예전 슬롯 번호는 그대로라 1번이 +3 슬롯이 되고,
@@ -17,6 +17,7 @@
 import random
 
 import discord
+from discord.ext import commands
 from discord.ui import Button, View
 
 import database as db
@@ -84,7 +85,7 @@ ABILITIES = {
                           desc="도박이 꽝이면 판돈의 일부를 돌려받기"),
     "gamble_max":    dict(emoji="🎲", name="도박 판돈 한도 증가", unit="%", decimals=1, limit=None,
                           ranges=((5, 10), (10, 20), (20, 35), (35, 50)),
-                          desc="도박 1회 최대 판돈(10만) 증가 (%도박올인 포함)"),
+                          desc="도박 1회 최대 판돈(10만) 증가 (%도박 걸기 올인 포함)"),
     "rps_games":     dict(emoji="✌️", name="가위바위보 판수 증가", unit="판", decimals=0, limit=None,
                           ranges=((1, 1), (1, 1), (1, 2), (2, 3)),
                           desc="가위바위보 하루 판수(5판) 증가"),
@@ -261,7 +262,7 @@ async def reroll(user_id, item_name):
             return "❌ 다시 뽑을 슬롯이 없어요. (열린 슬롯이 없거나 전부 잠겨 있어요)"
         cost = reroll_cost(rows, level)
         if await db.add_tokens(user_id, -cost, conn) is None:
-            return f"🪙 토큰이 부족합니다. (필요: {cost}개, `%토큰구매` 또는 퀴즈로 얻을 수 있어요)"
+            return f"🪙 토큰이 부족합니다. (필요: {cost}개, `%토큰 구매` 또는 퀴즈로 얻을 수 있어요)"
         for r in targets:
             key, tier, value = roll(level)
             await db.set_ability(user_id, item_name, r["slot"], key, tier, value, conn)
@@ -299,7 +300,7 @@ def item_embed(item_name, level, rows, tokens, last=""):
 
 
 class AbilityView(View):
-    """%강화능력설정 패널: 켜진 슬롯마다 잠금 버튼 + 리롤 버튼"""
+    """%강화 능력설정 패널: 켜진 슬롯마다 잠금 버튼 + 리롤 버튼"""
 
     def __init__(self, user_id, item_name):
         super().__init__(timeout=180)
@@ -372,10 +373,10 @@ class AbilityView(View):
 
 # ───────────── 명령어 ─────────────
 
-@client.command(aliases=["강화능력설정", "강화능력"])
+@commands.command(name="능력설정")
 async def ability_panel(ctx, item_name: str = None):
     if item_name is None:
-        await ctx.send("아이템 이름을 입력해주세요! 예: `%강화능력설정 칼`")
+        await ctx.send("아이템 이름을 입력해주세요! 예: `%강화 능력설정 칼`")
         return
     level, _ = await item_state(ctx.author.id, item_name)
     if level is None:
@@ -386,10 +387,10 @@ async def ability_panel(ctx, item_name: str = None):
     view.message = await ctx.send(embed=embed, view=view)
 
 
-@client.command(aliases=["리롤"])
+@commands.command(name="리롤")
 async def reroll_command(ctx, item_name: str = None):
     if item_name is None:
-        await ctx.send("아이템 이름을 입력해주세요! 예: `%리롤 칼` (잠금은 `%강화능력설정 칼`에서)")
+        await ctx.send("아이템 이름을 입력해주세요! 예: `%강화 리롤 칼` (잠금은 `%강화 능력설정 칼`에서)")
         return
     result = await reroll(ctx.author.id, item_name)
     if isinstance(result, str):
@@ -400,7 +401,7 @@ async def reroll_command(ctx, item_name: str = None):
     await ctx.send(embed=item_embed(item_name, level, rows, tokens, f"🔄 리롤 완료! (토큰 -{result['cost']})"))
 
 
-@client.command(aliases=["내능력"])
+@commands.command(name="능력")
 async def my_abilities(ctx, member: discord.Member = None):
     member = member or ctx.author
     summed = await totals(member.id)

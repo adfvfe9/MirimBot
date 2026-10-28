@@ -3,7 +3,7 @@
     %끝말잇기         봇과 1대1 (난이도 버튼: 쉬움 / 보통 / 어려움 / 지옥, 연습 모드 켜기)
     %끝말잇기 연습    봇과 1대1 연습 (보상 없음, 하루 한도와 상관없이)
     %끝말잇기 같이    친구들과 다같이 (대기방에서 모여서 시작, 마지막까지 남으면 우승)
-    %끝말잇기랭킹 [어려움|지옥]   봇과 1대1 한 판 최고 점수 랭킹 (어려움 / 지옥만)
+    %끝말잇기 랭킹 [어려움|지옥]   봇과 1대1 한 판 최고 점수 랭킹 (어려움 / 지옥만)
     게임 중 "그만"     1대1: 번 돈을 받고 끝내기 / 다같이: 기권
 
 - 게임은 명령어 메시지에 새 스레드를 만들어서 그 안에서 한다. 끝나면 스레드를 잠근다.
@@ -30,6 +30,7 @@ from collections import Counter
 from pathlib import Path
 
 import discord
+from discord.ext import commands
 
 import database as db
 import respond
@@ -359,7 +360,7 @@ async def check_can_play(ctx) -> bool:
     return True
 
 
-@client.command(aliases=["끝말잇기", "끝말"])
+@commands.command(name="시작", usage="[같이 | 연습]")
 async def wordchain(ctx, mode: str = None):
     """%끝말잇기 → 봇과 1대1, %끝말잇기 연습 → 1대1 연습, %끝말잇기 같이 → 친구들과 다같이"""
     if mode in MULTI_WORDS:
@@ -403,7 +404,7 @@ class DifficultyView(discord.ui.View):
                 f"📏 긴 단어일수록 보상 UP (한 글자당 +{LENGTH_BONUS:.0%})\n"
                 f"🎯 **미션 글자**가 들어간 단어를 내면 추가 보너스\n"
                 f"🏆 봇이 못 이으면 승리 보너스 ({num(WIN_BONUS)} × 배율)\n"
-                "⭐ 🟠어려움 · 🔴지옥은 **점수**가 랭킹에 기록돼요 (`%끝말잇기랭킹`)\n"
+                "⭐ 🟠어려움 · 🔴지옥은 **점수**가 랭킹에 기록돼요 (`%끝말잇기 랭킹`)\n"
                 "　 오래 이을수록 · 긴 단어일수록 · 빨리 낼수록 · 미션 글자를 넣을수록 점수 UP\n\n"
                 + ("🧪 **연습 모드**: 보상이 없고 랭킹에도 기록되지 않아요."
                    if self.practice else
@@ -669,7 +670,7 @@ async def play_solo(channel, user, remaining, difficulty="normal", practice=Fals
     elif practice:
         embed.set_footer(text="연습 모드는 랭킹에 기록되지 않아요.")
     elif difficulty not in RANKED:
-        embed.set_footer(text="🟠어려움 · 🔴지옥에서 하면 점수가 랭킹에 기록돼요. (%끝말잇기랭킹)")
+        embed.set_footer(text="🟠어려움 · 🔴지옥에서 하면 점수가 랭킹에 기록돼요. (%끝말잇기 랭킹)")
     embed.set_author(name=str(user), icon_url=user.avatar.url if user.avatar else None)
     await channel.send(embed=embed)
 
@@ -678,14 +679,14 @@ async def play_solo(channel, user, remaining, difficulty="normal", practice=Fals
 MEDALS = ["🥇", "🥈", "🥉"]
 
 
-@client.command(aliases=["끝말잇기랭킹", "끝말랭킹"])
+@commands.command(name="랭킹", usage="[어려움 | 지옥]")
 async def wordchain_rank(ctx, level: str = None):
-    """%끝말잇기랭킹 [어려움|지옥] — 생략하면 둘 다"""
+    """%끝말잇기 랭킹 [어려움|지옥] — 생략하면 둘 다"""
     respond.delete_soon(ctx.message)
     keys = [k for k in RANKED if level in (None, DIFFICULTIES[k]["name"])]
     if not keys:
         names = " / ".join(DIFFICULTIES[k]["name"] for k in RANKED)
-        await ctx.send(f"❌ 랭킹은 {names}만 있어요. 예) `%끝말잇기랭킹 지옥`", delete_after=10)
+        await ctx.send(f"❌ 랭킹은 {names}만 있어요. 예) `%끝말잇기 랭킹 지옥`", delete_after=10)
         return
 
     embed = discord.Embed(

@@ -212,7 +212,7 @@ CREATE TABLE IF NOT EXISTS stock_positions (
 );
 CREATE INDEX IF NOT EXISTS stock_positions_user_idx ON stock_positions (user_id, id);
 
--- 상장폐지, 강제청산처럼 유저가 없을 때 생긴 일을 다음 %주식확인 / %포지션 때 보여줄 알림
+-- 상장폐지, 강제청산처럼 유저가 없을 때 생긴 일을 다음 %주식 확인 / %주식 포지션 때 보여줄 알림
 CREATE TABLE IF NOT EXISTS stock_notices (
     id      BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL,
@@ -230,7 +230,7 @@ BEGIN
     END IF;
 END $$;
 
--- 주식 뉴스 (features/news.py). %뉴스 로 최근 기록을 본다.
+-- 주식 뉴스 (features/news.py). %주식 뉴스 로 최근 기록을 본다.
 CREATE TABLE IF NOT EXISTS news (
     id         BIGSERIAL PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -351,7 +351,7 @@ CREATE TABLE IF NOT EXISTS user_titles (
     equipped    BOOLEAN     NOT NULL DEFAULT FALSE,
     PRIMARY KEY (user_id, title)
 );
--- 1시간마다 모든 유저의 순자산. 최근 30일만 남긴다. (%자산그래프)
+-- 1시간마다 모든 유저의 순자산. 최근 30일만 남긴다. (%자산 그래프)
 CREATE TABLE IF NOT EXISTS asset_history (
     user_id     BIGINT      NOT NULL,
     recorded_at TIMESTAMPTZ NOT NULL,
@@ -363,7 +363,7 @@ CREATE INDEX IF NOT EXISTS money_log_user_idx ON money_log (user_id, created_at)
 
 
 -- ───────────── TTS ─────────────
--- 서버마다 글자 / 초성 / 기호를 어떻게 읽을지 (%줄임말설정). 게임 데이터가 아니라서 %초기화 로 지워지지 않는다
+-- 서버마다 글자 / 초성 / 기호를 어떻게 읽을지 (%읽기 줄임말설정). 게임 데이터가 아니라서 %관리 초기화 로 지워지지 않는다
 CREATE TABLE IF NOT EXISTS tts_abbrevs (
     guild_id BIGINT NOT NULL,
     word     TEXT   NOT NULL,     -- 소문자로 저장 (영어는 대소문자 구분 없이 바꾼다)
@@ -373,8 +373,8 @@ CREATE TABLE IF NOT EXISTS tts_abbrevs (
 );
 
 
--- ───────────── 명령어 / 버튼 기록 (features/audit.py, %로그) ─────────────
--- 누가 언제 어떤 명령어를 쓰고 어떤 버튼을 눌렀는지. 관리자 명령어 확인용이라 %초기화 로 지워지지 않는다. (90일 보관)
+-- ───────────── 명령어 / 버튼 기록 (features/audit.py, %관리 로그) ─────────────
+-- 누가 언제 어떤 명령어를 쓰고 어떤 버튼을 눌렀는지. 관리자 명령어 확인용이라 %관리 초기화 로 지워지지 않는다. (90일 보관)
 CREATE TABLE IF NOT EXISTS command_log (
     id         BIGSERIAL   PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -392,7 +392,7 @@ CREATE INDEX IF NOT EXISTS command_log_user_idx ON command_log (user_id, created
 
 
 -- ───────────── 롤 · 발로란트 연동 (features/games.py) ─────────────
--- 본인이 직접 등록한 Riot ID. game = 'lol' / 'val'. last_match_id = 마지막으로 알린 랭크 경기 (%초기화 로 지워지지 않는다)
+-- 본인이 직접 등록한 Riot ID. game = 'lol' / 'val'. last_match_id = 마지막으로 알린 랭크 경기 (%관리 초기화 로 지워지지 않는다)
 CREATE TABLE IF NOT EXISTS game_accounts (
     user_id       BIGINT      NOT NULL,
     game          TEXT        NOT NULL,
@@ -404,7 +404,7 @@ CREATE TABLE IF NOT EXISTS game_accounts (
     PRIMARY KEY (user_id, game)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS game_accounts_puuid_idx ON game_accounts (game, puuid);
--- 알린 랭크 경기 결과 (%전적, 오늘의 미림봇). result = win / lose / draw / remake
+-- 알린 랭크 경기 결과 (%게임 전적, 오늘의 미림봇). result = win / lose / draw / remake
 CREATE TABLE IF NOT EXISTS game_matches (
     game       TEXT        NOT NULL,
     match_id   TEXT        NOT NULL,
@@ -478,7 +478,7 @@ CREATE INDEX IF NOT EXISTS stock_orders_user_idx ON stock_orders (user_id);
 
 
 -- ───────────── 역할 상점 (features/roleshop.py) ─────────────
--- 서버마다 파는 역할. days = 0 이면 영구. (%초기화 로 지워지지 않는다: 산 역할은 디스코드에 그대로 있으니까)
+-- 서버마다 파는 역할. days = 0 이면 영구. (%관리 초기화 로 지워지지 않는다: 산 역할은 디스코드에 그대로 있으니까)
 CREATE TABLE IF NOT EXISTS shop_roles (
     guild_id    BIGINT  NOT NULL,
     role_id     BIGINT  NOT NULL,
@@ -502,7 +502,7 @@ CREATE INDEX IF NOT EXISTS role_purchases_expires_idx ON role_purchases (expires
 
 
 -- ───────────── 학사정보 (features/school.py) ─────────────
--- 서버마다 학교와 아침 알림 설정. 행이 없으면 미림마이스터고, 알림 꺼짐. (%초기화 로 지워지지 않는다)
+-- 서버마다 학교와 아침 알림 설정. 행이 없으면 미림마이스터고, 알림 꺼짐. (%관리 초기화 로 지워지지 않는다)
 CREATE TABLE IF NOT EXISTS school_settings (
     guild_id       BIGINT  PRIMARY KEY,
     edu_code       TEXT    NOT NULL,              -- 교육청 코드 (B10 = 서울)
@@ -518,7 +518,7 @@ CREATE TABLE IF NOT EXISTS school_settings (
     class_nm       TEXT,
     last_posted    DATE                           -- 오늘 이미 보냈는지
 );
--- %내반: 사람마다 자기 반 (%시간표)
+-- %학교 내반: 사람마다 자기 반 (%학교 시간표)
 CREATE TABLE IF NOT EXISTS user_classes (
     guild_id BIGINT  NOT NULL,
     user_id  BIGINT  NOT NULL,
@@ -529,7 +529,7 @@ CREATE TABLE IF NOT EXISTS user_classes (
 
 
 -- ───────────── 봇 운영 상태 ─────────────
--- 서버 연장 알림처럼 봇 자체가 기억해야 하는 값. (%초기화 로 지워지지 않는다)
+-- 서버 연장 알림처럼 봇 자체가 기억해야 하는 값. (%관리 초기화 로 지워지지 않는다)
 CREATE TABLE IF NOT EXISTS bot_state (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -541,5 +541,5 @@ CREATE TABLE IF NOT EXISTS bot_state (
 ALTER TABLE users DROP COLUMN IF EXISTS checkin_last_date;
 ALTER TABLE users DROP COLUMN IF EXISTS checkin_level;
 DROP TABLE IF EXISTS attendance_channels;
--- 예전 토큰 상점 아이템. 쓸 곳이 없어서 상점을 역할 상점(%역할상점)으로 바꾸면서 없앴다.
+-- 예전 토큰 상점 아이템. 쓸 곳이 없어서 상점을 역할 상점(%역할 상점)으로 바꾸면서 없앴다.
 DROP TABLE IF EXISTS inventory;

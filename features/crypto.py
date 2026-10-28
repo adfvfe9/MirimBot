@@ -1,12 +1,12 @@
 """비트코인: 토큰으로만 사고파는 코인
 
     %코인                     시세, 1시간 / 24시간 변동, 최근 코인 뉴스
-    %코인구매 <토큰 수>        토큰으로 코인 사기
-    %코인판매 [코인 수 | 전부]  코인 팔고 토큰 받기 (안 쓰면 전부)
-    %코인확인 [@유저]          보유량, 평균 단가, 손익
-    %코인그래프 [분]           가격 그래프 (60분 무료, 더 보려면 byte)
-    %코인랭킹                 코인 평가액 순위
-    %코인가속 [분]             (관리자) 코인만 [분] 만큼 빨리 진행 (%주식가속 과 따로)
+    %코인 구매 <토큰 수>        토큰으로 코인 사기
+    %코인 판매 [코인 수 | 전부]  코인 팔고 토큰 받기 (안 쓰면 전부)
+    %코인 확인 [@유저]          보유량, 평균 단가, 손익
+    %코인 그래프 [분]           가격 그래프 (60분 무료, 더 보려면 byte)
+    %코인 랭킹                 코인 평가액 순위
+    %관리 코인가속 [분]             (관리자) 코인만 [분] 만큼 빨리 진행 (%관리 주식가속 과 따로)
 
 - 가격 단위는 토큰이다. 1분마다 주식과 같이 갱신된다. (stocks.auto_update_stocks 루프가 tick 을 부른다)
 - 평소 흔들림 하루 약 25% + 4~8시간마다 코인 뉴스로 ±5~20% 점프. 주식보다 훨씬 거칠다.
@@ -41,7 +41,7 @@ JUMP = (0.05, 0.20)                      # 뉴스 점프 크기 (+/- 같은 확�
 FEE = 0.01
 SPLIT_LOW, SPLIT_HIGH, SPLIT_FACTOR = 0.1, 1000.0, 100
 HISTORY_KEEP = 1440
-CHART_FREE_MINUTES, CHART_HOUR_PRICE = 60, 2000   # %주가그래프와 같은 규칙
+CHART_FREE_MINUTES, CHART_HOUR_PRICE = 60, 2000   # %주식 그래프와 같은 규칙
 
 GOOD_NEWS = [
     "일론 머스크, 트위터에 '₿🚀' 한 줄 남겨",
@@ -64,10 +64,10 @@ BAD_NEWS = [
 price = START_PRICE
 previous = START_PRICE
 history = deque(maxlen=HISTORY_KEEP)   # 최근 가격 (가치 기준으로 액면 조정됨)
-pending = []                           # 아직 DB 에 안 쓴 가격 기록 (%주식가속 중에 모아 둔다)
+pending = []                           # 아직 DB 에 안 쓴 가격 기록 (%관리 주식가속 중에 모아 둔다)
 news_left = random.randint(*NEWS_MINUTES)
 recent_news = deque(maxlen=5)          # [(시각, 헤드라인, 변화율)]
-lock = asyncio.Lock()                  # 1분 갱신과 %코인가속이 겹치지 않게
+lock = asyncio.Lock()                  # 1분 갱신과 %관리 코인가속이 겹치지 않게
 
 
 async def load():
@@ -98,7 +98,7 @@ async def rescale(factor):
 
 
 async def tick(save=True):
-    """1분 갱신. save=False 면 기록을 모아 두기만 한다 (%주식가속, 끝나고 flush)."""
+    """1분 갱신. save=False 면 기록을 모아 두기만 한다 (%관리 주식가속, 끝나고 flush)."""
     global price, previous, news_left
     previous = price
     price *= math.exp(random.gauss(-SIGMA * SIGMA / 2, SIGMA))
@@ -137,7 +137,7 @@ async def flush():
 
 
 async def announce(title, body, live):
-    """뉴스 채널에 올린다. (%주식가속 중에는 올리지 않는다)"""
+    """뉴스 채널에 올린다. (%관리 주식가속 중에는 올리지 않는다)"""
     print(f"[코인] {title} {body}")
     if not live:
         return
@@ -168,7 +168,7 @@ async def buy(user_id, tokens):
         return "❌ 1토큰 이상으로 사주세요."
     async with db.user_tx(user_id) as conn:
         if await db.add_tokens(user_id, -tokens, conn) is None:
-            return "🪙 토큰이 부족합니다. (`%토큰구매`, 퀴즈, `%암시장`으로 얻을 수 있어요)"
+            return "🪙 토큰이 부족합니다. (`%토큰 구매`, 퀴즈, `%강화 암시장`으로 얻을 수 있어요)"
         now_price = price
         coins = tokens * (1 - FEE) / now_price
         holding = await db.get_coin_holding(user_id, conn)
@@ -213,7 +213,7 @@ def fmt_change(change):
     return f"{arrow} {num(change * 100, sign=True)}%"
 
 
-@client.command(aliases=["코인", "비트코인"])
+@commands.command(name="시세")
 async def coin(ctx):
     embed = discord.Embed(
         title=f"₿ 비트코인 {num(price)} 토큰",
@@ -229,7 +229,7 @@ async def coin(ctx):
             for at, headline, change in reversed(recent_news)
         ]
         embed.add_field(name="📰 최근 코인 뉴스", value="\n".join(lines), inline=False)
-    embed.set_footer(text=f"%코인구매 <토큰> · %코인판매 [개수|전부] · 수수료 살 때 {int(FEE * 100)}% / 팔 때 {int(FEE * 100)}%")
+    embed.set_footer(text=f"%코인 구매 <토큰> · %코인 판매 [개수|전부] · 수수료 살 때 {int(FEE * 100)}% / 팔 때 {int(FEE * 100)}%")
     await ctx.send(embed=embed)
 
 
@@ -251,10 +251,10 @@ def confirm_view(owner_id, on_confirm):
     return view
 
 
-@client.command(aliases=["코인구매"])
+@commands.command(name="구매")
 async def coin_buy(ctx, tokens: Amount = None):
     if tokens is None:
-        await ctx.send("사용법: `%코인구매 <토큰 수 | 올인 | 절반>` 예) `%코인구매 5`")
+        await ctx.send("사용법: `%코인 구매 <토큰 수 | 올인 | 절반>` 예) `%코인 구매 5`")
         return
     have = (await db.get_user(ctx.author.id))["tokens"]
     tokens = resolve_amount(tokens, have)
@@ -287,18 +287,18 @@ async def coin_buy(ctx, tokens: Amount = None):
     await ctx.send(embed=embed, view=confirm_view(ctx.author.id, on_confirm))
 
 
-@client.command(aliases=["코인판매"])
+@commands.command(name="판매", usage="[코인 수 | 전부]")
 async def coin_sell(ctx, amount: str = None):
     holding = await db.get_coin_holding(ctx.author.id)
     if holding["amount"] <= 0:
-        await ctx.send("❌ 가진 코인이 없어요. `%코인구매 <토큰>`으로 사보세요!")
+        await ctx.send("❌ 가진 코인이 없어요. `%코인 구매 <토큰>`으로 사보세요!")
         return
     coins = None
     if amount is not None and amount not in ("전부", "전체", "all"):
         try:
             coins = float(amount)
         except ValueError:
-            await ctx.send("사용법: `%코인판매 [코인 수 | 전부]` 예) `%코인판매 0.5`")
+            await ctx.send("사용법: `%코인 판매 [코인 수 | 전부]` 예) `%코인 판매 0.5`")
             return
     shown = holding["amount"] if coins is None else coins
     embed = discord.Embed(
@@ -325,7 +325,7 @@ async def coin_sell(ctx, amount: str = None):
     await ctx.send(embed=embed, view=confirm_view(ctx.author.id, on_confirm))
 
 
-@client.command(aliases=["코인확인"])
+@commands.command(name="확인")
 async def coin_status(ctx, member: discord.Member = None):
     member = member or ctx.author
     holding = await db.get_coin_holding(member.id)
@@ -342,7 +342,7 @@ async def coin_status(ctx, member: discord.Member = None):
     await ctx.send(embed=embed)
 
 
-@client.command(aliases=["코인그래프"])
+@commands.command(name="그래프")
 async def coin_chart(ctx, minutes: int = CHART_FREE_MINUTES):
     from features import stocks   # 그래프 그리기는 주식 쪽 함수를 같이 쓴다
     if not 1 <= minutes <= HISTORY_KEEP:
@@ -369,7 +369,7 @@ async def coin_chart(ctx, minutes: int = CHART_FREE_MINUTES):
 ACCEL_MAX_MINUTES = 1440
 
 
-@client.command(aliases=["코인가속"])
+@commands.command(name="코인가속")
 @commands.has_permissions(administrator=True)
 async def coin_accelerate(ctx, minutes: int = 60):
     """비트코인만 minutes 분이 지난 것처럼 진행한다. (뉴스와 액면 조정 포함, 뉴스 채널에는 안 올림)"""
@@ -410,11 +410,11 @@ async def coin_accelerate(ctx, minutes: int = 60):
         value="\n".join(headlines[-10:])[:1000] if headlines else "없음",
         inline=False,
     )
-    embed.set_footer(text="가속 중 뉴스는 뉴스 채널에 올리지 않아요 · 주식은 %주식가속 으로 따로")
+    embed.set_footer(text="가속 중 뉴스는 뉴스 채널에 올리지 않아요 · 주식은 %관리 주식가속 으로 따로")
     await ctx.send(embed=embed)
 
 
-@client.command(aliases=["코인랭킹"])
+@commands.command(name="랭킹")
 async def coin_rank(ctx):
     rows = sorted(await db.all_coin_holdings(), key=lambda r: -r["amount"])[:10]
     if not rows:

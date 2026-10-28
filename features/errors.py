@@ -2,7 +2,7 @@
 
 - %명령어를 잘못 쓰면 (빠진 칸, 숫자 자리에 글자, 없는 유저 등) 사용법을 알려준다.
   예전에는 아무 답이 없어서 왜 안 되는지 알 수 없었다.
-  사용법은 명령어 인자 이름으로 만든다: %롱 <종목> <증거금> [배율]  (usage= 를 적은 명령어는 그것을 쓴다)
+  사용법은 명령어 인자 이름으로 만든다: %주식 롱 <종목> <증거금> [배율]  (usage= 를 적은 명령어는 그것을 쓴다)
 - 시간이 지났거나, 이미 처리했거나, 봇이 다시 켜져서 주인 없는 버튼을 누르면
   디스코드가 "상호작용 실패"를 띄운다. 대신 "이제 쓸 수 없는 버튼"이라고 알려주고 버튼을 치운다.
 """
@@ -48,12 +48,18 @@ PARAM_NAMES = {
 }
 
 
-def usage(ctx) -> str:
-    """%명령어 사용법 한 줄. 예) %롱 <종목> <증거금 | 올인 | 절반> [배율]"""
-    command = ctx.command
-    name = f"%{ctx.invoked_with or command.name}"
+def command_name(ctx) -> str:
+    """친 명령어 이름. %주식 구매 → '주식 구매', %주식 → '주식', %은행 → '은행'
+    (예전 이름 %주식구매 는 features/groups.py 가 새 모양으로 바꿔서 들어온다)"""
+    if ctx.command is not None and ctx.command.parent is not None:
+        return f"{ctx.command.full_parent_name} {ctx.invoked_with}"
+    return ctx.invoked_with or (ctx.command and ctx.command.name) or "?"
+
+
+def signature(command) -> str:
+    """인자 부분. 예) <종목> <증거금 | 올인 | 절반> [배율]"""
     if command.usage:
-        return f"{name} {command.usage}"
+        return command.usage
     parts = []
     for param in command.clean_params.values():
         label = PARAM_NAMES.get(param.name, param.name)
@@ -63,24 +69,42 @@ def usage(ctx) -> str:
             parts.append(f"[{label} ...]")
         else:
             parts.append(f"<{label}>" if param.required else f"[{label}]")
-    return " ".join([name, *parts])
+    return " ".join(parts)
+
+
+def usage_line(command, name) -> str:
+    """%명령어 사용법 한 줄. 예) %주식 롱 <종목> <증거금 | 올인 | 절반> [배율]"""
+    return f"%{name} {signature(command)}".rstrip()
+
+
+def subcommands(group) -> list:
+    """하위 명령어를 단 순서대로 (group.commands 는 순서 없는 set 이다)"""
+    return list(dict.fromkeys(group.all_commands.values()))
+
+
+def usage(ctx) -> str:
+    """사용법 안내 (상위 명령어면 하위 명령어 목록도)"""
+    text = f"사용법: `{usage_line(ctx.command, command_name(ctx))}`"
+    if isinstance(ctx.command, commands.Group):
+        text += f"\n하위 명령어: {' · '.join(sub.name for sub in subcommands(ctx.command))}"
+    return text
 
 
 def explain(ctx, error) -> str | None:
     """에러를 유저에게 보여줄 말로. None 이면 답하지 않는다."""
     if isinstance(error, (commands.MemberNotFound, commands.UserNotFound)):
-        return f"❌ `{error.argument}` 유저를 찾을 수 없어요. @멘션으로 써 주세요.\n사용법: `{usage(ctx)}`"
+        return f"❌ `{error.argument}` 유저를 찾을 수 없어요. @멘션으로 써 주세요.\n{usage(ctx)}"
     if isinstance(error, commands.MissingRequiredArgument):
-        return f"❌ 명령어에 빠진 부분이 있어요.\n사용법: `{usage(ctx)}`"
+        return f"❌ 명령어에 빠진 부분이 있어요.\n{usage(ctx)}"
     if isinstance(error, commands.UserInputError):
         wrong = f"`{ctx.current_argument}` 부분을 알아들을 수 없어요." if ctx.current_argument else "명령어를 알아들을 수 없어요."
-        return f"❌ {wrong}\n사용법: `{usage(ctx)}`"
+        return f"❌ {wrong}\n{usage(ctx)}"
     if isinstance(error, (commands.MissingPermissions, commands.NotOwner)):
         return "❌ 이 명령어는 관리자만 쓸 수 있어요."
     if isinstance(error, commands.NoPrivateMessage):
         return "❌ 서버에서만 쓸 수 있는 명령어예요."
     if isinstance(error, commands.CommandInvokeError):
-        return "❌ 처리하다가 오류가 났어요. 다시 해보고, 계속되면 `%건의`로 알려주세요."
+        return "❌ 처리하다가 오류가 났어요. 다시 해보고, 계속되면 `%봇 건의`로 알려주세요."
     return None
 
 

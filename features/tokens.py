@@ -10,7 +10,6 @@ import math
 
 import database as db
 import respond
-from bot import client
 from features import abilities
 from fmt import ALL, Amount, num, resolve_amount
 
@@ -79,7 +78,7 @@ async def purchase_tokens(user_id, count):
         return result
 
 
-@client.command(aliases=["토큰구매", "토큰교환"], usage="[개수 | 최대 | 절반]")
+@commands.command(name="구매", usage="[개수 | 최대 | 절반]")
 async def buy_token(ctx, amount: Amount = 1):
     if amount == ALL:
         return await buy_token_max(ctx)
@@ -155,7 +154,7 @@ async def buy_token(ctx, amount: Amount = 1):
 
     await ctx.send(embed=embed, view=view)
 
-@client.command(aliases=["토큰확인", "토큰"])
+@commands.command(name="확인")
 async def check_token(ctx, member: discord.Member = None):
     respond.delete_soon(ctx.message)
     member = member or ctx.author
@@ -170,12 +169,11 @@ async def check_token(ctx, member: discord.Member = None):
     embed.add_field(name="보유 토큰", value=f"{data['tokens']} 개", inline=True)
     embed.add_field(name="지금 구매 가격", value=f"{num(price)} byte", inline=True)
     embed.set_footer(
-        text=f"살 때마다 2배, 하루에 {num(drop)}배씩 떨어져요 (최소 {BASE_PRICE}) · 토큰은 %리롤에 쓰고 %암시장에서 사고팔 수 있어요"
+        text=f"살 때마다 2배, 하루에 {num(drop)}배씩 떨어져요 (최소 {BASE_PRICE}) · 토큰은 %강화 리롤에 쓰고 %강화 암시장에서 사고팔 수 있어요"
     )
 
     await ctx.send(embed=embed)
 
-@client.command(aliases=["토큰최대교환"])
 async def buy_token_max(ctx):
     respond.delete_soon(ctx.message)
     user_id = ctx.author.id
@@ -250,7 +248,7 @@ async def buy_token_max(ctx):
 
     await ctx.send(embed=embed, view=view)
 
-@client.command(aliases=["토큰추가"], usage="<@유저> <개수>")
+@commands.command(name="토큰추가", usage="<@유저> <개수>")
 @commands.has_permissions(administrator=True)
 async def add_token(ctx, member: discord.Member, amount: int):
     respond.delete_soon(ctx.message)
@@ -300,7 +298,7 @@ async def add_token(ctx, member: discord.Member, amount: int):
 
     await ctx.send(embed=embed, view=view)
 
-@client.command(aliases=["토큰제거"], usage="<@유저> <개수>")
+@commands.command(name="토큰제거", usage="<@유저> <개수>")
 @commands.has_permissions(administrator=True)
 async def remove_token(ctx, member: discord.Member, amount: int):
     respond.delete_soon(ctx.message)
@@ -364,7 +362,7 @@ async def remove_token(ctx, member: discord.Member, amount: int):
 
     await ctx.send(embed=embed, view=view)
 
-@client.command(aliases=["토큰구매가"])
+@commands.command(name="토큰구매가")
 @commands.has_permissions(administrator=True)
 async def set_token_price(ctx, member: discord.Member, new_price: int = 100):
     respond.delete_soon(ctx.message)

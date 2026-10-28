@@ -1,10 +1,10 @@
 """학사정보: 급식 / 시간표 / 학사일정 (나이스 교육정보 API) + 매일 아침 자동 알림
 
-    %급식 [내일 | 날짜]            이 서버 학교의 급식 (날짜: 1024, 10/24, 2026-10-24)
-    %시간표 [학년 반] [내일 | 날짜]  학년 반을 안 쓰면 %내반 으로 정한 반
-    %내반 <학년> <반>               내 반 저장 (%시간표 에 쓰인다)
-    %학사일정 [월]                  이번 달 (또는 그 달) 학사일정
-    %학사설정                       (관리자) 학교 · 알림 채널 · 시간 · 보낼 것 · 기본 반 설정 패널
+    %학교 급식 [내일 | 날짜]            이 서버 학교의 급식 (날짜: 1024, 10/24, 2026-10-24)
+    %학교 시간표 [학년 반] [내일 | 날짜]  학년 반을 안 쓰면 %학교 내반 으로 정한 반
+    %학교 내반 <학년> <반>               내 반 저장 (%학교 시간표 에 쓰인다)
+    %학교 학사일정 [월]                  이번 달 (또는 그 달) 학사일정
+    %관리 학사설정                       (관리자) 학교 · 알림 채널 · 시간 · 보낼 것 · 기본 반 설정 패널
 
 - 서버마다 학교를 정할 수 있다. 안 정하면 미림마이스터고. (나이스에서 이름으로 검색)
 - 알림 채널을 정하면 평일 정해진 시간(기본 08:00)에 급식 / 오늘 일정 / 기본 반 시간표를 보낸다.
@@ -205,7 +205,7 @@ def schedule_text(rows, today=None):
 async def daily_embed(settings, day):
     """자동 알림 embed. 보낼 게 하나도 없으면 None (공휴일 등)"""
     embed = discord.Embed(title=f"📚 {day_text(day)} 학사정보", color=0x2ecc71)
-    embed.set_footer(text=f"{settings['school_name']} · %급식 %시간표 %학사일정")
+    embed.set_footer(text=f"{settings['school_name']} · %학교 급식 %학교 시간표 %학교 학사일정")
     has = False
     if settings["post_meal"]:
         rows = await meals(settings, day)
@@ -232,11 +232,11 @@ async def send_error(ctx, e):
     await ctx.send(f"🥲 {e}")
 
 
-@client.command(aliases=["급식"])
+@commands.command(name="급식", usage="[내일 | 1024 | 10/24]")
 async def school_meal(ctx, *, when: str = None):
     day = parse_day(when)
     if day is None:
-        await ctx.send("사용법: `%급식 [내일 | 1024 | 10/24]`")
+        await ctx.send("사용법: `%학교 급식 [내일 | 1024 | 10/24]`")
         return
     settings = await settings_of(ctx.guild and ctx.guild.id)
     try:
@@ -251,20 +251,20 @@ async def school_meal(ctx, *, when: str = None):
     await ctx.send(embed=embed)
 
 
-@client.command(aliases=["내반"])
+@commands.command(name="내반", usage="<학년> <반>")
 async def my_class(ctx, grade: int = None, class_nm: str = None):
     if ctx.guild is None:
         return
     if grade is None or class_nm is None:
         saved = await db.get_user_class(ctx.guild.id, ctx.author.id)
         now = f"지금: **{saved['grade']}학년 {saved['class_nm']}반**" if saved else "아직 안 정했어요."
-        await ctx.send(f"사용법: `%내반 <학년> <반>` 예) `%내반 2 1` · {now}")
+        await ctx.send(f"사용법: `%학교 내반 <학년> <반>` 예) `%학교 내반 2 1` · {now}")
         return
     await db.set_user_class(ctx.guild.id, ctx.author.id, grade, class_nm)
-    await ctx.send(f"🎓 내 반을 **{grade}학년 {class_nm}반**으로 정했어요. 이제 `%시간표`만 쳐도 돼요.")
+    await ctx.send(f"🎓 내 반을 **{grade}학년 {class_nm}반**으로 정했어요. 이제 `%학교 시간표`만 쳐도 돼요.")
 
 
-@client.command(aliases=["시간표"])
+@commands.command(name="시간표", usage="[학년 반] [내일 | 날짜]")
 async def school_timetable(ctx, *args: str):
     if ctx.guild is None:
         return
@@ -275,7 +275,7 @@ async def school_timetable(ctx, *args: str):
     else:
         saved = await db.get_user_class(ctx.guild.id, ctx.author.id)
         if saved is None:
-            await ctx.send("사용법: `%시간표 <학년> <반> [내일 | 날짜]` · `%내반 2 1`로 내 반을 저장하면 `%시간표`만 쳐도 돼요.")
+            await ctx.send("사용법: `%학교 시간표 <학년> <반> [내일 | 날짜]` · `%학교 내반 2 1`로 내 반을 저장하면 `%학교 시간표`만 쳐도 돼요.")
             return
         grade, class_nm = saved["grade"], saved["class_nm"]
     day = parse_day(" ".join(rest))
@@ -295,12 +295,12 @@ async def school_timetable(ctx, *args: str):
     await ctx.send(embed=embed)
 
 
-@client.command(aliases=["학사일정"])
+@commands.command(name="학사일정")
 async def school_schedule(ctx, month: int = None):
     today = db.today()
     month = month or today.month
     if not 1 <= month <= 12:
-        await ctx.send("사용법: `%학사일정 [월]` 예) `%학사일정 12`")
+        await ctx.send("사용법: `%학교 학사일정 [월]` 예) `%학교 학사일정 12`")
         return
     year = today.year if month >= today.month - 6 else today.year + 1     # 지난 달을 물으면 올해, 한참 전이면 내년 (학년도 넘어가는 1~2월)
     start = datetime.date(year, month, 1)
@@ -360,7 +360,7 @@ class SchoolSettingsView(View):
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.user_id:
-            await respond.reply(interaction, "❌ `%학사설정`을 연 관리자만 쓸 수 있어요.", ephemeral=True)
+            await respond.reply(interaction, "❌ `%관리 학사설정`을 연 관리자만 쓸 수 있어요.", ephemeral=True)
             return False
         return True
 
@@ -492,7 +492,7 @@ class ClassModal(Modal, title="🎓 기본 반 (알림에 넣을 시간표)"):
         await self.panel.refresh()
 
 
-@client.command(aliases=["학사설정"])
+@commands.command(name="학사설정")
 @commands.has_permissions(administrator=True)
 async def school_settings(ctx):
     if ctx.guild is None:

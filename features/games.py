@@ -1,18 +1,17 @@
 """롤 · 발로란트 연동: 친구 랭크 경기 알림 + 다음 판에 byte 걸기
 
-    %롤등록 <닉네임#태그>          내 롤 계정 등록 (본인 것만)
-    %발로등록 <닉네임#태그>        내 발로란트 계정 등록
-    %게임등록해제 <롤 | 발로>
-    %전적 [@유저 | 닉네임#태그] [롤 | 발로]   최근 10판 (일반 · 칼바람 등 전부, 등록 안 한 계정도)
-    %베팅 @친구 [롤 | 발로] <승 | 패> <금액>   친구 다음 랭크 판에 걸기
-    %베팅목록                     지금 걸려 있는 판돈
+    %게임 등록 <롤 | 발로> <닉네임#태그>   내 계정 등록 (본인 것만)
+    %게임 해제 <롤 | 발로>
+    %게임 전적 [@유저 | 닉네임#태그] [롤 | 발로]   최근 10판 (일반 · 칼바람 등 전부, 등록 안 한 계정도)
+    %게임 베팅 @친구 [롤 | 발로] <승 | 패> <금액>   친구 다음 랭크 판에 걸기
+    %게임 베팅목록                     지금 걸려 있는 판돈
 
 - 랭크 게임만 본다: 롤 솔로랭크(420) · 자유랭크(440), 발로란트 경쟁전.
 - POLL_SECONDS 마다 등록한 사람의 최근 랭크 경기를 확인해서, 새로 끝난 판을 소식 채널(digest.py)에 알린다.
   등록할 때의 마지막 경기는 알리지 않는다. (등록 전 경기가 한꺼번에 뜨지 않게)
 - 롤은 라이엇 공식 API (RIOT_API_KEY, 개인용 키), 발로란트는 공식 API 를 개인 키로 못 써서 비공식 HenrikDev API (HENRIK_API_KEY).
   챔피언 · 요원 · 맵 이름은 한국어 (Data Dragon / valorant-api.com) 로 바꿔 보여준다.
-- %전적은 알림과 달리 모든 큐를 API 에서 바로 가져온다. (같은 사람은 RECORD_CACHE 초 동안 저장해 둔 걸 쓴다)
+- %게임 전적은 알림과 달리 모든 큐를 API 에서 바로 가져온다. (같은 사람은 RECORD_CACHE 초 동안 저장해 둔 걸 쓴다)
 베팅 (판돈 나누기)
 - 걸 때 돈이 빠진다. 건 뒤에 '시작한' 친구의 다음 랭크 판으로 정산한다. (이미 하고 있는 판에 결과를 보고 거는 것을 막는다)
 - 자기 판에는 못 건다. (일부러 지는 것을 막는다) 한 친구 · 한 게임에 한 사람당 하나만.
@@ -27,6 +26,7 @@ import time
 from urllib.parse import quote
 
 import discord
+from discord.ext import commands
 import requests
 
 import database as db
@@ -40,8 +40,8 @@ BET_MIN = 100
 BET_MAX = 100_000
 BET_FEE = 0.05
 BET_EXPIRE = datetime.timedelta(hours=24)
-RECORD_COUNT = 10           # %전적: 게임마다 최근 몇 판
-RECORD_CACHE = 60           # %전적: 같은 계정을 다시 보면 이 초 동안은 저장해 둔 결과
+RECORD_COUNT = 10           # %게임 전적: 게임마다 최근 몇 판
+RECORD_CACHE = 60           # %게임 전적: 같은 계정을 다시 보면 이 초 동안은 저장해 둔 결과
 
 GAMES = {"lol": "롤", "val": "발로"}
 GAME_WORDS = {"롤": "lol", "lol": "lol", "리그오브레전드": "lol", "발로": "val", "발로란트": "val", "val": "val", "valorant": "val"}
@@ -233,7 +233,7 @@ _recent = {}        # (game, puuid) → (시각, 결과 목록)
 
 
 async def recent_matches(game, acc):
-    """%전적: 모든 큐의 최근 RECORD_COUNT 판 (최근 것부터)"""
+    """%게임 전적: 모든 큐의 최근 RECORD_COUNT 판 (최근 것부터)"""
     key = (game, acc["puuid"])
     hit = _recent.get(key)
     if hit and time.monotonic() - hit[0] < RECORD_CACHE:
@@ -387,10 +387,12 @@ async def loop():
 
 # ───────────── 명령어 ─────────────
 
-async def register(ctx, game, riot_id):
+@commands.command(name="등록", usage="<롤 | 발로> <닉네임#태그>")
+async def game_register(ctx, game_word: str = None, *, riot_id: str = None):
+    game = GAME_WORDS.get((game_word or "").lower())
     parsed = split_riot_id(riot_id)
-    if parsed is None:
-        await ctx.send(f"사용법: `%{GAMES[game]}등록 닉네임#태그` 예) `%{GAMES[game]}등록 Hide on bush#KR1`")
+    if game is None or parsed is None:
+        await ctx.send("사용법: `%게임 등록 <롤 | 발로> 닉네임#태그` 예) `%게임 등록 롤 Hide on bush#KR1`")
         return
     try:
         async with ctx.typing():
@@ -409,25 +411,15 @@ async def register(ctx, game, riot_id):
     await db.set_game_account(ctx.author.id, game, acc["puuid"], acc["riot_id"], acc["region"], last)
     await ctx.send(
         f"🎮 **{GAMES[game]}** 계정 **{acc['riot_id']}** 등록 완료! 이제 랭크 게임이 끝나면 소식 채널에 결과가 떠요.\n"
-        f"친구들이 내 다음 판에 `%베팅`할 수 있어요. 그만하려면 `%게임등록해제 {GAMES[game]}`"
+        f"친구들이 내 다음 판에 `%게임 베팅`할 수 있어요. 그만하려면 `%게임 해제 {GAMES[game]}`"
     )
 
 
-@client.command(aliases=["롤등록"])
-async def lol_register(ctx, *, riot_id: str = None):
-    await register(ctx, "lol", riot_id)
-
-
-@client.command(aliases=["발로등록", "발로란트등록"])
-async def val_register(ctx, *, riot_id: str = None):
-    await register(ctx, "val", riot_id)
-
-
-@client.command(aliases=["게임등록해제"])
+@commands.command(name="해제")
 async def game_unregister(ctx, game_word: str = None):
     game = GAME_WORDS.get((game_word or "").lower())
     if game is None:
-        await ctx.send("사용법: `%게임등록해제 <롤 | 발로>`")
+        await ctx.send("사용법: `%게임 해제 <롤 | 발로>`")
         return
     if await db.delete_game_account(ctx.author.id, game):
         await ctx.send(f"🗑️ {GAMES[game]} 계정 등록을 해제했어요.")
@@ -436,7 +428,7 @@ async def game_unregister(ctx, game_word: str = None):
 
 
 def record_field(game, matches):
-    """%전적 한 게임 칸: (제목, 내용)"""
+    """%게임 전적 한 게임 칸: (제목, 내용)"""
     icon = {"win": "🟦", "lose": "🟥", "draw": "⬜", "remake": "⬜"}
     wins = sum(m["result"] == "win" for m in matches)
     losses = sum(m["result"] == "lose" for m in matches)
@@ -457,9 +449,9 @@ def record_field(game, matches):
     return title, "\n".join(lines + [footer])
 
 
-@client.command(aliases=["전적", "최근전적"], usage="[@유저 | 닉네임#태그] [롤 | 발로]")
+@commands.command(name="전적", usage="[@유저 | 닉네임#태그] [롤 | 발로]")
 async def game_record(ctx, *, query: str = None):
-    usage = "사용법: `%전적 [@유저 | 닉네임#태그] [롤 | 발로]` 예) `%전적` `%전적 @철수 롤` `%전적 Hide on bush#KR1`"
+    usage = "사용법: `%게임 전적 [@유저 | 닉네임#태그] [롤 | 발로]` 예) `%게임 전적` `%게임 전적 @철수 롤` `%게임 전적 Hide on bush#KR1`"
     words = (query or "").split()
     game = None
     for i in (-1, 0):           # 게임은 앞이나 뒤에
@@ -483,7 +475,7 @@ async def game_record(ctx, *, query: str = None):
                 if not accounts:
                     which = GAMES[game] if game else "롤 · 발로"
                     await ctx.send(f"❌ {member.display_name}님은 {which} 계정을 등록하지 않았어요. "
-                                   f"`%전적 닉네임#태그`로 등록 없이도 볼 수 있어요.")
+                                   f"`%게임 전적 닉네임#태그`로 등록 없이도 볼 수 있어요.")
                     return
             elif (parsed := split_riot_id(rest)) is not None:
                 for g in wanted:
@@ -522,9 +514,9 @@ async def game_record(ctx, *, query: str = None):
     await ctx.send(embed=embed)
 
 
-@client.command(aliases=["베팅"])
+@commands.command(name="베팅", usage="<@친구> [롤 | 발로] <승 | 패> <금액>")
 async def game_bet(ctx, member: discord.Member = None, *args: str):
-    usage = "사용법: `%베팅 @친구 [롤 | 발로] <승 | 패> <금액>` 예) `%베팅 @철수 롤 패 5000`"
+    usage = "사용법: `%게임 베팅 @친구 [롤 | 발로] <승 | 패> <금액>` 예) `%게임 베팅 @철수 롤 패 5000`"
     if ctx.guild is None or member is None:
         await ctx.send(usage)
         return
@@ -575,14 +567,14 @@ async def game_bet(ctx, member: discord.Member = None, *args: str):
     )
 
 
-@client.command(aliases=["베팅목록"])
+@commands.command(name="베팅목록")
 async def game_bet_list(ctx):
     bets = await db.open_bets()
     if ctx.guild is not None:
         bets = [b for b in bets if ctx.guild.get_member(int(b["target_id"]))]
     embed = discord.Embed(title="🎲 지금 걸려 있는 판", color=0xf39c12)
     if not bets:
-        embed.description = "걸린 판이 없어요. `%베팅 @친구 롤 승 1000`"
+        embed.description = "걸린 판이 없어요. `%게임 베팅 @친구 롤 승 1000`"
         await ctx.send(embed=embed)
         return
     groups = {}

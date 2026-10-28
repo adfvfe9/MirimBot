@@ -1,6 +1,6 @@
 """암시장: 유저끼리 강화 아이템(능력 슬롯 포함)을 사고판다.
 
-    %암시장     목록 보기 (페이지) / 구매 / 판매 등록 / 내 판매 관리
+    %강화 암시장     목록 보기 (페이지) / 구매 / 판매 등록 / 내 판매 관리
 
 - 판매 등록하면 아이템은 내 목록에서 빠져 암시장에 맡겨진다. (그동안 강화 / 판매 / 능력 효과 X)
   팔리면 구매자에게 가고, 등록을 취소하거나 24시간이 지나면 나에게 돌아온다.
@@ -14,11 +14,11 @@
 import datetime
 
 import discord
+from discord.ext import commands
 from discord.ui import Button, Modal, Select, TextInput, View
 
 import database as db
 import respond
-from bot import client
 from features import abilities, enhance, tokens as token_shop
 from fmt import debt_line, num
 
@@ -207,7 +207,7 @@ async def buy(buyer_id, listing_id):
         if money < price:
             return f"💸 돈이 부족합니다. (필요: {num(price)} byte / 보유: {num(money)} byte)"
         if not is_token(listing) and len(await db.get_enhance_items(buyer_id, conn)) >= enhance.MAX_ITEMS:
-            return f"❌ 강화 아이템은 최대 {enhance.MAX_ITEMS}개까지 가질 수 있어요. (`%강화판매`로 정리)"
+            return f"❌ 강화 아이템은 최대 {enhance.MAX_ITEMS}개까지 가질 수 있어요. (`%강화 판매`로 정리)"
 
         await db.delete_listing(listing_id, conn)
         fee = price * FEE
@@ -241,7 +241,7 @@ async def cancel(user_id, listing_id):
 # ───────────── 화면 ─────────────
 
 class MarketView(View):
-    """%암시장 메인 화면: 페이지 넘기기, 물건 고르기, 구매, 판매 등록, 내 판매"""
+    """%강화 암시장 메인 화면: 페이지 넘기기, 물건 고르기, 구매, 판매 등록, 내 판매"""
 
     def __init__(self, user_id):
         super().__init__(timeout=300)
@@ -254,7 +254,7 @@ class MarketView(View):
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.user_id:
-            await respond.reply(interaction, "❌ 명령어를 실행한 사람만 쓸 수 있어요. `%암시장`으로 직접 열어보세요!", ephemeral=True)
+            await respond.reply(interaction, "❌ 명령어를 실행한 사람만 쓸 수 있어요. `%강화 암시장`으로 직접 열어보세요!", ephemeral=True)
             return False
         return True
 
@@ -366,7 +366,7 @@ class MarketView(View):
             l = result["listing"]
             self.notice = (
                 f"🛒 **{result['name']}**을(를) {num(l['price'])} byte에 샀어요! (남은 돈 {num(result['balance'])} byte)"
-                + ("" if is_token(l) else f"\n`%강화능력설정 {result['name'].rsplit(' +', 1)[0]}`으로 능력을 확인하세요.")
+                + ("" if is_token(l) else f"\n`%강화 능력설정 {result['name'].rsplit(' +', 1)[0]}`으로 능력을 확인하세요.")
             )
             self.selected = None
         await self.refresh(interaction)
@@ -543,7 +543,7 @@ class MyListingsView(View):
         await self.market.refresh()
 
 
-@client.command(aliases=["암시장"])
+@commands.command(name="암시장")
 async def black_market(ctx):
     view = MarketView(ctx.author.id)
     await view.load()

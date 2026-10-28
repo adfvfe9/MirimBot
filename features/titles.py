@@ -1,9 +1,9 @@
-"""칭호: 조건을 채우면 얻는 업적. 하나를 장착하면 %자산 / %자산랭킹 이름 앞에 붙는다.
+"""칭호: 조건을 채우면 얻는 업적. 하나를 장착하면 %자산 / %자산 랭킹 이름 앞에 붙는다.
 
     %칭호 [@유저]          칭호 목록과 진행도 (분류 고르기 / 보유한 것만 보기 버튼)
-    %칭호장착 <칭호 이름>   가진 칭호 하나 장착
-    %칭호해제              장착 해제
-    %칭호랭킹              가진 칭호 수 순위
+    %칭호 장착 <칭호 이름>   가진 칭호 하나 장착
+    %칭호 해제              장착 해제
+    %칭호 랭킹              가진 칭호 수 순위
 
 - 한 번 얻은 칭호는 돈이 줄거나 파산해도 남는다.
 - 진행도는 돈 기록(money_log, v1.2.8 부터)과 지금 상태로 계산한다. 그래서 v1.2.8 이전 기록은 세지 않는다.
@@ -12,11 +12,11 @@
 import asyncio
 
 import discord
+from discord.ext import commands
 from discord.ui import Button, Select, View
 
 import database as db
 import respond
-from bot import client
 from fmt import num
 
 CATEGORIES = {
@@ -179,7 +179,7 @@ def build_embed(member, stats, owned, category, owned_only, new=()):
     if len(blocks) == 1:
         blocks.append("아직 얻은 칭호가 없어요." if owned_only else "칭호가 없어요.")
     embed.description = "\n\n".join(blocks)[:4096]
-    embed.set_footer(text="🎖️ 장착 중 · ✅ 보유 · ⬜ 진행 중 | %칭호장착 <이름> · %칭호해제 · 기록은 v1.2.8부터 셉니다")
+    embed.set_footer(text="🎖️ 장착 중 · ✅ 보유 · ⬜ 진행 중 | %칭호 장착 <이름> · %칭호 해제 · 기록은 v1.2.8부터 셉니다")
     return embed
 
 
@@ -227,7 +227,7 @@ class TitleView(View):
 
 # ───────────── 명령어 ─────────────
 
-@client.command(aliases=["칭호"])
+@commands.command(name="보기")
 async def titles_command(ctx, member: discord.Member = None):
     member = member or ctx.author
     stats, owned, new = await check(member.id)
@@ -245,10 +245,10 @@ def find_title(name):
     return None
 
 
-@client.command(aliases=["칭호장착"])
+@commands.command(name="장착", usage="<칭호>")
 async def title_equip(ctx, *, name: str = None):
     if not name:
-        await ctx.send("사용법: `%칭호장착 <칭호 이름>` 예) `%칭호장착 개미` (`%칭호`에서 가진 칭호 확인)")
+        await ctx.send("사용법: `%칭호 장착 <칭호 이름>` 예) `%칭호 장착 개미` (`%칭호`에서 가진 칭호 확인)")
         return
     t = find_title(name)
     if t is None:
@@ -259,16 +259,16 @@ async def title_equip(ctx, *, name: str = None):
         await ctx.send(f"❌ 아직 {t['emoji']} **{t['name']}** 칭호가 없어요. ({t['desc']})")
         return
     await db.equip_title(ctx.author.id, t["key"])
-    await ctx.send(f"🎖️ {t['emoji']} **{t['name']}** 칭호를 장착했어요! `%자산`, `%자산랭킹`에 표시돼요.")
+    await ctx.send(f"🎖️ {t['emoji']} **{t['name']}** 칭호를 장착했어요! `%자산`, `%자산 랭킹`에 표시돼요.")
 
 
-@client.command(aliases=["칭호해제"])
+@commands.command(name="해제")
 async def title_unequip(ctx):
     await db.equip_title(ctx.author.id, None)
     await ctx.send("칭호를 해제했어요.")
 
 
-@client.command(aliases=["칭호랭킹"])
+@commands.command(name="랭킹")
 async def title_rank(ctx):
     counts = sorted((await db.title_counts()).items(), key=lambda kv: -kv[1])[:10]
     if not counts:

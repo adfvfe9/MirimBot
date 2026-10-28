@@ -1,11 +1,11 @@
 """TTS: 채팅 채널의 메시지를 통화방에서 읽어준다
 
-    %읽어                         호출한 사람이 있는 통화방에 들어가서, 명령어를 쓴 채널의 메시지를 읽어준다
+    %읽기 시작                         호출한 사람이 있는 통화방에 들어가서, 명령어를 쓴 채널의 메시지를 읽어준다
                                   (다른 채널에서 다시 쓰면 그 채널로 바뀐다)
-    %나가                         통화방에서 나간다 (TTS · 음악 둘 다 끝) (%나가기)
-    %줄임말설정 <글자> <읽을말>   이 서버에서 그 글자를 어떻게 읽을지 정한다 (읽을말이 - 면 안 읽는다)
-    %줄임말설정 삭제 <글자>
-    %줄임말                       이 서버의 줄임말 목록
+    %읽기 나가기                         통화방에서 나간다 (TTS · 음악 둘 다 끝) (%읽기 나가기)
+    %읽기 줄임말설정 <글자> <읽을말>   이 서버에서 그 글자를 어떻게 읽을지 정한다 (읽을말이 - 면 안 읽는다)
+    %읽기 줄임말설정 삭제 <글자>
+    %읽기 줄임말                       이 서버의 줄임말 목록
 
 - 목소리는 Edge TTS (마이크로소프트, 무료) 의 한국어 목소리. mp3 를 받아서 ffmpeg 로 바꾼다.
 - 음악(music.py) 과 같이 voice.py 의 Mixer 로 내보내서 노래를 들으면서 TTS 도 들린다.
@@ -19,6 +19,7 @@ import io
 import re
 
 import discord
+from discord.ext import commands
 import edge_tts
 
 import database as db
@@ -142,7 +143,7 @@ voice.alone_hooks.append(on_alone)
 
 # ───────────── 명령어 ─────────────
 
-@client.command(aliases=["읽어", "tts"])
+@commands.command(name="시작")
 async def tts_start(ctx):
     if ctx.guild is None:
         return
@@ -161,17 +162,17 @@ async def tts_start(ctx):
     if reader is None:
         readers[ctx.guild.id] = Reader(ctx.guild, ctx.channel)
     elif reader.channel == ctx.channel:
-        await ctx.send(f"📢 이미 이 채널을 **{target.name}**에서 읽고 있어요. 그만하려면 `%나가`")
+        await ctx.send(f"📢 이미 이 채널을 **{target.name}**에서 읽고 있어요. 그만하려면 `%읽기 나가기`")
         return
     else:
         reader.channel = ctx.channel
     await ctx.send(
-        f"📢 이제 이 채널의 메시지를 **{target.name}**에서 읽어줄게요! 노래(`%재생`)도 같이 들을 수 있어요. 그만하려면 `%나가`\n"
-        f"-# {MAX_CHARS}자가 넘는 글은 안 읽고 {TOO_LONG_REACTION} 를 달아요 · 읽는 법 바꾸기: `%줄임말설정`"
+        f"📢 이제 이 채널의 메시지를 **{target.name}**에서 읽어줄게요! 노래(`%음악 재생`)도 같이 들을 수 있어요. 그만하려면 `%읽기 나가기`\n"
+        f"-# {MAX_CHARS}자가 넘는 글은 안 읽고 {TOO_LONG_REACTION} 를 달아요 · 읽는 법 바꾸기: `%읽기 줄임말설정`"
     )
 
 
-@client.command(aliases=["나가", "나가기", "leave"])
+@commands.command(name="나가기")
 async def voice_leave(ctx):
     if ctx.guild is None:
         return
@@ -186,12 +187,12 @@ async def voice_leave(ctx):
 
 
 ABBREV_USAGE = (
-    "`%줄임말설정 <글자> <읽을말>` 예) `%줄임말설정 ㅇㅈ 인정` · `%줄임말설정 ㅋ 크`\n"
-    f"`%줄임말설정 <글자> {SILENT}` 그 글자는 안 읽기 · `%줄임말설정 삭제 <글자>` · `%줄임말` 목록"
+    "`%읽기 줄임말설정 <글자> <읽을말>` 예) `%읽기 줄임말설정 ㅇㅈ 인정` · `%읽기 줄임말설정 ㅋ 크`\n"
+    f"`%읽기 줄임말설정 <글자> {SILENT}` 그 글자는 안 읽기 · `%읽기 줄임말설정 삭제 <글자>` · `%읽기 줄임말` 목록"
 )
 
 
-@client.command(aliases=["줄임말설정"])
+@commands.command(name="줄임말설정", usage="<글자> <읽을말 | ->")
 async def tts_abbrev_set(ctx, word: str = None, *, reading: str = None):
     if ctx.guild is None:
         return
@@ -204,7 +205,7 @@ async def tts_abbrev_set(ctx, word: str = None, *, reading: str = None):
             abbrev_cache.pop(ctx.guild.id, None)
             await ctx.send(f"🗑️ 줄임말 삭제: `{target}`")
         else:
-            await ctx.send(f"❌ 그런 줄임말이 없어요: `{target}` (`%줄임말`로 목록 보기)")
+            await ctx.send(f"❌ 그런 줄임말이 없어요: `{target}` (`%읽기 줄임말`로 목록 보기)")
         return
 
     word = word.lower()
@@ -214,7 +215,7 @@ async def tts_abbrev_set(ctx, word: str = None, *, reading: str = None):
         return
     existing = {r["word"] for r in await db.tts_abbrevs(ctx.guild.id)}
     if word not in existing and len(existing) >= ABBREV_MAX:
-        await ctx.send(f"❌ 줄임말은 서버마다 {ABBREV_MAX}개까지예요. `%줄임말설정 삭제 <글자>`로 지워주세요.")
+        await ctx.send(f"❌ 줄임말은 서버마다 {ABBREV_MAX}개까지예요. `%읽기 줄임말설정 삭제 <글자>`로 지워주세요.")
         return
     await db.set_tts_abbrev(ctx.guild.id, word, "" if reading == SILENT else reading, ctx.author.id)
     abbrev_cache.pop(ctx.guild.id, None)
@@ -224,7 +225,12 @@ async def tts_abbrev_set(ctx, word: str = None, *, reading: str = None):
         await ctx.send(f"✅ 줄임말 저장: `{word}` → **{reading}**")
 
 
-@client.command(aliases=["줄임말", "줄임말목록"])
+@commands.command(name="줄임말삭제", usage="<글자>")
+async def tts_abbrev_delete(ctx, *, word: str = None):
+    await tts_abbrev_set(ctx, "삭제", reading=word)
+
+
+@commands.command(name="줄임말")
 async def tts_abbrev_list(ctx):
     if ctx.guild is None:
         return

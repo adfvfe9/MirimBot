@@ -1,12 +1,12 @@
 """음악: 유튜브 노래를 통화방에서 재생한다
 
-    %재생 <유튜브 링크 | 제목>   호출한 사람이 있는 통화방에 들어가서 재생 (재생 중이면 대기열에 추가)
-    %스킵                       지금 곡 넘기기
-    %일시정지 / %다시재생
-    %정지                       재생을 멈추고 대기열 비우기 (TTS 를 안 쓰고 있으면 나간다)
-    %대기열                     지금 곡과 다음 곡들
-    %지금곡                     지금 곡 정보 + 버튼 (⏯️ ⏭️ ⏹️)
-    %볼륨 [0~100]
+    %음악 재생 <유튜브 링크 | 제목>   호출한 사람이 있는 통화방에 들어가서 재생 (재생 중이면 대기열에 추가)
+    %음악 스킵                       지금 곡 넘기기
+    %음악 일시정지 / %음악 다시재생
+    %음악 정지                       재생을 멈추고 대기열 비우기 (TTS 를 안 쓰고 있으면 나간다)
+    %음악 대기열                     지금 곡과 다음 곡들
+    %음악 지금곡                     지금 곡 정보 + 버튼 (⏯️ ⏭️ ⏹️)
+    %음악 볼륨 [0~100]
 
 - 노래 찾기 / 주소 얻기는 yt-dlp, 소리 변환은 ffmpeg 가 한다.
   ffmpeg 는 서버에 설치돼 있지 않아도 되게 pip 패키지(imageio-ffmpeg)에 들어 있는 것을 쓴다.
@@ -14,7 +14,7 @@
 - 유튜브 재생 주소는 몇 시간 뒤 만료돼서, 대기열에는 영상 주소만 넣고 재생할 때 다시 받아온다.
 - 조작(스킵 / 정지 등)은 봇과 같은 통화방에 있는 사람만 할 수 있다.
 - 대기열이 끝나고 5분 동안 아무것도 안 틀거나 (TTS 를 쓰는 중이면 남는다), 통화방에 봇만 남으면 나간다.
-- 소리는 voice.py 의 Mixer 로 내보내서 TTS(tts.py) 와 동시에 들린다. 통화방 나가기는 %나가 (tts.py)
+- 소리는 voice.py 의 Mixer 로 내보내서 TTS(tts.py) 와 동시에 들린다. 통화방 나가기는 %읽기 나가기 (tts.py)
 """
 import asyncio
 import functools
@@ -22,11 +22,11 @@ import shutil
 from collections import deque
 
 import discord
+from discord.ext import commands
 import yt_dlp
 from discord.ui import Button, View
 
 import respond
-from bot import client
 from features import voice
 
 QUEUE_MAX = 50
@@ -224,7 +224,7 @@ def now_playing_embed(player):
     embed.add_field(name="대기열", value=f"{len(player.queue)}곡", inline=True)
     if t.thumbnail:
         embed.set_thumbnail(url=t.thumbnail)
-    embed.set_footer(text=f"볼륨 {int(player.volume * 100)}% · %대기열 · %스킵 · %정지")
+    embed.set_footer(text=f"볼륨 {int(player.volume * 100)}% · %음악 대기열 · %음악 스킵 · %음악 정지")
     return embed
 
 
@@ -274,7 +274,7 @@ async def check_control(ctx):
         return None
     player = get_player(ctx.guild)
     if player.voice is None:
-        await ctx.send("🎧 지금 재생 중이 아니에요. `%재생 <제목>`으로 틀어보세요!")
+        await ctx.send("🎧 지금 재생 중이 아니에요. `%음악 재생 <제목>`으로 틀어보세요!")
         return None
     if not voice.same_channel(ctx.author, ctx.guild):
         await ctx.send("🎧 봇과 같은 통화방에 있어야 조작할 수 있어요.")
@@ -282,12 +282,12 @@ async def check_control(ctx):
     return player
 
 
-@client.command(aliases=["재생", "play", "p"])
+@commands.command(name="재생", usage="<노래 제목 | 유튜브 링크>")
 async def music_play(ctx, *, query: str = None):
     if ctx.guild is None:
         return
     if not query:
-        await ctx.send("사용법: `%재생 <유튜브 링크 | 제목>` 예) `%재생 아이유 밤편지`")
+        await ctx.send("사용법: `%음악 재생 <유튜브 링크 | 제목>` 예) `%음악 재생 아이유 밤편지`")
         return
     if ctx.author.voice is None or ctx.author.voice.channel is None:
         await ctx.send("🎧 먼저 통화방에 들어가 주세요! 들어가 있는 통화방으로 봇이 따라가요.")
@@ -322,7 +322,7 @@ async def music_play(ctx, *, query: str = None):
         await player.play_next()
 
 
-@client.command(aliases=["스킵", "skip"])
+@commands.command(name="스킵")
 async def music_skip(ctx):
     player = await check_control(ctx)
     if player is None:
@@ -334,15 +334,15 @@ async def music_skip(ctx):
     player.skip()
 
 
-@client.command(aliases=["일시정지", "pause"])
+@commands.command(name="일시정지")
 async def music_pause(ctx):
     player = await check_control(ctx)
     if player and player.current and not player.paused:
         player.pause()
-        await ctx.send("⏸️ 일시정지했어요. `%다시재생`으로 이어서 들을 수 있어요.")
+        await ctx.send("⏸️ 일시정지했어요. `%음악 다시재생`으로 이어서 들을 수 있어요.")
 
 
-@client.command(aliases=["다시재생", "resume"])
+@commands.command(name="다시재생")
 async def music_resume(ctx):
     player = await check_control(ctx)
     if player and player.current and player.paused:
@@ -350,25 +350,25 @@ async def music_resume(ctx):
         await ctx.send("▶️ 다시 재생해요.")
 
 
-@client.command(aliases=["정지", "stop"])
+@commands.command(name="정지")
 async def music_stop(ctx):
     player = await check_control(ctx)
     if player is None:
         return
     await player.stop()
     if player.voice:
-        await ctx.send("⏹️ 노래를 멈추고 대기열을 비웠어요. (TTS 는 계속 읽어요. 나가려면 `%나가`)")
+        await ctx.send("⏹️ 노래를 멈추고 대기열을 비웠어요. (TTS 는 계속 읽어요. 나가려면 `%읽기 나가기`)")
     else:
         await ctx.send("⏹️ 재생을 멈추고 나왔어요.")
 
 
-@client.command(aliases=["대기열", "queue", "q"])
+@commands.command(name="대기열")
 async def music_queue(ctx):
     if ctx.guild is None:
         return
     player = get_player(ctx.guild)
     if player.current is None and not player.queue:
-        await ctx.send("📭 대기열이 비어 있어요. `%재생 <제목>`으로 추가해보세요!")
+        await ctx.send("📭 대기열이 비어 있어요. `%음악 재생 <제목>`으로 추가해보세요!")
         return
     embed = discord.Embed(title="🎶 대기열", color=discord.Color.red())
     if player.current:
@@ -385,7 +385,7 @@ async def music_queue(ctx):
     await ctx.send(embed=embed)
 
 
-@client.command(aliases=["지금곡", "np"])
+@commands.command(name="지금곡")
 async def music_now(ctx):
     if ctx.guild is None:
         return
@@ -393,13 +393,13 @@ async def music_now(ctx):
     await ctx.send(embed=now_playing_embed(player), view=ControlView(player) if player.current else None)
 
 
-@client.command(aliases=["볼륨", "volume"])
+@commands.command(name="볼륨")
 async def music_volume(ctx, value: int = None):
     player = await check_control(ctx)
     if player is None:
         return
     if value is None:
-        await ctx.send(f"🔊 지금 볼륨 {int(player.volume * 100)}%  (`%볼륨 0~100`)")
+        await ctx.send(f"🔊 지금 볼륨 {int(player.volume * 100)}%  (`%음악 볼륨 0~100`)")
         return
     if not 0 <= value <= 100:
         await ctx.send("❌ 0~100 사이로 입력해주세요.")

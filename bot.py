@@ -22,7 +22,8 @@ intents.messages = True
 intents.members = True # 멤버 정보 접근을 위해 필요
 intents.message_content = True  # 필수! 안 켜면 on_message나 command 둘 다 안 먹음
 
-client = commands.Bot(command_prefix='%', intents=intents)
+# help_command=None: discord.py 기본 영어 도움말(%help) 대신 %봇 도움말 을 쓴다
+client = commands.Bot(command_prefix='%', intents=intents, help_command=None)
 
 
 def get_token() -> str:

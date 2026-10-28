@@ -3,11 +3,12 @@
     python main.py
 
 봇 객체는 bot.py, 명령어는 features/ 폴더에 기능별로 나뉘어 있다.
+  features/groups.py       %명령어 묶음: %주식 구매 처럼 상위 명령어 아래 하위 명령어 (예전 이름 %주식구매 도 된다)
+  features/slash.py        슬래시(/) 명령어: /주식 구매 = %주식 구매, /관리 (관리자)
   features/general.py      시간, 패치노트, 도움말, 청소 등
-  features/slash.py        슬래시(/) 명령어: 같은 이름의 %명령어를 불러 쓴다, /관리 (관리자)
   features/school.py       급식, 시간표, 학사일정, 평일 아침 학사정보 알림 (나이스 API)
-  features/health.py       %핑 (디스코드 / DB / 봇 멈춤 시간 재기)
-  features/audit.py        모든 명령어 / 버튼 기록, %로그 (관리자)
+  features/health.py       %봇 핑 (디스코드 / DB / 봇 멈춤 시간 재기)
+  features/audit.py        모든 명령어 / 버튼 기록, %관리 로그 (관리자)
   features/errors.py       잘못 쓴 명령어에 사용법 안내, 시간 지난 버튼 안내
   features/economy.py      머니, 송금, 머니랭킹, 위로금, 기초수급, 파산
   features/enhance.py      강화
@@ -26,11 +27,11 @@
   features/quiz.py         선착순 퀴즈 (1~2시간마다 퀴즈 채널에, 문제: quiz_math.py / quiz_gen.py / quiz_bank.py)
   features/bank.py         은행 (대출/상환/적금/출금)
   features/tokens.py       토큰
-  features/roleshop.py     역할 상점 (%역할상점, 관리자 %상점관리)
+  features/roleshop.py     역할 상점 (%역할 상점, 관리자 %관리 상점관리)
   features/crypto.py       비트코인 (토큰으로 거래)
   features/mining.py       코인 채굴 (1시간마다 블록)
-  features/music.py        음악 (%재생, 유튜브 → 통화방)
-  features/tts.py          TTS (%읽어, 채팅을 통화방에서 읽기 · %나가)
+  features/music.py        음악 (%음악 재생, 유튜브 → 통화방)
+  features/tts.py          TTS (%읽기 시작, 채팅을 통화방에서 읽기 · %읽기 나가기)
   features/voice.py        통화방 들어가기 / 나가기, 음악과 TTS 소리 섞기
   features/moderation.py   경고
   features/suggestions.py  건의
@@ -62,6 +63,7 @@ from features import (  # noqa: F401
     gamble,
     games,
     general,
+    groups,
     health,
     market,
     mining,
@@ -133,6 +135,9 @@ async def on_message(message):
 
     # 개인 메시지로 전송
     # await message.author.send(f"{message.author} | {message.author.mention} 테스트")
+
+    # 예전 이름은 새 모양으로 바꿔서 읽는다. %주식구매 JAVA 10 → %주식 구매 JAVA 10 (features/groups.py)
+    message.content = groups.new_form(message.content)
 
     # 반드시 명령어 처리를 호출해줘야 commands.Bot의 @client.command가 작동함!
     await client.process_commands(message)

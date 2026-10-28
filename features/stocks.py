@@ -149,7 +149,7 @@ async def switch_market():
 
 
 async def pass_market_minute():
-    """%주식가속용: 시장 상태 타이머를 1분 앞당긴다. (1분이 지난 것처럼) 상승장/하락장이 바뀌었으면 True.
+    """%관리 주식가속용: 시장 상태 타이머를 1분 앞당긴다. (1분이 지난 것처럼) 상승장/하락장이 바뀌었으면 True.
     초상승장/주식부도가 끝나는 처리는 get_effective_market_state 가 한다."""
     global market_ends_at, override_end
     one_minute = datetime.timedelta(minutes=1)
@@ -168,7 +168,7 @@ async def market_cycle():
     print(f"[📢 시장 전환 대기] {max(0, int((market_ends_at - db.now()).total_seconds())) // 60}분 후 상태 변경 예정")
 
     while True:
-        # 종료 시각이 될 때까지 기다린다. %주식가속이 종료 시각을 당길 수 있어서 1분마다 다시 확인한다.
+        # 종료 시각이 될 때까지 기다린다. %관리 주식가속이 종료 시각을 당길 수 있어서 1분마다 다시 확인한다.
         remaining = (market_ends_at - db.now()).total_seconds()
         if remaining > 0:
             await asyncio.sleep(min(remaining, 60))
@@ -193,13 +193,13 @@ async def load_stock_prices():
     last_update_time = datetime.datetime.now(datetime.timezone.utc)
 
 # ───────────── 주식 가격 갱신 ─────────────
-# 1분 자동 갱신과 %주식가속이 동시에 가격을 바꾸지 않게 막는 잠금
+# 1분 자동 갱신과 %관리 주식가속이 동시에 가격을 바꾸지 않게 막는 잠금
 update_lock = asyncio.Lock()
 
 
 async def update_stocks(history=None, positions=None):
     """가격을 1분만큼 갱신한다. {"delisted": 상장폐지된 종목들, "liquidated": 강제청산 개수}
-    %주식가속은 매분 DB 를 다녀오면 느리므로 두 가지를 넘긴다.
+    %관리 주식가속은 매분 DB 를 다녀오면 느리므로 두 가지를 넘긴다.
       history:   리스트를 주면 가격을 DB 에 저장하지 않고 [(종목, 가격), ...] 으로 여기에 쌓는다. (끝나고 한 번에 저장)
       positions: 레버리지 포지션 목록을 주면 DB 에서 다시 읽지 않고 이걸로 강제청산을 검사한다."""
     global last_update_time
@@ -255,7 +255,7 @@ async def update_stocks(history=None, positions=None):
 
 
 async def delist(name):
-    """상장폐지: 기준가로 되돌리고, 모든 유저의 해당 주식을 지우고(다음 %주식확인 때 알림), 레버리지는 가격 0 으로 정산."""
+    """상장폐지: 기준가로 되돌리고, 모든 유저의 해당 주식을 지우고(다음 %주식 확인 때 알림), 레버리지는 가격 0 으로 정산."""
     stock_prices[name]["current"] = float(stock_info[name]["base"])
     print(f"[📉 상장폐지] {name} → 기본가로 초기화됨")
     await db.delist_stock(name)
@@ -314,7 +314,7 @@ async def auto_update_stocks():
             await update_stocks()
     except Exception as e:
         print(f"[주식 갱신 오류] {type(e).__name__}: {e}")
-    # ₿ 비트코인도 같은 1분 루프에서 갱신 (가속은 %코인가속 으로 따로)
+    # ₿ 비트코인도 같은 1분 루프에서 갱신 (가속은 %관리 코인가속 으로 따로)
     try:
         async with crypto().lock:
             await crypto().tick()
@@ -343,7 +343,7 @@ async def before_loop():
     await client.wait_until_ready()
 
 
-# ───────────── %주식가속 (관리자, 테스트용) ─────────────
+# ───────────── %관리 주식가속 (관리자, 테스트용) ─────────────
 ACCEL_MAX_MINUTES = 1440   # 가격 기록이 종목당 1440개(24시간)까지라 그 이상은 의미가 없다
 ACCEL_PROGRESS_SECONDS = 2  # 진행 상황 메시지를 고치는 간격 (너무 자주 고치면 디스코드가 막는다)
 
@@ -355,13 +355,13 @@ def accel_progress(done, minutes, elapsed):
     return f"⏩ 주식 가속 중 {bar} {done * 100 // minutes}% ({done}/{minutes}분) · {int(elapsed)}초 지남"
 
 
-@client.command(aliases=["주식가속"])
+@commands.command(name="주식가속")
 @commands.has_permissions(administrator=True)
 async def accelerate_stocks(ctx, minutes: int = 60):
     """minutes 분이 지난 것처럼 1분 처리를 minutes 번 바로 돌린다.
     매분: 시장 상태 타이머(상승장/하락장, 초상승장/주식부도) 1분 당기기 → 뉴스 타이머 → 가격 갱신.
     상장폐지, 강제청산도 실제로 처리된다. 단타 수수료(30분)는 실제 시각 그대로다.
-    가속 중에 나온 뉴스는 DB 에 저장되고(%뉴스) 효과도 걸리지만, 뉴스 채널에 도배되지 않게 채널에는 올리지 않는다."""
+    가속 중에 나온 뉴스는 DB 에 저장되고(%주식 뉴스) 효과도 걸리지만, 뉴스 채널에 도배되지 않게 채널에는 올리지 않는다."""
     respond.delete_soon(ctx.message)
     if not 1 <= minutes <= ACCEL_MAX_MINUTES:
         await ctx.send(f"❌ 1~{ACCEL_MAX_MINUTES}분 사이로 입력해주세요.")
@@ -422,7 +422,7 @@ async def accelerate_stocks(ctx, minutes: int = 60):
         title=f"⏩ 주식 {minutes}분 가속 완료",
         description=(
             f"**{minutes}분**({num(minutes / 60)}시간)이 지난 것처럼 처리했어요. (실제로 걸린 시간 {int(clock() - started)}초)\n"
-            "새 가격은 `%주식`, 흐름은 `%주가그래프`로 확인하세요."
+            "새 가격은 `%주식`, 흐름은 `%주식 그래프`로 확인하세요."
         ),
         color=discord.Color.blue()
     )
@@ -450,11 +450,11 @@ async def accelerate_stocks(ctx, minutes: int = 60):
         embed.add_field(name=f"📰 가속 중 나온 뉴스 ({len(headlines)}개)", value="\n".join(shown)[:1000] + more, inline=False)
     else:
         embed.add_field(name="📰 가속 중 나온 뉴스", value="없음", inline=False)
-    embed.set_footer(text=f"요청자: {ctx.author.display_name} · 가속 중 뉴스는 뉴스 채널에 올리지 않아요 (%뉴스로 확인)")
+    embed.set_footer(text=f"요청자: {ctx.author.display_name} · 가속 중 뉴스는 뉴스 채널에 올리지 않아요 (%주식 뉴스로 확인)")
     await message.edit(content=None, embed=embed)
 
 # ───────────── %주식 명령어 ─────────────
-@client.command(aliases=["주식"])
+@commands.command(name="시세")
 async def stock(ctx):
     respond.delete_soon(ctx.message)
 
@@ -497,12 +497,12 @@ async def stock(ctx):
         value=f"<t:{timestamp}:R>",  # ✅ 여기에 쓰면 디스코드가 해석함
         inline=False
     )
-    embed.set_footer(text="📰 뉴스 진행 중: 🔥 호재 · 🧊 악재 · ❓ 루머 · 💥 부도 위기  (%뉴스)")
+    embed.set_footer(text="📰 뉴스 진행 중: 🔥 호재 · 🧊 악재 · ❓ 루머 · 💥 부도 위기  (%주식 뉴스)")
 
     await ctx.send(embed=embed)
 
 
-@client.command(aliases=["주식초기화"])
+@commands.command(name="주식초기화")
 @commands.has_permissions(administrator=True)
 async def reset_stock(ctx):
     respond.delete_soon(ctx.message)
@@ -628,8 +628,8 @@ stock_aliases = {
     "RUBY": "RUBY", "RB": "RUBY"
 }
 
-# ───────────── %주식구매 ─────────────
-@client.command(aliases=["주식구매"], usage="<종목> <수량 | 올인 | 절반>")
+# ───────────── %주식 구매 ─────────────
+@commands.command(name="구매", usage="<종목> <수량 | 올인 | 절반>")
 async def buy_stock(ctx, stock_name: str, amount: Amount):
     if amount == ALL:
         return await buy_all_stock(ctx, stock_name)
@@ -715,8 +715,8 @@ async def buy_stock(ctx, stock_name: str, amount: Amount):
 
     await ctx.send(embed=embed, view=view)
 
-# ───────────── %주식판매 ─────────────
-@client.command(aliases=["주식판매"], usage="<종목> <수량 | 전부 | 절반>")
+# ───────────── %주식 판매 ─────────────
+@commands.command(name="판매", usage="<종목> <수량 | 전부 | 절반>")
 async def sell_stock(ctx, stock_name: str, amount: Amount):
     if amount == ALL:
         return await sell_all_stock(ctx, stock_name)
@@ -808,7 +808,7 @@ async def sell_stock(ctx, stock_name: str, amount: Amount):
 
     await ctx.send(embed=embed, view=view)
 
-@client.command(aliases=["주식확인"])
+@commands.command(name="확인")
 async def stock_status(ctx, member: discord.Member = None):
     respond.delete_soon(ctx.message)
     member = member or ctx.author
@@ -874,7 +874,6 @@ async def stock_status(ctx, member: discord.Member = None):
 
     await ctx.send(embed=embed)
 
-@client.command(aliases=["주식올인", "주식전량구매"])
 async def buy_all_stock(ctx, stock_name: str):
     respond.delete_soon(ctx.message)
     user_id = ctx.author.id
@@ -954,7 +953,6 @@ async def buy_all_stock(ctx, stock_name: str):
 
     await ctx.send(embed=embed, view=view)
 
-@client.command(aliases=["주식절반구매"])
 async def buy_half_stock(ctx, stock_name: str):
     respond.delete_soon(ctx.message)
     user_id = ctx.author.id
@@ -1063,7 +1061,7 @@ async def buy_half_stock(ctx, stock_name: str):
 
     await ctx.send(embed=embed, view=view)
 
-@client.command(aliases=["주식전량판매"])
+@commands.command(name="전량판매")
 async def sell_all_stock(ctx, stock_name: str = None):
     respond.delete_soon(ctx.message)
     user_id = ctx.author.id
@@ -1232,7 +1230,7 @@ async def sell_all_stock(ctx, stock_name: str = None):
 
     await ctx.send(embed=embed, view=view)
 
-CHART_FREE_MINUTES = 60      # %주가그래프 기본 (무료)
+CHART_FREE_MINUTES = 60      # %주식 그래프 기본 (무료)
 CHART_MAX_MINUTES = 1440     # 가격 기록은 종목당 24시간(1440분)까지만 남는다
 CHART_HOUR_PRICE = 2000      # 60분 더 볼 때마다 내는 돈
 
@@ -1276,9 +1274,9 @@ def draw_chart(series, minutes, title):
     return buf
 
 
-@client.command(aliases=["주가그래프"])
+@commands.command(name="그래프", usage="[종목] [분]")
 async def stock_chart(ctx, *args):
-    """%주가그래프 [주식이름] [분]  — 기본 60분 무료, 60분 더 볼 때마다 2000 byte"""
+    """%주식 그래프 [주식이름] [분]  — 기본 60분 무료, 60분 더 볼 때마다 2000 byte"""
     respond.delete_soon(ctx.message)
     stock_key, minutes = None, CHART_FREE_MINUTES
     for arg in args:
@@ -1287,7 +1285,7 @@ async def stock_chart(ctx, *args):
         else:
             stock_key = stock_aliases.get(arg.upper())
             if not stock_key:
-                await ctx.send(f"❌ `{arg}` 은(는) 없는 주식입니다. (사용법: `%주가그래프 [주식이름] [분]`)")
+                await ctx.send(f"❌ `{arg}` 은(는) 없는 주식입니다. (사용법: `%주식 그래프 [주식이름] [분]`)")
                 return
     if minutes < 1:
         await ctx.send("❌ 1분 이상으로 입력해주세요.")
@@ -1323,7 +1321,7 @@ async def stock_chart(ctx, *args):
     await ctx.send(content=f"📈 {title}{paid}", file=File(buf, filename=filename))
 
 
-@client.command(aliases=["주식랭킹"])
+@commands.command(name="랭킹")
 async def stock_rank(ctx):
     respond.delete_soon(ctx.message)
 

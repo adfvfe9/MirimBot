@@ -30,7 +30,7 @@ MISSIONS = {
     "word":     ("wordchain", 1, "🔤 끝말잇기로 보상 받기", 5000),
     "buy":      ("stock_buy", 1, "📈 주식 사기", 4000),
     "sell":     ("stock_sell", 1, "📉 주식 팔기", 4000),
-    "futures":  ("futures_open", 1, "⚖️ 레버리지 들어가기 (%롱 / %숏)", 6000),
+    "futures":  ("futures_open", 1, "⚖️ 레버리지 들어가기 (%주식 롱 / %주식 숏)", 6000),
 }
 
 

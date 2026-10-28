@@ -1,7 +1,7 @@
 """오늘의 미림봇 · 자랑 알림: 봇이 먼저 채널에 소식을 올린다
 
-    %소식채널 [채널ID | 끄기]   (관리자) 소식을 올릴 채널. 안 정하면 주식 뉴스 채널 (%뉴스채널)
-    %소식미리보기             (관리자) 오늘의 미림봇을 지금 미리 보기
+    %관리 소식채널 [채널ID | 끄기]   (관리자) 소식을 올릴 채널. 안 정하면 주식 뉴스 채널 (%관리 뉴스채널)
+    %관리 소식미리보기             (관리자) 오늘의 미림봇을 지금 미리 보기
 
 - 매일 DIGEST_TIME 에 '오늘의 미림봇': 오늘 쓴 사람, 순자산이 많이 늘어난 / 줄어든 사람, 강화 · 잭팟 · 강제청산,
   주식 등락, 미션을 다 깬 사람, 기초수급 연속. 그날 아무도 안 썼으면 보내지 않는다.
@@ -250,7 +250,7 @@ async def build(guild, now=None):
     if habit:
         embed.add_field(name="🌱 꾸준한 사람", value="\n".join(habit)[:1024], inline=False)
 
-    embed.set_footer(text="내일도 %기초수급 · %미션 잊지 마세요! · 매일 밤 9시")
+    embed.set_footer(text="내일도 %머니 기초수급 · %미션 잊지 마세요! · 매일 밤 9시")
     return embed
 
 
@@ -293,13 +293,13 @@ async def post_loop():
 
 # ───────────── 관리자 명령어 ─────────────
 
-@client.command(aliases=["소식채널"])
+@commands.command(name="소식채널")
 @commands.has_permissions(administrator=True)
 async def digest_channel(ctx, channel_id: str = None):
     if channel_id is None:
         channel = await channel_of(ctx.guild)
         now = channel.mention if channel else "꺼짐"
-        await ctx.send(f"📢 지금 소식 채널: {now}\n사용법: `%소식채널 <채널ID>` · `%소식채널 끄기` (안 정하면 주식 뉴스 채널)")
+        await ctx.send(f"📢 지금 소식 채널: {now}\n사용법: `%관리 소식채널 <채널ID>` · `%관리 소식채널 끄기` (안 정하면 주식 뉴스 채널)")
         return
     if channel_id == "끄기":
         await db.set_state(channel_key(ctx.guild.id), "off")
@@ -314,7 +314,7 @@ async def digest_channel(ctx, channel_id: str = None):
     await ctx.send(f"📢 이제 {channel.mention}에 오늘의 미림봇(매일 밤 9시)과 자랑 알림을 올려요.")
 
 
-@client.command(aliases=["소식미리보기"])
+@commands.command(name="소식미리보기")
 @commands.has_permissions(administrator=True)
 async def digest_preview(ctx):
     embed = await build(ctx.guild)

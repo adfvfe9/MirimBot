@@ -1,18 +1,19 @@
 """주식 예약 매매: 가격이 정한 값에 닿으면 자동으로 사고판다
 
-    %예약구매 <주식> <수량> <가격> [이하 | 이상]     기본: 가격 이하로 떨어지면 산다
-    %예약판매 <주식> <수량 | 전부> <가격> [이상 | 이하]  기본: 가격 이상으로 오르면 판다 (이하 = 손절)
-    %예약목록                                        내 예약 보기 · 취소
+    %주식 예약구매 <주식> <수량> <가격> [이하 | 이상]     기본: 가격 이하로 떨어지면 산다
+    %주식 예약판매 <주식> <수량 | 전부> <가격> [이상 | 이하]  기본: 가격 이상으로 오르면 판다 (이하 = 손절)
+    %주식 예약목록                                        내 예약 보기 · 취소
 
 - 예약할 때 🪙 토큰 ORDER_TOKEN_COST 개를 낸다. (취소하거나 만료돼도 돌려주지 않는다)
 - 한 사람당 MAX_ORDERS 개까지, EXPIRE_HOURS 시간이 지나면 저절로 없어진다.
 - 1분마다 주가가 바뀐 직후에 확인하고, 조건이 맞으면 그 순간 가격으로 거래한다. (정한 가격이 아니라 그때 가격)
   수수료 · 단타 수수료는 직접 사고팔 때와 같다.
-- 돈이나 주식이 모자라면 그 예약은 취소된다. 거래 / 취소 / 만료는 DM 과 %주식확인 알림으로 알려준다.
+- 돈이나 주식이 모자라면 그 예약은 취소된다. 거래 / 취소 / 만료는 DM 과 %주식 확인 알림으로 알려준다.
 """
 import datetime
 
 import discord
+from discord.ext import commands
 from discord.ui import Select, View
 
 import database as db
@@ -40,7 +41,7 @@ def triggered(o, price):
 
 
 async def tell(user_id, text):
-    """DM + %주식확인 알림"""
+    """DM + %주식 확인 알림"""
     await db.add_notice(user_id, text)
     user = client.get_user(user_id)
     if user is not None:
@@ -52,8 +53,8 @@ async def tell(user_id, text):
 
 async def place(user_id, side, stock_name, quantity_text, price_text, direction_text=None):
     """예약하기. 실패하면 안내(str), 성공하면 예약 dict"""
-    usage = ("사용법: `%예약구매 <주식> <수량> <가격> [이하|이상]`" if side == "buy"
-             else "사용법: `%예약판매 <주식> <수량|전부> <가격> [이상|이하]`")
+    usage = ("사용법: `%주식 예약구매 <주식> <수량> <가격> [이하|이상]`" if side == "buy"
+             else "사용법: `%주식 예약판매 <주식> <수량|전부> <가격> [이상|이하]`")
     symbol = stocks.stock_aliases.get((stock_name or "").upper())
     if symbol not in stocks.stock_prices:
         return "❌ 존재하지 않는 주식입니다.\n" + usage
@@ -77,18 +78,18 @@ async def place(user_id, side, stock_name, quantity_text, price_text, direction_
         return "❌ 마지막에는 `이하` 또는 `이상`만 쓸 수 있어요.\n" + usage
     now_price = stocks.stock_prices[symbol]["current"]
     if triggered({"price": price, "direction": direction}, now_price):
-        return f"❌ 지금 가격({num(now_price)})이 이미 조건에 맞아요. 바로 사고팔려면 `%주식구매` / `%주식판매`를 쓰세요."
+        return f"❌ 지금 가격({num(now_price)})이 이미 조건에 맞아요. 바로 사고팔려면 `%주식 구매` / `%주식 판매`를 쓰세요."
 
     async with db.user_tx(user_id) as conn:
         if len(await db.user_orders(user_id, conn)) >= MAX_ORDERS:
-            return f"❌ 예약은 한 사람당 {MAX_ORDERS}개까지예요. `%예약목록`에서 취소할 수 있어요."
+            return f"❌ 예약은 한 사람당 {MAX_ORDERS}개까지예요. `%주식 예약목록`에서 취소할 수 있어요."
         if side == "sell" and quantity is not None:
             held = (await db.get_portfolio(user_id, conn)).get(symbol, {}).get("quantity", 0)
             if held < quantity:
                 return f"❌ {symbol} 주식이 {held}주뿐이에요."
         left = await db.add_tokens(user_id, -ORDER_TOKEN_COST, conn)
         if left is None:
-            return f"❌ 예약하려면 🪙 토큰 {ORDER_TOKEN_COST}개가 필요해요. (`%토큰구매`, 퀴즈, 일일 미션)"
+            return f"❌ 예약하려면 🪙 토큰 {ORDER_TOKEN_COST}개가 필요해요. (`%토큰 구매`, 퀴즈, 일일 미션)"
         order = await db.add_order(user_id, symbol, side, quantity, price, direction,
                                    db.now() + datetime.timedelta(hours=EXPIRE_HOURS), conn)
     return {**order, "tokens_left": left}
@@ -145,16 +146,16 @@ async def place_command(ctx, side, args):
         return
     await ctx.send(
         f"🤖 예약했어요: {describe(result)} (지금 {num(stocks.stock_prices[result['symbol']]['current'])})\n"
-        f"🪙 토큰 {ORDER_TOKEN_COST}개 사용 (남은 {result['tokens_left']}개) · {EXPIRE_HOURS}시간 안에 안 되면 없어져요 · `%예약목록`"
+        f"🪙 토큰 {ORDER_TOKEN_COST}개 사용 (남은 {result['tokens_left']}개) · {EXPIRE_HOURS}시간 안에 안 되면 없어져요 · `%주식 예약목록`"
     )
 
 
-@client.command(aliases=["예약구매"])
+@commands.command(name="예약구매", usage="<종목> <수량> <가격> [이하 | 이상]")
 async def order_buy(ctx, *args):
     await place_command(ctx, "buy", args)
 
 
-@client.command(aliases=["예약판매"])
+@commands.command(name="예약판매", usage="<종목> <수량 | 전부> <가격> [이상 | 이하]")
 async def order_sell(ctx, *args):
     await place_command(ctx, "sell", args)
 
@@ -185,7 +186,7 @@ class OrdersView(View):
                            embed=None, view=None)
 
 
-@client.command(aliases=["예약목록"])
+@commands.command(name="예약목록")
 async def order_list(ctx):
     orders = await db.user_orders(ctx.author.id)
     lines = []
@@ -194,7 +195,7 @@ async def order_list(ctx):
         lines.append(f"{describe(o)} · 지금 {num(now_price) if now_price else '?'} · <t:{int(o['expires_at'].timestamp())}:R> 만료")
     embed = discord.Embed(
         title=f"🤖 {ctx.author.display_name}님의 예약 ({len(orders)}/{MAX_ORDERS})",
-        description="\n".join(lines) or "예약이 없어요. `%예약구매` / `%예약판매`로 걸어보세요.",
+        description="\n".join(lines) or "예약이 없어요. `%주식 예약구매` / `%주식 예약판매`로 걸어보세요.",
         color=discord.Color.teal(),
     )
     embed.set_footer(text=f"예약 하나에 🪙 {ORDER_TOKEN_COST}개 · {EXPIRE_HOURS}시간 · 1분마다 확인 · 그때 가격으로 거래")

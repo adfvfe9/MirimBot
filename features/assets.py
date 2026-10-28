@@ -1,19 +1,19 @@
-"""순자산: %자산 (내 자산 내역), %자산랭킹 (순자산 TOP 10), %자산그래프 (순자산 변화)
+"""순자산: %자산 (내 자산 내역), %자산 랭킹 (순자산 TOP 10), %자산 그래프 (순자산 변화)
 
 순자산 = 현금 + 주식 평가액 + 적금(이자 포함) + 레버리지 포지션 가치 + 강화템 판매가 - 갚을 대출금 - 미납금
-- 1시간마다 모든 유저의 순자산을 기록한다 (최근 30일). %자산그래프 와 💰 재산 칭호(최고 순자산)에 쓴다.
-- 장착한 칭호가 %자산 / %자산랭킹 이름 앞에 붙는다. (features/titles.py)
+- 1시간마다 모든 유저의 순자산을 기록한다 (최근 30일). %자산 그래프 와 💰 재산 칭호(최고 순자산)에 쓴다.
+- 장착한 칭호가 %자산 / %자산 랭킹 이름 앞에 붙는다. (features/titles.py)
 """
 import asyncio
 import datetime
 import io
 
 import discord
+from discord.ext import commands
 from matplotlib.ticker import FuncFormatter
 
 import database as db
 import respond
-from bot import client
 from features import bank, enhance, futures, stocks
 from fmt import num
 
@@ -127,7 +127,7 @@ async def check_titles(worths):
 
 # ───────────── 명령어 ─────────────
 
-@client.command(aliases=["자산"])
+@commands.command(name="확인")
 async def assets(ctx, member: discord.Member = None):
     respond.delete_soon(ctx.message)
     member = member or ctx.author
@@ -142,11 +142,11 @@ async def assets(ctx, member: discord.Member = None):
         if parts[name] != 0 or name in ("현금",):
             embed.add_field(name=f"{icon} {name}", value=f"{num(parts[name])} byte", inline=True)
     embed.add_field(name="🏆 순자산", value=f"**{num(parts['순자산'])} byte**", inline=False)
-    embed.set_footer(text="순자산 = 현금 + 주식 + 적금 + 레버리지 + 강화템 - 대출 - 미납금 · %자산그래프 로 변화 보기")
+    embed.set_footer(text="순자산 = 현금 + 주식 + 적금 + 레버리지 + 강화템 - 대출 - 미납금 · %자산 그래프 로 변화 보기")
     await ctx.send(embed=embed)
 
 
-@client.command(aliases=["자산랭킹", "순자산랭킹"])
+@commands.command(name="랭킹")
 async def asset_rank(ctx):
     respond.delete_soon(ctx.message)
 
@@ -197,9 +197,9 @@ def draw_worth_chart(series, title):
     return buf
 
 
-@client.command(aliases=["자산그래프"])
+@commands.command(name="그래프", usage="[@유저 ...] [일]")
 async def asset_chart(ctx, *args):
-    """%자산그래프 [@유저 ...] [일]  — 기본 나, 최근 7일 (최대 30일). 여러 명을 멘션하면 같이 그린다."""
+    """%자산 그래프 [@유저 ...] [일]  — 기본 나, 최근 7일 (최대 30일). 여러 명을 멘션하면 같이 그린다."""
     respond.delete_soon(ctx.message)
     days = GRAPH_DEFAULT_DAYS
     for arg in args:

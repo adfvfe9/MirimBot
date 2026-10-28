@@ -4,17 +4,17 @@ import random
 import time
 
 import discord
+from discord.ext import commands
 
 import database as db
 import respond
-from bot import client
 from features import abilities, digest
 from fmt import ALL, HALF, Amount, debt_line, floor2, num
 
 
 # ───────────── 도박 ─────────────
 GAMBLE_COOLDOWN = 10      # 초
-GAMBLE_MAX_BET = 100000    # 1회 최대 판돈 (%도박올인 도 이 금액까지만, 🎲 능력만큼 늘어난다)
+GAMBLE_MAX_BET = 100000    # 1회 최대 판돈 (%도박 걸기 올인 도 이 금액까지만, 🎲 능력만큼 늘어난다)
 
 # (배율, 확률 %) — 판돈 × 배율 을 돌려받는다. 기대값 = 0.95 (평균적으로 판돈의 5% 손해)
 # 아무리 져도 판돈만 잃는다. (빚이 생기지 않음)
@@ -135,9 +135,9 @@ def gamble_embed(result, title, description):
     return embed
 
 
-@client.command(aliases=["도박"])
+@commands.command(name="걸기")
 async def gamble(ctx, amount: Amount):
-    """%도박 <금액 | 올인 | 절반>"""
+    """%도박 걸기 <금액 | 올인 | 절반> (%도박 5만 처럼 걸기는 빼도 된다)"""
     respond.delete_soon(ctx.message)
 
     result = await play_gamble(ctx.author.id, amount)
@@ -145,13 +145,15 @@ async def gamble(ctx, amount: Amount):
         await ctx.send(result)
         return
 
-    await ctx.send(embed=gamble_embed(
-        result, "🎲 도박 올인 결과" if amount == ALL else "🎲 도박 결과",
-        f"{ctx.author.mention}님이 **{num(result['amount'])} byte**를 걸었습니다!"
-    ))
+    if amount == ALL:
+        title, description = "🎲 도박 올인 결과", (
+            f"{ctx.author.mention}님이 **{num(result['amount'])} byte**를 올인했습니다! (최대 {num(result['max_bet'])} byte)")
+    else:
+        title, description = "🎲 도박 결과", f"{ctx.author.mention}님이 **{num(result['amount'])} byte**를 걸었습니다!"
+    await ctx.send(embed=gamble_embed(result, title, description))
 
 
-@client.command(aliases=["도박랭킹"])
+@commands.command(name="랭킹")
 async def gamble_rank(ctx):
     respond.delete_soon(ctx.message)
     top = await db.top_gamble(10)
@@ -172,22 +174,6 @@ async def gamble_rank(ctx):
         embed.add_field(name=f"{i}위: {name}", value=f"{symbol} {num(profit, sign=True)} byte", inline=False)
 
     await ctx.send(embed=embed)
-
-
-@client.command(aliases=["도박올인"])
-async def gamble_allin(ctx):
-    respond.delete_soon(ctx.message)
-
-    result = await play_gamble(ctx.author.id)
-    if isinstance(result, str):
-        await ctx.send(result)
-        return
-
-    await ctx.send(embed=gamble_embed(
-        result, "🎲 도박 올인 결과",
-        f"{ctx.author.mention}님이 **{num(result['amount'])} byte**를 올인했습니다! "
-        f"(최대 {num(result['max_bet'])} byte)"
-    ))
 
 
 # ───────────── 가위바위보 ─────────────
@@ -640,7 +626,7 @@ class RPSView(discord.ui.View):
 # 가위바위보 명령어
 # ==============================
 
-@client.command(aliases=["가위바위보", "가위바위보게임", "ㄱㅇㅂㅇㅂ", "짱깨뽀"])
+@commands.command(name="가위바위보")
 async def rps(ctx):
     user_id = str(ctx.author.id)
 

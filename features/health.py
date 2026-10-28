@@ -1,6 +1,6 @@
 """봇 상태 진단: 어디가 느린지 재서 보여준다
 
-    %핑     디스코드 / DB / 봇 멈춤 시간
+    %봇 핑     디스코드 / DB / 봇 멈춤 시간
 
 - 디스코드: 게이트웨이 핑, 메시지 보내기 · 수정에 걸린 시간 (버튼 누른 뒤 화면이 바뀌는 속도와 비슷하다)
 - DB: 연결 하나 빌리는 시간, SELECT 1 왕복 시간, 연결 풀 상태
@@ -15,6 +15,7 @@ import time
 from collections import deque
 
 import discord
+from discord.ext import commands
 
 import database as db
 from bot import client
@@ -62,7 +63,7 @@ async def measure_db():
     return acquire, rtts
 
 
-@client.command(aliases=["핑", "ping"])
+@commands.command(name="핑")
 async def health_ping(ctx):
     t = time.perf_counter()
     message = await ctx.send("🏓 재는 중…")

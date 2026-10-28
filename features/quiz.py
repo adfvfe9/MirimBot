@@ -1,7 +1,7 @@
 """선착순 퀴즈: 1~2시간마다 퀴즈 채널에 문제가 나오고, 가장 먼저 맞힌 사람이 돈을 받는다.
 
-    %퀴즈채널 <채널ID>          (관리자) 퀴즈를 올릴 채널 설정
-    %퀴즈출제 [과목] [난이도]   (관리자) 지금 바로 퀴즈 하나 내기. 예) %퀴즈출제 수학 상
+    %관리 퀴즈채널 <채널ID>          (관리자) 퀴즈를 올릴 채널 설정
+    %관리 퀴즈출제 [과목] [난이도]   (관리자) 지금 바로 퀴즈 하나 내기. 예) %관리 퀴즈출제 수학 상
 
 과목: 수학 / 국어 / 영어 / 사회 / 한국사 / 과학 / 상식
 난이도: 하(1분) / 중(5분) / 상(10분) — 어려울수록 보상이 크다.
@@ -366,7 +366,7 @@ async def start_quiz_loop():
 
 # ───────────── 명령어 ─────────────
 
-@client.command(aliases=["퀴즈채널"])
+@commands.command(name="퀴즈채널")
 @commands.has_permissions(administrator=True)
 async def set_quiz_channel(ctx, channel_id: int):
     respond.delete_soon(ctx.message)
@@ -374,10 +374,10 @@ async def set_quiz_channel(ctx, channel_id: int):
     await ctx.send(f"✅ 퀴즈 채널이 <#{channel_id}>로 설정되었습니다.")
 
 
-@client.command(aliases=["퀴즈출제"])
+@commands.command(name="퀴즈출제", usage="[과목] [난이도]")
 @commands.has_permissions(administrator=True)
 async def publish_quiz(ctx, *args):
-    """%퀴즈출제 [과목] [난이도] (순서 상관없음, 생략하면 랜덤)"""
+    """%관리 퀴즈출제 [과목] [난이도] (순서 상관없음, 생략하면 랜덤)"""
     respond.delete_soon(ctx.message)
     subject = next((a for a in args if a in SUBJECTS), None)
     level = next((a for a in args if a in LEVELS), None)

@@ -1,9 +1,9 @@
 """레버리지 거래: 롱(오르면 이득) / 숏(내리면 이득)
 
-    %롱 <종목> <증거금> [배율]     예) %롱 JAVA 10000 5 · %롱 JAVA 5만 5 · %롱 JAVA 올인 10 (절반도 된다)
-    %숏 <종목> <증거금> [배율]     예) %숏 RUST 5000 3
-    %포지션 [@유저]               내 포지션과 손익 보기
-    %청산 <번호 | 전체>            포지션 정리하고 돈 받기
+    %주식 롱 <종목> <증거금> [배율]     예) %주식 롱 JAVA 10000 5 · %주식 롱 JAVA 5만 5 · %주식 롱 JAVA 올인 10 (절반도 된다)
+    %주식 숏 <종목> <증거금> [배율]     예) %주식 숏 RUST 5000 3
+    %주식 포지션 [@유저]               내 포지션과 손익 보기
+    %주식 청산 <번호 | 전체>            포지션 정리하고 돈 받기
 
 - 증거금(내 돈) × 배율(최대 10배, 🚀 배율 한계 돌파 능력만큼 더, 상한 없음) 만큼의 규모로 거래한다. 5배면 가격이 1% 움직일 때 내 돈은 5% 움직인다.
 - 손실이 증거금만큼 커지면(= 청산가에 닿으면) 1분마다 하는 가격 갱신 때 강제청산되고 증거금을 전부 잃는다.
@@ -14,11 +14,11 @@
   초상승장 / 주식부도 중에는 모든 종목, 부도 위기 뉴스가 진행 중이면 그 종목. 이미 연 포지션은 그대로 둔다.
 """
 import discord
+from discord.ext import commands
 from discord.ui import Button
 
 import database as db
 import respond
-from bot import client
 from features import abilities, digest, stocks
 from fmt import ALL, HALF, Amount, debt_line, num, resolve_amount
 
@@ -91,7 +91,7 @@ def current_price(symbol):
 
 async def check_liquidations(positions=None):
     """새 가격으로 모든 포지션을 검사해서, 손실이 증거금 이상이면 강제청산한다. 청산한 개수를 돌려준다.
-    positions 를 주면 DB 에서 읽지 않고 그 목록을 검사하고, 정리된 포지션은 목록에서 뺀다. (%주식가속)"""
+    positions 를 주면 DB 에서 읽지 않고 그 목록을 검사하고, 정리된 포지션은 목록에서 뺀다. (%관리 주식가속)"""
     count = 0
     for pos in list(positions) if positions is not None else await db.all_positions():
         if pos["symbol"] not in stocks.stock_prices:
@@ -276,7 +276,7 @@ async def open_position(ctx, side, stock_name, margin, leverage):
                 description=(
                     f"**{symbol}** {leverage}배, 증거금 {num(margin)} byte (진입 수수료 {num(open_fee(preview))} byte)\n"
                     f"진입가 {num(entry)} / 청산가 {num(liquidation_price(pos))}\n"
-                    f"`%포지션`으로 손익을 확인하고 `%청산 {position_id}`로 정리하세요."
+                    f"`%주식 포지션`으로 손익을 확인하고 `%주식 청산 {position_id}`로 정리하세요."
                 ),
                 color=discord.Color.green()
             ),
@@ -300,13 +300,13 @@ async def open_position(ctx, side, stock_name, margin, leverage):
     await ctx.send(embed=embed, view=view)
 
 
-@client.command(aliases=["롱"])
+@commands.command(name="롱")
 async def open_long(ctx, stock_name: str, margin: Amount, leverage: int = 1):
     respond.delete_soon(ctx.message)
     await open_position(ctx, "LONG", stock_name, margin, leverage)
 
 
-@client.command(aliases=["숏"])
+@commands.command(name="숏")
 async def open_short(ctx, stock_name: str, margin: Amount, leverage: int = 1):
     respond.delete_soon(ctx.message)
     await open_position(ctx, "SHORT", stock_name, margin, leverage)
@@ -314,7 +314,7 @@ async def open_short(ctx, stock_name: str, margin: Amount, leverage: int = 1):
 
 # ───────────── 조회 ─────────────
 
-@client.command(aliases=["포지션"])
+@commands.command(name="포지션")
 async def positions(ctx, member: discord.Member = None):
     respond.delete_soon(ctx.message)
     member = member or ctx.author
@@ -360,19 +360,19 @@ async def positions(ctx, member: discord.Member = None):
         value=f"증거금 {num(total_margin)} byte / 손익 **{num(total_pnl, sign=True)} byte** (보유 비용 포함)",
         inline=False
     )
-    embed.set_footer(text="정리하려면 %청산 <번호> 또는 %청산 전체")
+    embed.set_footer(text="정리하려면 %주식 청산 <번호> 또는 %주식 청산 전체")
     await ctx.send(embed=embed)
 
 
 # ───────────── 청산 ─────────────
 
-@client.command(aliases=["청산"])
+@commands.command(name="청산")
 async def close_position(ctx, target: str = None):
     respond.delete_soon(ctx.message)
     user_id = ctx.author.id
 
     if target is None:
-        await ctx.send("❗ 청산할 포지션 번호를 입력해주세요. 예: `%청산 12` 또는 `%청산 전체`")
+        await ctx.send("❗ 청산할 포지션 번호를 입력해주세요. 예: `%주식 청산 12` 또는 `%주식 청산 전체`")
         return
 
     mine = await db.get_positions(user_id)
@@ -382,12 +382,12 @@ async def close_position(ctx, target: str = None):
         try:
             position_id = int(target.lstrip("#"))
         except ValueError:
-            await ctx.send("❌ 포지션 번호를 숫자로 입력해주세요. (`%포지션`에서 확인)")
+            await ctx.send("❌ 포지션 번호를 숫자로 입력해주세요. (`%주식 포지션`에서 확인)")
             return
         chosen = [p for p in mine if p["id"] == position_id]
 
     if not chosen:
-        await ctx.send("❌ 해당 포지션이 없습니다. (`%포지션`에서 번호를 확인하세요)")
+        await ctx.send("❌ 해당 포지션이 없습니다. (`%주식 포지션`에서 번호를 확인하세요)")
         return
 
     lines = []

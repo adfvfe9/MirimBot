@@ -2,12 +2,12 @@
 
     %강화 <이름> [목표] [제물 ...]   아이템 제작(1만) / 강화 패널 열기. 목표를 쓰면 [목표까지 자동] 버튼이 생긴다.
                                     제물을 쓰면 다음 한 번의 강화 성공률이 오르고 제물은 사라진다. (sacrifice_mult)
-    %강화판매 <이름>      판매가에 팔기
-    %강화목록 [@유저]     보유 아이템
-    %강화랭킹             서버 전체 최고 강화 아이템
-    %강화확률             확률표
-    %강화제작 <이름> <레벨> [@유저]   (관리자) 원하는 레벨의 아이템 바로 만들기
-    %강화수정 <이름> <레벨> [@유저]   (관리자) 아이템 레벨 바꾸기
+    %강화 판매 <이름>      판매가에 팔기
+    %강화 목록 [@유저]     보유 아이템
+    %강화 랭킹             서버 전체 최고 강화 아이템
+    %강화 확률             확률표
+    %관리 강화제작 <이름> <레벨> [@유저]   (관리자) 원하는 레벨의 아이템 바로 만들기
+    %관리 강화수정 <이름> <레벨> [@유저]   (관리자) 아이템 레벨 바꾸기
 
 - 아이템은 +1 로 시작해서 최대 +13.
 - +3 / +5 / +7 / +9 / +11 / +13 에 처음 도달하면 능력 슬롯이 열린다. (features/abilities.py)
@@ -25,7 +25,6 @@ from discord.ui import Button, View
 
 import database as db
 import respond
-from bot import client
 from features import abilities
 from fmt import debt_line, num
 
@@ -242,7 +241,7 @@ async def craft(user_id, item_name):
         if item_name in items:
             return "❌ 이미 같은 이름의 아이템이 있습니다."
         if len(items) >= MAX_ITEMS:
-            return f"❌ 아이템은 최대 {MAX_ITEMS}개까지 가질 수 있어요. (`%강화판매`로 정리하세요)"
+            return f"❌ 아이템은 최대 {MAX_ITEMS}개까지 가질 수 있어요. (`%강화 판매`로 정리하세요)"
         money = await db.get_money(user_id, conn)
         if money < CRAFT_COST:
             return f"💸 제작비 {num(CRAFT_COST)} byte가 부족합니다."
@@ -455,7 +454,7 @@ class EnhanceView(View):
         self.apply(r)
         self.last = f"{result_line(r)}  (-{num(r['cost'])} byte)"
         if r["opened"]:
-            self.last += "\n" + abilities.opened_text(r["opened"]) + f"\n`%강화능력설정 {self.item_name}`으로 확인 / 리롤"
+            self.last += "\n" + abilities.opened_text(r["opened"]) + f"\n`%강화 능력설정 {self.item_name}`으로 확인 / 리롤"
         await self.refresh(interaction)
         await announce(interaction.channel, interaction.user, self.item_name, r["result"], r["old"], r["new"])
 
@@ -583,7 +582,7 @@ class EnhanceView(View):
                 pass
 
 
-@client.command(aliases=["강화"])
+@commands.command(name="하기", usage="<아이템> [목표] [제물 ...]")
 async def enhance(ctx, item_name: str = None, *args: str):
     """%강화 <이름> [목표] [제물 이름 ...]  — 목표는 숫자일 때만, 나머지는 전부 제물"""
     if item_name is None:
@@ -592,7 +591,7 @@ async def enhance(ctx, item_name: str = None, *args: str):
             "예: `%강화 칼` (없으면 제작, 있으면 강화)\n"
             "목표까지 자동: `%강화 칼 7`\n"
             "제물 바치기: `%강화 칼 방패 창` (제물마다 성공률 +(제물 판매가 ÷ 칼 판매가), 같은 레벨이면 2배)\n"
-            "확률표: `%강화확률`"
+            "확률표: `%강화 확률`"
         )
         return
     if len(item_name) > NAME_MAX_LEN:
@@ -626,7 +625,7 @@ async def enhance(ctx, item_name: str = None, *args: str):
     view.message = await ctx.send(embed=await view.make_embed(), view=view)
 
 
-@client.command(aliases=['강화목록'])
+@commands.command(name="목록")
 async def enhance_list(ctx, member: discord.Member = None):
     member = member or ctx.author
     user_items = await db.get_enhance_items(member.id)
@@ -643,11 +642,11 @@ async def enhance_list(ctx, member: discord.Member = None):
             inline=True
         )
 
-    embed.set_footer(text="✨ 능력: %강화능력설정 <아이템> · 합친 효과: %내능력")
+    embed.set_footer(text="✨ 능력: %강화 능력설정 <아이템> · 합친 효과: %강화 능력")
     await ctx.send(embed=embed)
 
 
-@client.command(aliases=['강화판매'])
+@commands.command(name="판매")
 async def sell_enhance(ctx, item_name: str):
     respond.delete_soon(ctx.message)
 
@@ -680,9 +679,9 @@ async def admin_set_level(ctx, item_name, level, member, create):
     async with db.user_tx(member.id) as conn:
         old = (await db.get_enhance_items(member.id, conn)).get(item_name)
         if create and old is not None:
-            error = f"❌ `{item_name}` 아이템이 이미 있어요. 레벨을 바꾸려면 `%강화수정`을 쓰세요."
+            error = f"❌ `{item_name}` 아이템이 이미 있어요. 레벨을 바꾸려면 `%관리 강화수정`을 쓰세요."
         elif not create and old is None:
-            error = f"❌ `{item_name}` 아이템이 없어요. 만들려면 `%강화제작`을 쓰세요."
+            error = f"❌ `{item_name}` 아이템이 없어요. 만들려면 `%관리 강화제작`을 쓰세요."
         else:
             error = None
             await db.set_enhance_level(member.id, item_name, level, conn)
@@ -700,21 +699,21 @@ async def admin_set_level(ctx, item_name, level, member, create):
     await ctx.send("\n".join(lines))
 
 
-@client.command(aliases=["강화제작"])
+@commands.command(name="강화제작")
 @commands.has_permissions(administrator=True)
 async def admin_craft(ctx, item_name: str, level: int, member: discord.Member = None):
     """원하는 레벨의 아이템을 바로 만든다. 보유 개수 제한(5개)을 무시한다. 열리는 슬롯에는 능력이 붙는다."""
     await admin_set_level(ctx, item_name, level, member, create=True)
 
 
-@client.command(aliases=["강화수정"])
+@commands.command(name="강화수정")
 @commands.has_permissions(administrator=True)
 async def admin_set_enhance(ctx, item_name: str, level: int, member: discord.Member = None):
     """이미 있는 아이템의 레벨을 바꾼다. 처음 도달하는 슬롯은 열리고, 내려가면 위 슬롯은 꺼진다."""
     await admin_set_level(ctx, item_name, level, member, create=False)
 
 
-@client.command(aliases=["강화랭킹"])
+@commands.command(name="랭킹")
 async def enhance_rank(ctx):
     respond.delete_soon(ctx.message)
     items = (await db.all_enhance_items())[:10]
@@ -735,7 +734,7 @@ async def enhance_rank(ctx):
     await ctx.send(embed=embed)
 
 
-@client.command(aliases=["강화확률"])
+@commands.command(name="확률")
 async def enhance_odds(ctx):
     respond.delete_soon(ctx.message)
     lines = []
